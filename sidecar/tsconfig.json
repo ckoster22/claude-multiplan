@@ -1,0 +1,48 @@
+{
+  // Standalone typecheck for the Agent SDK sidecar. The root tsconfig
+  // (`"include": ["src"]`) does NOT cover this dir, so the frontend `npx tsc
+  // --noEmit` pass is unaffected by the SDK types. Run separately with:
+  //   npx tsc -p sidecar/tsconfig.json --noEmit
+  //
+  // `include` enumerates the FULL non-test sidecar source set (sidecar/*.ts +
+  // sidecar/agents/*.ts) so SDK-typed modules (e.g. `AgentDefinition` in
+  // agents/*.ts) are actually checked — not just the entry files. Kept as an
+  // explicit list (not a `*.ts` glob) on purpose. `exclude` drops `*.test.ts`:
+  // `types` is `["node"]` only (no vitest globals), so a test file would
+  // spuriously fail on `describe`/`it`/`expect`.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // `with { type: "file" }` import attributes are an ESNext feature; bundler
+    // resolution + skipLibCheck keep the deep Anthropic beta `.d.ts` tree quiet.
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "index.ts",
+    "backoff.ts",
+    "normalize.ts",
+    "permissions.ts",
+    "env-overrides.ts",
+    "model-effort.ts",
+    "quota.ts",
+    "session-resume.ts",
+    "session-start.ts",
+    "user-content.ts",
+    "frames.ts",
+    "cli-plans.ts",
+    "shutdown.ts",
+    "agents/intentClarifier.ts",
+    "agents/planSizer.ts",
+    "agents/scopeRecon.ts",
+    "agents/devilsAdvocateReviewer.ts",
+    "agents/planningAgents.ts"
+  ],
+  "exclude": ["**/*.test.ts"]
+}
