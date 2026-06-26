@@ -1441,6 +1441,25 @@ describe("orchestrator — refinePrototypePrompt (pure)", () => {
   });
 });
 
+describe("orchestrator — the kind↔format contract is spliced into both visual-mode prompts", () => {
+  // The clarifier kept labeling box-and-arrow ASCII drawings kind "mermaid"; the reading pane fed
+  // them to mermaid, which threw UnknownDiagramError. This is a GENERATION fix: the prompt now
+  // forbids that mislabel (kind "mermaid" REQUIRES valid mermaid SOURCE; freeform ASCII → kind
+  // "ascii"). Both intentPrompt and refinePrototypePrompt splice visualClarifierContractLines, so
+  // both must carry the rule. FALSIFY (verified): remove the kind↔format lines from
+  // visualClarifierContractLines → both pins below go RED. Restore → GREEN.
+  for (const [label, prompt] of [
+    ["intentPrompt", intentPrompt("x")],
+    ["refinePrototypePrompt", refinePrototypePrompt("tweak it")],
+  ] as const) {
+    it(`${label} requires kind "mermaid" to be valid mermaid source and routes ASCII to kind "ascii"`, () => {
+      expect(prompt).toContain('kind "mermaid"');
+      expect(prompt).toContain("VALID MERMAID DIAGRAM SOURCE");
+      expect(prompt).toContain('kind "ascii"');
+    });
+  }
+});
+
 describe("orchestrator — confirmed intent is threaded into downstream planning prompts", () => {
   it("a NON-EMPTY intent buffer makes the recon prompt sent contain the confirmed intent text", async () => {
     const { deps, rec } = makeDeps();
