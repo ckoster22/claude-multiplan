@@ -586,3 +586,67 @@ describe("orchestrator gate — pendingPrototype drives the conversation idle-wa
     await h.cancel();
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Phase D #5 — "Resume newest" resumes the ORCHESTRATOR GATE. pendingCount + resumeNewestReview both
+// derive from pendingSurfaces() (pendingReviews + the orchestrator snapshot). With a held gate and the
+// open plan NOT the gate plan (SUMMARY mode), #review-resume re-opens gate.planPath via the SAME
+// open path onAwaitingApproval uses — NOT just the pendingReviews queue.
+// RED before #5: resumeNewestReview only consulted newestPendingReview() (empty here), so the click
+// was a no-op and the gate plan never re-opened.
+// ---------------------------------------------------------------------------------------------
+describe("orchestrator gate — #review-resume resumes the held gate from SUMMARY mode (#5)", () => {
+  it("a held gate + a DIFFERENT plan open → clicking #review-resume re-opens the gate's plan", async () => {
+    const GATE = "/p/01.md";
+    const OTHER = "/p/other.md";
+    // Both rows are listed so each is openable; OTHER is a standalone (its own tree-less row).
+    H.rows = [
+      planRow(GATE, "1"),
+      {
+        absolute_path: OTHER,
+        filename_stem: "other",
+        mtime_ms: 2,
+        cwd: null,
+        unread: false,
+        flavor: "standalone",
+        tree_id: null,
+        nn: null,
+        nn_path: null,
+        child_count: null,
+        collapsed: false,
+        h1s: [],
+      },
+    ];
+    const { deps } = makeDeps();
+    const h = createOrchestrator(deps);
+    __setOrchestratorForTest(h);
+    bootDom();
+    await flush();
+
+    await driveToSubDraftedGate(h, GATE);
+    await flush();
+    // The gate opened its plan (VIEWING in-process: Approve visible).
+    expect(document.querySelector("#doc-filename")!.textContent).toBe("01.md");
+    expect(document.querySelector("#review-approve")!.classList.contains("hidden")).toBe(false);
+
+    // Browse to the OTHER plan → the bar drops to SUMMARY (the gate is still held but not viewed):
+    // the count surface is the gate (1), so #review-resume becomes visible.
+    document.querySelector<HTMLElement>(`[data-path="${OTHER}"]`)!.click();
+    await flush();
+    expect(document.querySelector("#doc-filename")!.textContent).toBe("other.md");
+    const resume = document.querySelector<HTMLElement>("#review-resume")!;
+    expect(resume.classList.contains("hidden"), "resume visible in SUMMARY with a pending gate").toBe(false);
+    expect(document.querySelector("#review-approve")!.classList.contains("hidden")).toBe(true); // SUMMARY: no Approve
+
+    // Resume the newest pending surface — the held gate → re-open gate.planPath via the gate-open path.
+    resume.click();
+    await flush();
+
+    // The gate's plan is open again and the bar is back to VIEWING in-process (Approve visible).
+    expect(document.querySelector("#doc-filename")!.textContent).toBe("01.md");
+    expect(
+      document.querySelector("#review-approve")!.classList.contains("hidden"),
+      "the gate's VIEWING bar returned after Resume re-opened its plan",
+    ).toBe(false);
+  });
+});

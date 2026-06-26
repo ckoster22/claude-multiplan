@@ -29,7 +29,6 @@ import {
   resolveAllowInput,
   createInteractivePermissionGate,
   createPrototypePreToolUseHook,
-  hostPolicyForMode,
   sdkPermissionMode,
   type HostPolicy,
 } from "./permissions";
@@ -37,6 +36,7 @@ import { optionOverridesFromEnv } from "./env-overrides";
 import { resolveModelEffort } from "./model-effort";
 import { cliPlanRedirectSettings } from "./cli-plans";
 import { decideStart } from "./session-start";
+import { decideSessionCommand, type Session } from "./session-command";
 import { decideResume, resumeOption, RESUME_FALLBACK_REASON } from "./session-resume";
 import { parseResetFromError } from "./quota";
 import { createNormalizer, isOverloadedMessage, overloadResultFrame, type SeqCounter } from "./normalize";
@@ -629,6 +629,16 @@ async function runSession(start: StartCmd): Promise<void> {
 
 let userQueue: MessageQueue | null = null;
 let started = false;
+// Session-lifecycle flags read ONLY by currentSession() (below) to project the loose module state
+// (started/q) into the Session union. They gate a late `set-permission-mode` away from the SDK call
+// (#11): set when the session is ending/ended so `q.setPermissionMode` is never invoked on a
+// stale/closing query (which throws and crashes the process).
+//   sessionDraining — graceful shutdown began (set at gracefulExit's onBeforeDrain, BEFORE the drain
+//                     await, so a command processed during the drain race window sees "draining").
+//   sessionDead     — runSession resolved on its own (turn(s) done + iterator end) without a teardown
+//                     trigger; q is now a stale closed handle.
+let sessionDraining = false;
+let sessionDead = false;
 
 // The ONE graceful teardown drain (INV-4). ALL FOUR exit triggers route here — the
 // `end` command (the host's PRIMARY app-quit path), SIGTERM/SIGINT, and a bare
@@ -643,11 +653,27 @@ const gracefulExit = makeGracefulExit({
   getUserQueue: () => userQueue,
   logErr,
   exit: (code) => process.exit(code),
-  // VERY FIRST thing on any teardown trigger: abort an in-flight 529 backoff sleep so the wait
-  // (up to ~30m) cannot stall the drain. The latch in makeGracefulExit makes repeat triggers safe;
-  // AbortController.abort() is itself idempotent.
-  onBeforeDrain: () => backoffAbort.abort(),
+  // VERY FIRST thing on any teardown trigger: mark the session draining (so a `set-permission-mode`
+  // processed during the drain await sees "draining" → drop-ended, never a call on a closing q, #11)
+  // and abort an in-flight 529 backoff sleep so the wait (up to ~30m) cannot stall the drain. The
+  // latch in makeGracefulExit makes repeat triggers safe; AbortController.abort() is itself idempotent.
+  onBeforeDrain: () => {
+    sessionDraining = true;
+    backoffAbort.abort();
+  },
 });
+
+// Project the loose module state (started/q + the lifecycle flags) into the Session union consumed by
+// decideSessionCommand. `q` is surfaced ONLY in the `live` variant, so the SDK call it gates is
+// unreachable once the session is starting/draining/dead. Draining/dead are checked FIRST: once
+// teardown has begun or the session has ended, that is the truth regardless of a stale `q`.
+function currentSession(): Session {
+  if (sessionDraining) return { kind: "draining" };
+  if (sessionDead) return { kind: "dead" };
+  if (!started) return { kind: "idle" };
+  if (!q) return { kind: "starting" };
+  return { kind: "live", q };
+}
 
 async function handleCommand(line: string): Promise<void> {
   const trimmed = line.trim();
@@ -681,7 +707,10 @@ async function handleCommand(line: string): Promise<void> {
       // Capture the session cwd for the gate's prototype containment check. Empty/missing
       // cwd stays null → the prototype policy fails closed (denies all mutating tools).
       sessionCwd = typeof cmd.cwd === "string" && cmd.cwd.length > 0 ? cmd.cwd : null;
-      // Fire-and-forget: runSession drives the stream until end/exit.
+      // Fire-and-forget: runSession drives the stream until end/exit. On a NATURAL resolve (turn(s)
+      // done + iterator end, no teardown trigger) mark the session dead so a late `set-permission-mode`
+      // (#11) is dropped, not applied to the now-stale `q`. (The teardown paths set sessionDraining via
+      // onBeforeDrain and process.exit before this settles, so this only fires on the natural end.)
       void runSession({
         type: "start",
         cwd: String(cmd.cwd ?? ""),
@@ -691,6 +720,8 @@ async function handleCommand(line: string): Promise<void> {
         effort: typeof cmd.effort === "string" ? cmd.effort : undefined,
         // Resume id — guard against null/non-string/empty; absent/empty == fresh start.
         resume: typeof cmd.resume === "string" && cmd.resume.length > 0 ? cmd.resume : undefined,
+      }).finally(() => {
+        sessionDead = true;
       });
       return;
     }
@@ -742,19 +773,51 @@ async function handleCommand(line: string): Promise<void> {
     }
 
     case "set-permission-mode": {
-      // The ONLY writer of hostPolicy (the gate's backstop). Updated even before `q` exists —
-      // the policy is host state, not SDK session state. Anything but "acceptEdits"/"prototype"
-      // → "plan".
-      hostPolicy = hostPolicyForMode(cmd.mode);
-      if (!q) {
-        logErr("[sidecar] set-permission-mode before start — dropped");
-        return;
+      // Thin switch over the pure decision (sidecar/session-command.ts), gating THIS
+      // set-permission-mode path only — the sibling `interrupt` (and `user`) handlers still use raw
+      // `q` behind their own `if (!q)` + try/catch and are deliberately NOT routed through the union.
+      // decideSessionCommand models the session lifecycle as a union so `apply` (the only branch that
+      // touches `q`) is returned ONLY for a `live` session; a command arriving on a known-dead/draining
+      // session (#11) takes a drop branch. The union is a PRE-FILTER + diagnostics, NOT itself the
+      // crash fix — the try/catch on the await below is the load-bearing guard (see there). The ONLY
+      // writer of hostPolicy (the gate's backstop): rewritten UNCONDITIONALLY from the decision on
+      // every branch, even the drops — the policy is host state, not SDK session state. Anything but
+      // "acceptEdits"/"prototype" → "plan".
+      const session = currentSession();
+      const decision = decideSessionCommand(session, cmd);
+      hostPolicy = decision.hostPolicy;
+      switch (decision.action) {
+        case "apply":
+          // `apply` is returned ONLY for the `live` variant, which carries `q`; narrow to it. NEVER
+          // the raw wire mode: "prototype" is host-only (the SDK's PermissionMode union does not
+          // include it) and maps to SDK "default"; the host-policy gate enforces the prototype
+          // containment. The try/catch is the LOAD-BEARING crash fix for #11 — do NOT remove it: the
+          // union only pre-filters a session ALREADY known dead/draining, but the session can still end
+          // in the TOCTOU window between currentSession() above and this await, so a reject from
+          // setPermissionMode must be logged, never crash the process (same guard as the `interrupt`
+          // handler below).
+          if (session.kind === "live") {
+            try {
+              await session.q.setPermissionMode(sdkPermissionMode(cmd.mode));
+            } catch (e) {
+              logErr("[sidecar] set-permission-mode failed (session may have ended):", String(e));
+            }
+          }
+          return;
+        case "drop-no-session":
+          logErr("[sidecar] set-permission-mode before start — dropped");
+          return;
+        case "drop-ended":
+          logErr("[sidecar] set-permission-mode after session ended — dropped");
+          return;
+        default: {
+          // Exhaustiveness guard: if SessionCommandDecision["action"] grows a variant and a case here
+          // is missed, this is a COMPILE error (never-assignment) rather than a silent fall-through
+          // into `case "interrupt"` below (the sidecar tsconfig sets no noFallthroughCasesInSwitch).
+          const _exhaustive: never = decision.action;
+          return _exhaustive;
+        }
       }
-      // NEVER the raw wire mode: "prototype" is host-only (the SDK's PermissionMode union
-      // does not include it) and maps to SDK "default"; the host-policy gate enforces the
-      // prototype containment.
-      await q.setPermissionMode(sdkPermissionMode(cmd.mode));
-      return;
     }
 
     case "interrupt": {

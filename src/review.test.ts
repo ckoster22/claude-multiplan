@@ -157,3 +157,28 @@ describe("applyReviewBarState — Sub-Plan 03 source-aware approve + submit labe
     expect(s.submitLabel).toBe("Submit");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug #10 — in-flight submit lock (the "submitting" mode).
+//   A fast double-click on Submit double-submits because the pure model has no representable
+//   "a submit is already in flight" state — the bar stays enabled across the network round-trip.
+//   `submitInFlight` adds a fourth, terminal mode that wins over viewing/summary: while a submit
+//   is in flight the bar disables Submit and hides Approve so neither path can fire a second time.
+//   FALSIFIABILITY (demonstrated in the task report): ignoring submitInFlight (returning the
+//   plain "viewing" mode) leaves submitDisabled:false / approveVisible:true and fails these
+//   assertions; the default (false/absent) leaves every existing case byte-identical.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("applyReviewBarState — Bug #10 in-flight submit lock", () => {
+  it("submitInFlight while viewing an in-process review → 'submitting' mode, Submit DISABLED, Approve HIDDEN", () => {
+    const s = applyReviewBarState({
+      pendingCount: 1,
+      viewing: true,
+      viewedCommentCount: 2,
+      source: "in-process",
+      submitInFlight: true,
+    });
+    expect(s.mode).toBe("submitting");
+    expect(s.submitDisabled).toBe(true);
+    expect(s.approveVisible).toBe(false);
+  });
+});

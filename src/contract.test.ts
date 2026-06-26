@@ -37,6 +37,7 @@ vi.mock("./render", () => ({
   onCommentCountChanged: vi.fn(),
   loadCommentsFor: vi.fn(async () => []),
   clearAllComments: vi.fn(),
+  invalidatePopover: vi.fn(),
 }));
 vi.mock("./render/scroll", () => ({ captureAnchor: vi.fn(), applyDelta: vi.fn() }));
 // Stub the titlebar wiring functions (importing main.ts must be a no-op), but keep the REAL

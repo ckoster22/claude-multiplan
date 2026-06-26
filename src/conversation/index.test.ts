@@ -911,6 +911,211 @@ describe("controller — free-text composer sends a user turn and clears; disabl
 });
 
 // ---------------------------------------------------------------------------------------------
+// Phase B — DispatchState dimension: "a send is already in flight" is now representable, killing
+// the double-send (#1) and the text-wiped-mid-round-trip (#1) and the phantom stuck-active Resume (#6).
+// ---------------------------------------------------------------------------------------------
+describe("controller — dispatch dimension: single dispatch under double-fire (#1)", () => {
+  it("a second Enter before the first send resolves dispatches exactly once AND preserves round-trip text", async () => {
+    const els = makeEls();
+    await initConversation(els, () => {});
+    await flush();
+
+    // Go live (active) so the free-text composer dispatches down the LIVE path.
+    fire("agent-stream", SYSTEM_INIT);
+    await flush();
+
+    // Arm the FIRST send_agent_message to stay PENDING so the round-trip is still open when the second
+    // Enter fires. The override RECORDS the call (so calls() sees it) but resolves only when we say so.
+    let resolveSend: () => void = () => {};
+    mockInvoke.mockImplementationOnce((cmd, args) => {
+      H.invokeCalls.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
+      return new Promise<void>((res) => {
+        resolveSend = () => res();
+      });
+    });
+
+    // First Enter: dispatches the first message and clears the field SYNCHRONOUSLY (at fire time).
+    els.messageInput.value = "first message";
+    els.messageInput.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: false, bubbles: true }),
+    );
+    await flush();
+    expect(calls("send_agent_message")).toHaveLength(1);
+    expect((calls("send_agent_message")[0] as { text: string }).text).toBe("first message");
+    expect(els.messageInput.value).toBe(""); // cleared synchronously at dispatch time
+
+    // The user types a NEW message into the now-cleared field WHILE the first send is still pending.
+    els.messageInput.value = "typed during round-trip";
+
+    // Second Enter BEFORE the first resolves: the dispatch gate drops it — EXACTLY ONE send, and the
+    // round-trip text is NOT wiped.
+    // FALSIFY: drop the `if (dispatch.t !== "idle") return;` gate → a second send fires (length 2) AND
+    // the second dispatch's synchronous clear wipes the round-trip text → both go RED.
+    els.messageInput.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: false, bubbles: true }),
+    );
+    await flush();
+    expect(calls("send_agent_message")).toHaveLength(1);
+    expect(els.messageInput.value).toBe("typed during round-trip");
+
+    // The first send resolves: it must NOT re-clear the field (re-clearing on resolve is exactly the
+    // text-wiped-mid-round-trip bug #1).
+    // FALSIFY: clear the field on resolve (`field.value = ""` in the .then) → the round-trip text is
+    // wiped here → RED.
+    resolveSend();
+    await flush();
+    expect(els.messageInput.value).toBe("typed during round-trip");
+    expect(calls("send_agent_message")).toHaveLength(1);
+  });
+});
+
+describe("controller — dispatch dimension: Resume reverts on send reject (#6)", () => {
+  it("a Resume whose send_agent_message rejects reverts the session to idle (not stuck phantom-active)", async () => {
+    const els = makeEls();
+    await initConversation(els, () => {});
+    await flush();
+
+    // Go active, then Pause → idle so Resume is enabled.
+    fire("agent-stream", SYSTEM_INIT);
+    await flush();
+    els.pauseBtn.click();
+    await flush();
+    expect(els.resumeBtn.disabled).toBe(false); // idle ⇒ Resume enabled
+    expect(els.pauseBtn.disabled).toBe(true);
+
+    // Arm the Resume's send_agent_message ("Continue.") to REJECT.
+    mockInvoke.mockImplementationOnce(() => Promise.reject(new Error("send failed")));
+
+    els.resumeBtn.click();
+    await flush();
+
+    // The optimistic "active" never confirmed → revert to idle: Resume re-enabled, Pause disabled, and
+    // the working indicator gone (no phantom stuck "Working…").
+    // FALSIFY: drop the revert-on-reject (.catch applySessionState(prev) + rerender) → the session sticks
+    // at "active": resumeBtn stays disabled, pause stays enabled, the working indicator lingers → RED.
+    expect(els.resumeBtn.disabled).toBe(false);
+    expect(els.pauseBtn.disabled).toBe(true);
+    expect(workingEl(els.stream)).toBeNull();
+
+    // C3 (falsifiability): the cosmetic state above is NOT enough — a regression that dropped ONLY the
+    // `dispatch = {t:"idle"}` reset (keeping applySessionState(prev)) would still pass it, because
+    // refreshDispatchControls computes resumeBtn.disabled=false for "resuming"≠"sending" — yet the
+    // dispatch gate would permanently block the NEXT Resume. So prove `dispatch` truly returned to idle
+    // by firing a SUBSEQUENT Resume and asserting it actually re-dispatches send_agent_message. (The
+    // first, rejected, send was a mockImplementationOnce override and was not recorded; only this one is.)
+    // FALSIFY: drop `dispatch = {t:"idle"}` from the reject handler → the gate drops this click → zero
+    // send_agent_message recorded → RED.
+    els.resumeBtn.click();
+    await flush();
+    const resends = calls("send_agent_message");
+    expect(resends).toHaveLength(1);
+    expect(resends[0].text).toBe("Continue.");
+  });
+});
+
+describe("controller — dispatch dimension: a failed send RESTORES attached images (C2 regression)", () => {
+  it("a rejected resume-send re-adds the attached image (chips restored), not just the text", async () => {
+    dialogOpen.mockResolvedValueOnce("/work/dir" as never);
+    const fake = makeFakeHandle(true);
+    __setOrchestratorForTest(fake);
+
+    const els = makeEls();
+    await initConversation(els, () => {});
+    await flush();
+
+    // Start a real run so lastCwd is captured, surface a session id, then end the session → none.
+    els.composer.chooseDirBtn!.click();
+    await flush();
+    els.composer.request!.value = "build a thing";
+    els.composer.startBtn!.click();
+    await flush();
+    fire("agent-stream", {
+      seq: 1, kind: "system_init", model: "m", cwd: "/work/dir", tools: [], skills: [],
+      slash_commands: [], permission_mode: "default", session_id: "sess-xyz",
+    });
+    await flush();
+    fire("agent-exit", { code: 0 });
+    await flush();
+    expect(els.messageInput.disabled).toBe(false);
+
+    // Attach an image + type, then arm the resume's start_agent_session to REJECT (the drain race).
+    await attachImagesViaFileInput(els.fileInput, els.attachStrip, [pngFile()]);
+    expect(els.attachStrip.querySelectorAll(".conv-attach-chip").length).toBe(1);
+    mockInvoke.mockImplementationOnce(() =>
+      Promise.reject(new Error("a session is already running (one session per launch)")),
+    );
+
+    els.messageInput.value = "continue with this";
+    els.sendBtn.click();
+    await flush();
+
+    // The send failed: BOTH the text AND the attached image must be handed back for a one-click retry.
+    // FALSIFY: drop the image half of restoreInput (restore only text) → the chip stays gone → RED.
+    expect(els.messageInput.value).toBe("continue with this");
+    expect(els.attachStrip.querySelectorAll(".conv-attach-chip").length).toBe(1);
+  });
+});
+
+describe("controller — dispatch dimension: a SYNCHRONOUS invoke throw does not lock out (C1)", () => {
+  it("LIVE: a sync throw from invoke recovers dispatch to idle so a subsequent send works", async () => {
+    const els = makeEls();
+    await initConversation(els, () => {});
+    await flush();
+    fire("agent-stream", SYSTEM_INIT); // active
+    await flush();
+
+    // Arm the FIRST send_agent_message to throw SYNCHRONOUSLY (invoke throws BEFORE returning a promise),
+    // so the async .catch never runs — only the synchronous-throw guard can recover the dispatch marker.
+    mockInvoke.mockImplementationOnce(() => {
+      throw new Error("sync boom");
+    });
+    els.messageInput.value = "first";
+    els.sendBtn.click();
+    await flush();
+
+    // A SUBSEQUENT send must actually dispatch — proving the sync throw did NOT latch `dispatch`.
+    // FALSIFY: remove the try/catch recovery in the LIVE path → `dispatch` stays "sending" → the gate
+    // drops this send → zero send_agent_message recorded → RED.
+    els.messageInput.value = "second";
+    els.sendBtn.click();
+    await flush();
+    const sent = calls("send_agent_message");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe("second");
+    expect(els.sendBtn.disabled).toBe(false); // controls usable again
+  });
+
+  it("Resume: a sync throw from invoke recovers to idle (Resume reachable; subsequent Resume dispatches)", async () => {
+    const els = makeEls();
+    await initConversation(els, () => {});
+    await flush();
+    fire("agent-stream", SYSTEM_INIT);
+    await flush();
+    els.pauseBtn.click(); // → idle
+    await flush();
+
+    // The Resume's send_agent_message throws SYNCHRONOUSLY.
+    mockInvoke.mockImplementationOnce(() => {
+      throw new Error("sync boom");
+    });
+    els.resumeBtn.click();
+    await flush();
+
+    // Recovered: reverted to idle (Resume reachable, working indicator gone) and a subsequent Resume
+    // actually dispatches (the sync guard reset `dispatch` AND applySessionState(prev) reverted active).
+    // FALSIFY: remove the Resume-button try/catch → `dispatch` stays "resuming" + session stuck "active"
+    // → the next Resume is gated out → zero send_agent_message → RED.
+    expect(els.resumeBtn.disabled).toBe(false);
+    expect(workingEl(els.stream)).toBeNull();
+    els.resumeBtn.click();
+    await flush();
+    const sent = calls("send_agent_message");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe("Continue.");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 // Multimodal — in-conversation follow-up image attachments.
 // ---------------------------------------------------------------------------------------------
 describe("controller — in-conversation image attachments on send", () => {

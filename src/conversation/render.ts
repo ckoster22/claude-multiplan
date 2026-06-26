@@ -125,7 +125,13 @@ function fullText(value: unknown): string {
 }
 
 function statusLabel(status: ToolStatus): string {
-  return status === "running" ? "running…" : status === "error" ? "error" : "done";
+  return status === "running"
+    ? "running…"
+    : status === "error"
+      ? "error"
+      : status === "interrupted"
+        ? "interrupted"
+        : "done";
 }
 
 // Build a collapsible tool-call row. The row header is clickable: it toggles `.expanded` on the

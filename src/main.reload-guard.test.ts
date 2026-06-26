@@ -82,6 +82,7 @@ vi.mock("./render", async () => {
     onCommentCountChanged: vi.fn(),
     loadCommentsFor: vi.fn(async () => []),
     clearAllComments: vi.fn(),
+    invalidatePopover: vi.fn(),
   };
 });
 vi.mock("./render/scroll", () => ({

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { sanitizeSvg, renderDiagrams, setIntrinsicSvgSize } from "./mermaid";
+import { sanitizeSvg, renderDiagrams, setIntrinsicSvgSize, destroyControllers } from "./mermaid";
 import { renderInto } from "./index";
 
 // Mock the lazily-imported mermaid module so renderDiagrams() runs under jsdom
@@ -290,5 +290,142 @@ describe("renderInto — tears down the previous render's pan/zoom controller (F
     // exercised the real wipe, not a no-op): the old rendered box is gone.
     expect(el.querySelector(".mermaid-rendered")).toBeNull();
     expect(el.querySelector("pre.mermaid-src")).not.toBeNull();
+  });
+});
+
+// ---- Bug #12-core: renderDiagrams is generation-aware (cooperative cancellation) -------------
+//
+// renderDiagrams awaits the heavy, async `mermaid.render` per diagram. A newer open/reload/plan-
+// switch can supersede the pass mid-flight. The new TRAILING optional `isCurrent: () => boolean`
+// predicate (default = always-current, so existing callers are unchanged) is checked at THREE bail
+// points: (1) BEFORE each `mermaid.render` (a superseded pass stops emitting diagrams); (2) AFTER
+// each `mermaid.render` resolves but BEFORE `el.replaceWith(box)` / the controller build (a pass
+// superseded WHILE awaiting render leaves the live DOM untouched and builds no orphan controller —
+// the `finally` still removes mermaid's transient container); (3) BEFORE `_controllers.set` (a
+// superseded pass never wins the controller-registration race). Best-effort cooperative guards,
+// NOT compile-time invariants.
+describe("renderDiagrams — generation-aware cooperative cancellation (Bug #12-core)", () => {
+  beforeEach(() => {
+    renderMock.mockReset();
+    destroySpies.length = 0;
+  });
+
+  function pane(srcHtml: string): HTMLElement {
+    const el = document.createElement("div");
+    el.id = "reading-pane";
+    el.innerHTML = srcHtml;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect/></svg>';
+  const flush = async (n = 6): Promise<void> => {
+    for (let i = 0; i < n; i++) await Promise.resolve();
+  };
+
+  it("renders ONLY for the current generation: a pass superseded mid-loop skips the remaining mermaid.render calls", async () => {
+    // The FIRST diagram's render supersedes this generation (a newer reload began). The loop must
+    // bail BEFORE the second mermaid.render.
+    let current = true;
+    renderMock.mockImplementation(async () => {
+      current = false;
+      return { svg: SVG };
+    });
+
+    const el = pane('<pre class="mermaid-src">a</pre><pre class="mermaid-src">b</pre>');
+    await renderDiagrams(el, () => current);
+
+    // INVERSION CHECK: drop the `if (!isCurrent()) return` at the top of the loop and the second
+    // diagram also renders → toHaveBeenCalledTimes(1) goes RED (becomes 2).
+    expect(renderMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("two overlapping renders: the superseded pass never wins the _controllers race — _controllers ends on the CURRENT generation", async () => {
+    // Warm up the lazily-imported mermaid module so getMermaid()'s dynamic import is already cached.
+    // Otherwise the interleaving below would also depend on import-resolution timing (a macrotask),
+    // making the microtask flush()es order-dependent. After warm-up the test depends ONLY on the
+    // deferred render resolvers we control.
+    renderMock.mockResolvedValue({ svg: SVG });
+    await renderDiagrams(pane('<pre class="mermaid-src">warm</pre>'), () => true);
+    renderMock.mockReset();
+    destroySpies.length = 0; // discard the warm-up pass's controller spy
+
+    // Deferred render harness: each mermaid.render(...) call parks a resolver so we can interleave
+    // two renderDiagrams passes and release them in a controlled order.
+    const pending: Array<(svg: string) => void> = [];
+    renderMock.mockImplementation(
+      () => new Promise<{ svg: string }>((resolve) => pending.push((svg) => resolve({ svg }))),
+    );
+
+    let gen = 1;
+    const el = pane('<pre class="mermaid-src">a</pre>');
+
+    // PASS 1 (to be superseded). Enters its loop while current (gen===1) and calls mermaid.render,
+    // then parks on the deferred resolver pending[0].
+    const p1 = renderDiagrams(el, () => gen === 1);
+    await flush();
+    expect(renderMock).toHaveBeenCalledTimes(1);
+    expect(destroySpies).toHaveLength(0); // no box/controller built yet (render #0 is parked)
+
+    // Supersede: a newer reload begins. renderInto would have wiped+re-rendered the pane.
+    gen = 2;
+    el.innerHTML = '<pre class="mermaid-src">a</pre>';
+    const p2 = renderDiagrams(el, () => gen === 2);
+    await flush();
+    expect(renderMock).toHaveBeenCalledTimes(2); // pass 2 parked on pending[1]
+
+    // Release pass 2 FIRST → it builds controller #0 (the current generation) and, since it is
+    // still current, runs _controllers.set(el, [pass2 controller]).
+    pending[1](SVG);
+    await p2;
+    expect(destroySpies).toHaveLength(1); // pass 2's controller
+
+    // Now release pass 1. Its render resolves, but it is STALE (gen===2 ⇒ isCurrent1 false), so it
+    // bails at the THIRD guard — BEFORE buildPanZoomBox — and therefore builds NO controller at all.
+    pending[0](SVG);
+    await p1;
+    // The superseded pass built NO controller: destroySpies stays at 1 (only pass 2's).
+    // INVERSION CHECK (third guard): drop the post-await `if (!isCurrent()) return` and the stale
+    // pass builds a controller → this becomes 2 → RED.
+    expect(destroySpies).toHaveLength(1);
+
+    // PROOF that _controllers ends on the CURRENT (pass 2) generation: a final teardown destroys
+    // EXACTLY pass 2's controller (the only one ever registered).
+    destroyControllers(el);
+    expect(destroySpies[0]).toHaveBeenCalledTimes(1); // pass 2 (current) registered + torn down
+  });
+
+  it("third guard: a pass superseded WHILE awaiting mermaid.render leaves the live DOM untouched (no replaceWith) and builds no controller", async () => {
+    // Warm the lazy import cache so timing depends ONLY on the deferred resolver below.
+    renderMock.mockResolvedValue({ svg: SVG });
+    await renderDiagrams(pane('<pre class="mermaid-src">warm</pre>'), () => true);
+    renderMock.mockReset();
+    destroySpies.length = 0;
+
+    // Deferred render: park the resolver so we can supersede WHILE the render is in flight.
+    let release: ((svg: string) => void) | null = null;
+    renderMock.mockImplementation(
+      () => new Promise<{ svg: string }>((resolve) => { release = (svg) => resolve({ svg }); }),
+    );
+
+    // CRUCIALLY no renderInto wipe — the placeholder stays ATTACHED to the live pane. This is the
+    // future footgun the third guard protects: a generation bump WITHOUT a wipe. Without the guard,
+    // the stale pass's el.replaceWith would inject a stale diagram straight into the LIVE pane.
+    let current = true;
+    const el = pane('<pre class="mermaid-src">a</pre>');
+    const p = renderDiagrams(el, () => current);
+    await flush();
+    expect(renderMock).toHaveBeenCalledTimes(1); // entered the loop while current; parked on render
+
+    // Supersede mid-render (NO DOM wipe), then let the parked render resolve.
+    current = false;
+    release!(SVG);
+    await p;
+
+    // INVERSION CHECK: drop the post-await `if (!isCurrent()) return` (before replaceWith/build) and
+    // the stale pass replaces the placeholder with a box + builds a controller → all three go RED.
+    expect(el.querySelector("pre.mermaid-src")).not.toBeNull(); // placeholder NOT replaced (no replaceWith)
+    expect(el.querySelector(".mermaid-rendered")).toBeNull(); // no stale box injected into the live pane
+    expect(destroySpies).toHaveLength(0); // no orphan pan/zoom controller built
   });
 });

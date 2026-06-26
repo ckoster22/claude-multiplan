@@ -68,6 +68,7 @@ vi.mock("./render", () => ({
     return d.promise;
   }),
   clearAllComments: vi.fn(),
+  invalidatePopover: vi.fn(),
 }));
 vi.mock("./render/scroll", () => ({
   captureAnchor: vi.fn(() => null),

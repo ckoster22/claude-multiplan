@@ -103,7 +103,13 @@ async function getMermaid(): Promise<MermaidModule["default"]> {
  * diagrams have been attempted. A render failure shows the raw source plus a dim
  * error note (reusing the .mermaid-box / .mermaid-cap chrome) instead of throwing.
  */
-export async function renderDiagrams(paneEl: HTMLElement): Promise<void> {
+export async function renderDiagrams(
+  paneEl: HTMLElement,
+  // Bug #12-core: cooperative-cancellation predicate. A newer open/reload/plan-switch can supersede
+  // this pass while it awaits the async `mermaid.render`. Omitted ⇒ always-current, so existing
+  // callers compile + behave unchanged; this is a best-effort guard, NOT a compile-time invariant.
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
   // Tear down any pan/zoom controllers from this pane's PREVIOUS render so their
   // listeners never leak across renders (structural reset — see _controllers).
   destroyControllers(paneEl);
@@ -119,10 +125,21 @@ export async function renderDiagrams(paneEl: HTMLElement): Promise<void> {
   // Render sequentially: mermaid mutates document.body with transient nodes and
   // is not reentrancy-friendly across concurrent render() calls.
   for (const el of sources) {
+    // Bail if a newer pass superseded us (e.g. while awaiting getMermaid() or the previous
+    // diagram) so a stale generation stops injecting diagrams into the (now re-wiped) pane.
+    if (!isCurrent()) return;
     const src = el.textContent ?? "";
     const id = `mermaid-${_idCounter++}`;
     try {
       const { svg } = await mermaid.render(id, src);
+      // A newer pass may have superseded us WHILE awaiting mermaid.render. Bail BEFORE touching the
+      // live DOM (el.replaceWith) or building an orphan pan/zoom controller. Returning from inside
+      // the try still runs the `finally` below, which removes mermaid's transient measuring
+      // container — so the stale pass leaves no DOM mutation and no leaked controller behind. (Today
+      // supersession coincides with a renderInto wipe — `el` is detached, replaceWith a no-op — but
+      // this guards a future caller that bumps the generation WITHOUT a wipe: a stale diagram
+      // landing in the live pane plus a window-listener controller leak.)
+      if (!isCurrent()) return;
       const { box, controller } = buildPanZoomBox(svg);
       // DO NOT call bindFunctions — keeps any embedded click/script inert.
       el.replaceWith(box);
@@ -139,6 +156,9 @@ export async function renderDiagrams(paneEl: HTMLElement): Promise<void> {
     }
   }
 
+  // Final bail: if a newer pass superseded us during the loop, do NOT register this stale pass's
+  // controllers — that would overwrite the current generation's entry and win the teardown race.
+  if (!isCurrent()) return;
   _controllers.set(paneEl, fresh);
 }
 

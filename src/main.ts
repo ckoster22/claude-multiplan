@@ -10,6 +10,7 @@ import {
   onCommentCountChanged,
   loadCommentsFor,
   clearAllComments,
+  invalidatePopover,
   type TocEntry,
   type CommentsIO,
 } from "./render";
@@ -94,6 +95,19 @@ let searchEl: HTMLElement | null;
 let reviewBarEl: HTMLElement | null;
 let reviewBarLabelEl: HTMLElement | null;
 let reviewSubmitEl: HTMLButtonElement | null;
+// Bug #10: true between the moment a submit branch commits to dispatching (after its own validation
+// guard, before its first await) and the moment its round-trip settles. Read by refreshReviewBar to
+// drive the "submitting" visual lock, and — the real exactly-once invariant — by the submit handler's
+// top-of-handler early-return so a fast double-click cannot start a second dispatch. Reset on EVERY
+// exit path of each branch via try/finally (a guard-rejected click never sets it, so it can't stick).
+let submitInFlight = false;
+// Bug #10 (sibling): the same in-flight lock for the #review-approve handler — true while an approve
+// action (approve / approvePrototype / refinePrototype-autoApprove / approveAcceptance) is dispatching.
+// Kept SEPARATE from submitInFlight (and deliberately NOT fed into the bar derivation) so approve is
+// correctness-only: no visual "submitting" change. Both sibling handlers gate on `submitInFlight ||
+// approveInFlight`, so a fast double-click on EITHER button — or a cross click (Approve then Submit,
+// which act on the same gate with opposite decisions) — can start at most ONE dispatch.
+let approveInFlight = false;
 let reviewClearEl: HTMLButtonElement | null;
 let reviewResumeEl: HTMLButtonElement | null;
 // Sub-Plan 03: dedicated "Approve & Build" button — shown only while VIEWING an in-process review.
@@ -123,11 +137,12 @@ let REVIEW_APPROVE_DEFAULT_LABEL = "Approve & Build";
 // (the titlebar Install/Remove plan-review hook buttons were removed — the app drives Claude in-process).
 let hookStatusEl: HTMLElement | null;
 
-// ---- Resume banner (Phase 5) — orthogonal to the review bar -----------------------------------
+// ---- Resume banner (Phase 5) — the LOWEST-precedence reading-pane affordance ------------------
 // #resume-banner is shown when the OPEN plan belongs to a NON-terminal `.plan-tree/` whose tree_id
-// matches the open plan and no orchestration is already active (detectResumable). It is a SEPARATE
-// surface from the review bar (#review-bar) and from the live-idle conversation #conversation-resume
-// button — both may coexist. #resume-plan-btn is the resumable-state control (label
+// matches the open plan and no orchestration is already active (detectResumable). It is a SEPARATE DOM
+// surface from the review bar (#review-bar), but per the Phase D #9 precedence (prototype > acceptance
+// > review > resume) it is the LOWEST affordance: refreshAffordances suppresses it whenever the bar is
+// occupied by a higher one. #resume-plan-btn is the resumable-state control (label
 // "Resume — <phaseLabel>"); the banner shows a static muted message for blocked phases.
 let resumeBannerEl: HTMLElement | null = null;
 let resumeBannerMsgEl: HTMLElement | null = null;
@@ -194,8 +209,41 @@ function switchToPlanTab(): void {
   tabPlanPaneEl.classList.add("active");
 }
 
-// Absolute path of the currently-open plan (null when nothing selected).
-let openPath: AbsPath | null = null;
+// ---- THE SIDEBAR SELECTION MODEL (Phase D #4) -------------------------------------------------
+// `selection` is the SINGLE source of truth for "what is the active reading-pane target", a closed
+// union so impossible combinations (a plan AND a sentinel open at once) are unrepresentable:
+//   • none        — nothing open (the empty pane).
+//   • plan        — a real `.md` plan is open at `path` (the normal case; also a held gate's plan
+//                   and the __setOpenPathForMock in-process review demo).
+//   • sentinel    — a synthetic resume-sentinel row (`plan-tree-resume://<treeId>`) is open; no real
+//                   file behind it. `cwd` is the tree's cwd (display-incidental).
+//   • placeholder — the live-run placeholder row is the active selection (the run owns the pane;
+//                   the user has been flipped to the Conversation tab). No real file ⇒ openPath null.
+// `openPath` is a DERIVED, read-only getter over `selection` (see openPath()); it can never be
+// assigned — writers set `selection`, which is what keeps the union the sole truth.
+type Selection =
+  | { k: "none" }
+  | { k: "plan"; path: AbsPath }
+  | { k: "sentinel"; treeId: string; cwd: string | null }
+  | { k: "placeholder"; treeId: string };
+
+let selection: Selection = { k: "none" };
+
+// The absolute path of the currently-open plan, DERIVED from `selection` (null when nothing real is
+// open: the `none` and `placeholder` variants have no file). A `sentinel` maps back to its synthetic
+// scheme path so every existing `isResumeSentinel(openPath())` guard keeps working. This is the ONE
+// reader the rest of the module consults; nobody assigns it (it is a function, not an lvalue).
+function openPath(): AbsPath | null {
+  switch (selection.k) {
+    case "none":
+    case "placeholder":
+      return null;
+    case "plan":
+      return selection.path;
+    case "sentinel":
+      return asAbsPath(RESUME_SENTINEL_SCHEME + selection.treeId);
+  }
+}
 
 // ---- Phase 6 — Plan Review (ExitPlanMode hook) — Option A: open the REAL plan file ----
 //
@@ -240,10 +288,11 @@ const pendingReviews = new Map<string, PendingReview>();
 // pending review (this is the single derivation of "viewing a review"). On ties (same path tracked
 // by >1 review — should not happen) the last-iterated (newest-inserted) wins.
 function currentReviewId(): string | null {
-  if (openPath === null) return null;
+  const op = openPath();
+  if (op === null) return null;
   let match: string | null = null;
   for (const r of pendingReviews.values()) {
-    if (r.planFilePath === openPath) match = r.reviewId;
+    if (r.planFilePath === op) match = r.reviewId;
   }
   return match;
 }
@@ -256,14 +305,21 @@ let orchSnapshot: PlanTreeSnapshot2 | null = null;
 // ---- Live-run placeholder sidebar row (Bug A fix) ---------------------------------------------
 // A running orchestration has NO sidebar row until the agent writes its plan file (and list_plans
 // can lag the write), so the sidebar highlight would land on nothing/the wrong row while the pane
-// shows the conversation. `runPlaceholder` is keyed by the run's treeId (set on the first snapshot
-// of each run); the sidebar renders it as a `.plan.placeholder` row whenever no rendered record
-// carries that tree_id. `placeholderSelected` is the user-intent half of its `.active` state: true
-// on run start and on a placeholder click; false once the user opens any real plan or the gate
-// handler opens the gate plan. (The other half — "a gate plan is open but its row is missing" — is
-// derived live in makeSidebarCtx.)
+// shows the conversation. `runPlaceholder` is the live-run ROW descriptor (treeId + label), keyed by
+// the run's treeId (set on the first snapshot of each run); the sidebar renders it as a
+// `.plan.placeholder` row whenever no rendered record carries that tree_id. It is ORTHOGONAL to
+// `selection`: the row can be visible while a DIFFERENT real plan is the active selection (e.g. the
+// user browses another plan mid-run), so it cannot be folded into the union.
+//
+// The placeholder's `.active` (SELECTED) half — formerly the parallel `placeholderSelected` flag — is
+// now FOLDED into `selection`: the placeholder is selected iff `selection.k === "placeholder"` (set on
+// a fresh-run mint when nothing real is open, and on a placeholder click). The OTHER half — "a held
+// gate's plan is open but its row is missing" — is still derived live in makeSidebarCtx
+// (standsInForOpenGatePlan). `placeholderSelected()` reads the folded flag for the run's tree.
 let runPlaceholder: { treeId: string; label: string } | null = null;
-let placeholderSelected = false;
+function placeholderSelected(): boolean {
+  return selection.k === "placeholder" && selection.treeId === (runPlaceholder?.treeId ?? null);
+}
 
 // Pure helper (Bug B fix): should the onActivity conversation-tab flip be SUPPRESSED? Keyed
 // STRICTLY on pendingApproval — while a gate is held, every non-result stream frame still fires
@@ -304,7 +360,7 @@ function viewingGate(): ApprovalGate2 | null {
   if (!isOrchestrationActive()) return null;
   const gate = orchSnapshot?.pendingApproval ?? null;
   if (!gate) return null;
-  return openPath === asAbsPath(gate.planPath) ? gate : null;
+  return openPath() === asAbsPath(gate.planPath) ? gate : null;
 }
 
 // Visual-prototype gate (Phase 4d): the held PrototypeGate driving the bar's PROTOTYPE mode, or
@@ -342,6 +398,36 @@ function currentReviewSource(): "external" | "in-process" {
   return pendingReviews.get(id)?.source ?? "external";
 }
 
+// ---- Phase D #5 — PendingSurface[]: the unified set of "things awaiting the user" -------------
+// Every distinct pending review surface, in ONE list, so `pendingCount` (the SUMMARY-mode "N plans
+// awaiting review") and `resumeNewestReview` (the #review-resume button) derive from the SAME source
+// and can never disagree:
+//   • external / in-process — the tracked pendingReviews (each a held blocking hook / canUseTool seam).
+//   • orchestrator-gate     — the live run's held ApprovalGate2 (NOT in pendingReviews).
+//   • prototype / acceptance — the live run's held visual/forced-acceptance gates.
+// The gate surfaces are derived through the SAME precedence-encoded helpers the bar uses
+// (activePrototypeGate / activeAcceptanceGate yield null while a higher gate is held), so at most one
+// gate surface is ever present — keeping `pendingSurfaces().length` identical to the legacy
+// `pendingReviews.size + orchGatePending` at the one site refreshReviewBar reads it (where, by
+// precedence, no prototype/acceptance gate is held).
+type PendingSurface =
+  | { kind: "external" | "in-process"; review: PendingReview }
+  | { kind: "orchestrator-gate"; gate: ApprovalGate2 }
+  | { kind: "prototype"; gate: PrototypeGate }
+  | { kind: "acceptance"; gate: AcceptanceGate };
+
+function pendingSurfaces(): PendingSurface[] {
+  const surfaces: PendingSurface[] = [];
+  for (const r of pendingReviews.values()) surfaces.push({ kind: r.source, review: r });
+  const orchGate = isOrchestrationActive() ? orchSnapshot?.pendingApproval ?? null : null;
+  if (orchGate) surfaces.push({ kind: "orchestrator-gate", gate: orchGate });
+  const proto = activePrototypeGate();
+  if (proto) surfaces.push({ kind: "prototype", gate: proto });
+  const accept = activeAcceptanceGate();
+  if (accept) surfaces.push({ kind: "acceptance", gate: accept });
+  return surfaces;
+}
+
 // Test-only reader: the open plan's comment count (the review's comments are just the plan's
 // comments now). Kept under the old name so existing review assertions still read it.
 export function reviewCommentCount(): number {
@@ -352,21 +438,25 @@ export function reviewCommentCount(): number {
 // vitest file, so this gives each test a clean slate. Production code never calls it.
 export function __resetReviewStateForTest(): void {
   pendingReviews.clear();
-  // Also reset the open-plan pointer: module state persists across tests in a vitest file, so a plan
+  // Also reset the selection: module state persists across tests in a vitest file, so a plan
   // left open by a prior test could make currentReviewId() spuriously match a new review on the same
   // path (the "already viewing → don't yank" branch), breaking the next test's open. Production never
-  // calls this.
-  openPath = null;
+  // calls this. (openPath is a getter over selection — resetting selection clears it.)
+  selection = { k: "none" };
   // Sub-Plan 02: drop any orchestrator gate snapshot so a leaked pendingApproval from a prior test
   // cannot spuriously drive the bar into "viewing the orchestrator gate" for the next test.
   orchSnapshot = null;
   // Bug A fix: drop any leaked live-run placeholder so a prior test's run can't paint a phantom
-  // `.plan.placeholder` row (or steal `.active`) in the next test.
+  // `.plan.placeholder` row (or steal `.active`) in the next test. (selection=none above already
+  // drops any folded placeholder-selected state.)
   runPlaceholder = null;
-  placeholderSelected = false;
   // Phase 5: drop any leaked resume context so a prior test's resumable verdict can't drive the
   // #resume-plan-btn click in the next test.
   pendingResume = null;
+  // Bug #10: clear any leaked in-flight submit lock so a prior test that did not flush the round-trip
+  // cannot leave the next test's Submit stuck disabled / its top-of-handler early-return tripping.
+  submitInFlight = false;
+  approveInFlight = false;
 }
 
 // Test-only: install a live-run placeholder + its selection so tests can drive the module-level
@@ -378,7 +468,11 @@ export function __setRunPlaceholderForTest(
   selected: boolean,
 ): void {
   runPlaceholder = ph;
-  placeholderSelected = selected;
+  // `placeholderSelected` is folded into `selection`: a selected placeholder IS the selection. A
+  // deselect (or a null row) drops only a STALE placeholder selection — it must not clobber a real
+  // plan/sentinel a prior test left open (preserves the seam's external behavior).
+  if (selected && ph !== null) selection = { k: "placeholder", treeId: ph.treeId };
+  else if (!selected && selection.k === "placeholder") selection = { k: "none" };
 }
 
 // Mock/automation hook: force a tree fully EXPANDED and repaint the sidebar. Clears any SESSION
@@ -407,10 +501,11 @@ export function __expandTreeForMock(treeId: string): void {
 // DIFFERENT plan → SUMMARY mode ("N plans awaiting review" + external "Submit feedback"), not the
 // in-process "Request changes" VIEWING bar. This setter aligns openPath with the plan the player has
 // rendered, so viewingGate() matches WITHOUT a re-render (the freshly-applied comment highlights
-// survive). Production never calls this — production sets openPath through openPlan(). `path: null`
-// clears it (the gate clears / the pane closes).
+// survive). Production never calls this — production sets `selection` through openPlan(). `path: null`
+// clears it (the gate clears / the pane closes). Sets the `plan` variant (the demo always aligns to a
+// real materialized plan file); openPath() then derives the path the gate's VIEWING check compares.
 export function __setOpenPathForMock(path: string | null): void {
-  openPath = path === null ? null : asAbsPath(path);
+  selection = path === null ? { k: "none" } : { k: "plan", path: asAbsPath(path) };
 }
 
 // ---- Sidebar filter (Fix 1) ----
@@ -456,7 +551,7 @@ let countReqSeq = 0;
 // makes this synchronous commit the newest request, so an in-flight same-plan cold read bails
 // instead of clobbering it (preserving latest-wins).
 function applyCommentCount(path: AbsPath, count: number): void {
-  if (path !== openPath) return; // foreign-plan callback: ignore entirely (no commit, no seq bump).
+  if (path !== openPath()) return; // foreign-plan callback: ignore entirely (no commit, no seq bump).
   ++countReqSeq;
   commentCount = count;
   // If the open plan IS a pending review, the bar's VIEWING label + Submit-enabled state derive from
@@ -473,14 +568,15 @@ function applyCommentCount(path: AbsPath, count: number): void {
 // unit-testable.
 export async function refreshCommentCount(): Promise<void> {
   // Short-circuit: nothing open ⇒ count is 0 (no await needed; no stale landing to guard).
-  if (openPath === null) {
+  const op = openPath();
+  if (op === null) {
     commentCount = 0;
     refreshReviewBar(0);
     return;
   }
   const seq = ++countReqSeq;
   try {
-    const n = await invoke<number>("get_comment_count", { path: openPath });
+    const n = await invoke<number>("get_comment_count", { path: op });
     // A newer refresh (or an authoritative applyCommentCount) began while this one was in flight —
     // drop this stale landing so it cannot overwrite the newer count (cross-plan A→B, same-plan A→A
     // bursty-reorder, AND a fresh in-session add whose authoritative count must not be re-read away).
@@ -540,21 +636,23 @@ function refreshReviewBar(countOverride?: number): void {
   reviewRefineEl?.classList.add("hidden");
   reviewRefineTargetEl?.classList.add("hidden");
   if (reviewApproveEl) reviewApproveEl.textContent = REVIEW_APPROVE_DEFAULT_LABEL;
-  // Sub-Plan 02: the orchestrator's pending approval gate is a pending review surface that is NOT in
-  // pendingReviews, so add it to the count while a run is awaiting approval. `viewing` is true when
-  // the user is on a tracked pending review's plan OR on the orchestrator gate's plan.
-  // GEN-2 UNIFIED GATE: the pending gate — decomposition (the root's included) OR leaf — is ALWAYS
-  // carried in pendingApproval now (the master-phase keying is gone). One pending review surface.
-  const orchGatePending =
-    isOrchestrationActive() && orchSnapshot?.pendingApproval != null ? 1 : 0;
+  // Phase D #5: the SUMMARY-mode count is the number of pending surfaces. By the precedence above
+  // (PROTOTYPE/ACCEPTANCE short-circuit out before here), no prototype/acceptance gate is held at this
+  // point, so pendingSurfaces() == the tracked pendingReviews PLUS the held orchestrator gate (the one
+  // gate-surface that is NOT in pendingReviews) — i.e. identical to the legacy
+  // `pendingReviews.size + orchGatePending`. `viewing` is true on a tracked review's plan OR the gate's.
   const state = applyReviewBarState({
-    pendingCount: pendingReviews.size + orchGatePending,
+    pendingCount: pendingSurfaces().length,
     viewing: currentReviewId() !== null || viewingGate() !== null,
     viewedCommentCount: countOverride ?? commentCount,
     // Source-aware: drives #review-approve visibility + the Submit label ("Request changes" for
     // in-process, "Submit" for external). currentReviewSource() reads the SAME matched review (or the
     // orchestrator gate, which it reports as "in-process").
     source: currentReviewSource(),
+    // Bug #10: a submit already in flight refines VIEWING into "submitting" (Submit disabled, Approve
+    // hidden). Ignored in summary/hidden and in the prototype/acceptance bars (those short-circuit
+    // above) — the handler's top-of-handler early-return is what guarantees exactly-once there.
+    submitInFlight,
   });
   reviewBarEl.classList.toggle("hidden", !state.barVisible);
   if (reviewBarLabelEl) reviewBarLabelEl.textContent = state.label;
@@ -722,7 +820,7 @@ async function renderPrototypePreview(gate: PrototypeGate): Promise<void> {
   if (docSrcEl) docSrcEl.textContent = homePath ? collapseHome(gate.cwd, homePath) : gate.cwd;
   renderInto(readingPaneEl, composePreviewMarkdown(gate), gate.cwd);
   readerScrollEl?.scrollTo({ top: 0 });
-  await settle(readingPaneEl);
+  await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
   // settle() is async; a newer open/reload may have begun — bail so a late settle from this
   // superseded preview never touches the pane or the ToC (mirrors openPlan's guard discipline).
   if (!renderGuard.isCurrent(gen)) return;
@@ -742,7 +840,11 @@ export function purgeInprocReviews(): number {
       purged++;
     }
   }
-  if (purged > 0) refreshReviewBar();
+  // #9 FIX 4: removing the last in-process review can UN-suppress the resume banner (a pending review
+  // outranks resume). The agent-exit / agent-error-fatal callers rely on THIS refresh (they don't call
+  // refreshAffordances themselves, unlike #conversation-cancel), so re-derive BOTH surfaces — else a
+  // resumable open plan's Resume button stays stuck hidden after the seam dies.
+  if (purged > 0) refreshAffordances();
   return purged;
 }
 
@@ -842,7 +944,10 @@ async function resolveReview(reviewId: string, decision: "allow" | "deny", reaso
     return false;
   }
   pendingReviews.delete(reviewId);
-  refreshReviewBar();
+  // Removing a pending review can UN-suppress the resume banner (#9 precedence: a pending review
+  // outranks resume). Re-derive BOTH surfaces so a now-unsuppressed resumable open plan shows its
+  // Resume button without waiting for a re-open.
+  refreshAffordances();
   return true;
 }
 
@@ -1282,7 +1387,8 @@ function resumeActionLabel(plan: ResumePlan, phaseLabel: string): string {
 // Render the #resume-banner from a verdict (or hide it for null). Pure DOM derivation: resumable →
 // the #resume-plan-btn labeled per-kind (see resumeActionLabel; the resume context stashed for its
 // click); blocked → a static muted "<phaseLabel> — resuming from here isn't supported yet" message,
-// no button; null → hidden + context cleared. Orthogonal to refreshReviewBar (both surfaces may show).
+// no button; null → hidden + context cleared. A SEPARATE surface from refreshReviewBar, but per the
+// Phase D #9 precedence refreshAffordances only paints it when no higher affordance occupies the bar.
 export function renderResumeBanner(verdict: ResumeVerdict | null): void {
   if (!resumeBannerEl) return;
   // Always start from the collapsed (one-click) confirm state — any prior verdict's open confirm row
@@ -1349,12 +1455,53 @@ function showResumeConfirmRow(hazard: string | null): void {
 async function refreshResumeBanner(path: AbsPath): Promise<void> {
   const rec = lastRecords.find((r) => r.absolute_path === path);
   if (!rec) {
-    if (openPath === path) renderResumeBanner(null);
+    if (openPath() === path) renderResumeBanner(null);
     return;
   }
   const verdict = await detectResumable(rec);
-  if (openPath !== path) return; // superseded — a newer open owns the banner.
+  if (openPath() !== path) return; // superseded — a newer open owns the banner.
   renderResumeBanner(verdict);
+}
+
+// Phase D #9 — THE reading-pane affordance, by precedence prototype > acceptance > review > resume
+// (at most ONE active at a time). PURE truth table: the caller passes the already-derived signals.
+// EXPORTED so the precedence is unit-tested directly (the same pattern as suppressConversationFlip /
+// shouldClearPlaceholderOnExit). "review" covers BOTH the held-gate VIEWING bar and the SUMMARY count;
+// "resume" is the lowest — the resume banner only surfaces when nothing higher occupies the bar.
+export type Affordance = "none" | "prototype" | "acceptance" | "review" | "resume";
+
+export function computeAffordance(signals: {
+  prototype: boolean;
+  acceptance: boolean;
+  review: boolean;
+  resume: boolean;
+}): Affordance {
+  if (signals.prototype) return "prototype";
+  if (signals.acceptance) return "acceptance";
+  if (signals.review) return "review";
+  if (signals.resume) return "resume";
+  return "none";
+}
+
+// Re-derive ALL reading-pane affordances together from the current state — the SINGLE entry point every
+// run/open transition calls so the review bar and the resume banner can never drift. refreshReviewBar
+// owns prototype/acceptance/review (it short-circuits into PROTOTYPE/ACCEPTANCE mode, else renders
+// review/summary); the resume banner is the lowest-precedence surface, so it is suppressed whenever any
+// higher affordance is active (computeAffordance states that precedence) and only (re-)derived when the
+// bar is otherwise idle. A run ending therefore re-evaluates the open plan's resumability WITHOUT
+// reopening it (the active run was the only thing suppressing the banner — detectResumable null while
+// orchestrating). A null openPath (nothing open / a live placeholder) just hides the banner.
+function refreshAffordances(): void {
+  refreshReviewBar();
+  const op = openPath();
+  const higher = computeAffordance({
+    prototype: activePrototypeGate() !== null,
+    acceptance: activeAcceptanceGate() !== null,
+    review: viewingGate() !== null || currentReviewId() !== null || pendingSurfaces().length > 0,
+    resume: false, // resolved below by refreshResumeBanner only when nothing higher occupies the bar
+  });
+  if (op === null || higher !== "none") renderResumeBanner(null);
+  else void refreshResumeBanner(op);
 }
 
 // #resume-plan-btn click → drive getOrchestrator().resume() and, on success, mirror the composer's
@@ -1809,6 +1956,33 @@ function onToggleCollapse(treeId: string, next: boolean): void {
   );
 }
 
+// PURE selection reducer (Phase D #4): given the prior selection, the PRIOR records list, and the
+// fresh records list, return the selection that should survive. The ONLY collapse is a `plan`
+// selection that GENUINELY VANISHED — it was in the prior list and is gone from the new one — falling
+// to `none` (closing the ghost reading pane). Everything else is EXEMPT and returned unchanged:
+//   • placeholder — a live run has no real row until its plan lands; blanking it would drop the run.
+//   • sentinel    — a synthetic resume row is kept alive by the dedicated stale-sentinel cleanup below
+//                   (which also honors the placeholder-stands-in takeover); this reducer must not
+//                   pre-empt that nuance.
+//   • a `plan` that was NEVER listed — a freshly-opened/not-yet-indexed plan, a held gate whose row
+//                   lags the write (FIX 2), or the __setOpenPathForMock in-process review demo (whose
+//                   plan is intentionally absent from list_plans). "Absent from the new list" alone is
+//                   NOT a vanish — it must have been PRESENT before, so a not-yet-indexed open is safe.
+//   • the held orchestrator gate's plan — exempt even if it WAS listed then dropped (the row can lag
+//                   mid-hold; the placeholder stands in), via the explicit `heldGatePlan` guard.
+function resolveSelection(
+  prev: Selection,
+  records: PlanRecord[],
+  prevRecords: PlanRecord[],
+  heldGatePlan: AbsPath | null,
+): Selection {
+  if (prev.k !== "plan") return prev;
+  if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;
+  const wasListed = prevRecords.some((r) => r.absolute_path === prev.path);
+  const stillListed = records.some((r) => r.absolute_path === prev.path);
+  return wasListed && !stillListed ? { k: "none" } : prev;
+}
+
 // Re-fetch the list and re-render the sidebar (re-sort by recency / nesting happens in Rust).
 async function refreshList(): Promise<void> {
   if (!planListEl) return;
@@ -1816,15 +1990,37 @@ async function refreshList(): Promise<void> {
   try {
     records = await invoke<PlanRecord[]>("list_plans");
   } catch (e) {
-    console.error("list_plans failed", e);
-    records = [];
+    // A TRANSIENT list_plans failure must be a NO-OP for the selection + pane. Substituting an empty
+    // list (the old behavior) would flow into resolveSelection's collapse path — prevRecords still
+    // holds the open plan, records=[] ⇒ "vanished" — and blank the pane the user is reading + drop the
+    // selection to `none` (non-self-healing; refreshList fires on every plan-changed). Bail without
+    // touching lastRecords/selection/pane; the next successful refresh repaints. (Pre-Phase-D a
+    // failure also left openPath untouched — this preserves the last-good sidebar rather than blanking
+    // it, which is strictly more self-healing.)
+    console.error("list_plans failed — leaving the sidebar/selection intact", e);
+    return;
   }
 
-  // Stash the full records array so the filter can re-render from memory (a late cwd patch
-  // re-applies the filter without a fresh list_plans round-trip), then render through the
-  // filter path. The filter + count are owned by applyFilterAndRender.
+  // Capture the PRIOR list before reassigning so the reducer can tell a genuine vanish (was listed,
+  // now gone) from a never-listed open (a not-yet-indexed plan / the __setOpenPathForMock demo / a
+  // lagging gate row), then stash the full records array so the filter can re-render from memory.
+  const prevRecords = lastRecords;
   lastRecords = records;
-  applyFilterAndRender();
+
+  // Selection reduction (Phase D #4): collapse a `plan` that genuinely VANISHED → `none`, closing the
+  // ghost pane. The held gate's plan is exempt (its row can lag the write — the placeholder stands in).
+  const heldGatePlan =
+    isOrchestrationActive() && orchSnapshot?.pendingApproval != null
+      ? asAbsPath(orchSnapshot.pendingApproval.planPath)
+      : null;
+  const before = selection;
+  selection = resolveSelection(selection, records, prevRecords, heldGatePlan);
+  if (before.k === "plan" && selection.k === "none") {
+    // The open plan vanished — reset the pane to empty (resetToEmptyPane repaints the sidebar + bar).
+    resetToEmptyPane();
+  } else {
+    applyFilterAndRender();
+  }
 
   // Stale-sentinel cleanup (Phase 4 DA Concern 1): if the OPEN row is a resume sentinel that no longer
   // appears in the fresh records (the tree finished elsewhere, or a real row replaced the synthetic
@@ -1832,10 +2028,11 @@ async function refreshList(): Promise<void> {
   // a dangling openPath with no matching `.active` row. Reset to the empty state so nothing stale
   // remains. GUARD the happy resume→placeholder path: when the orchestrator has minted a live-run
   // placeholder for THIS tree (runPlaceholder.treeId matches), the placeholder legitimately stands in
-  // for the vanished sentinel — leave openPath/banner alone (placeholderVisible keeps the row showing).
-  if (openPath !== null && isResumeSentinel(openPath)) {
-    const treeId = resumeSentinelTreeId(openPath);
-    const stillListed = records.some((r) => r.absolute_path === openPath);
+  // for the vanished sentinel — leave the selection/banner alone (placeholderVisible keeps the row).
+  const op = openPath();
+  if (op !== null && isResumeSentinel(op)) {
+    const treeId = resumeSentinelTreeId(op);
+    const stillListed = records.some((r) => r.absolute_path === op);
     const placeholderStandsIn = runPlaceholder !== null && runPlaceholder.treeId === treeId;
     if (!stillListed && !placeholderStandsIn) {
       resetToEmptyPane();
@@ -1846,14 +2043,14 @@ async function refreshList(): Promise<void> {
   void resolveMissingCwds(records);
 }
 
-// Reset the reading pane to the no-plan-open empty state: clear openPath (so no stale row derives
+// Reset the reading pane to the no-plan-open empty state: clear the selection (so no stale row derives
 // `.active`), hide the doc header, drop any resume banner, and repaint the pane's "select a plan"
-// note + clear the ToC. Idempotent. Used when the currently-open resume sentinel vanishes from the
-// list without a placeholder taking over (see refreshList). `renderResumeBanner(null)` (not
-// `refreshResumeBanner`) is used directly here — openPath is being cleared, so there is no record to
-// re-derive a verdict from; the banner must simply hide.
+// note + clear the ToC. Idempotent. Used when a `plan` selection collapses (its file vanished) or the
+// currently-open resume sentinel vanishes from the list without a placeholder taking over (see
+// refreshList). `renderResumeBanner(null)` (not `refreshResumeBanner`) is used directly here — the
+// selection is being cleared, so there is no record to re-derive a verdict from; the banner just hides.
 function resetToEmptyPane(): void {
-  openPath = null;
+  selection = { k: "none" };
   renderResumeBanner(null);
   docHeaderEl?.classList.add("hidden");
   if (readingPaneEl) {
@@ -1872,21 +2069,23 @@ function resetToEmptyPane(): void {
 // Build the FRESH sidebar render context (openPath read live, never a stale closure — keeps
 // `.active` correct across re-lists). Shared by the filter render path.
 function makeSidebarCtx(): SidebarCtx {
-  // The placeholder's `.active` derivation (computed LIVE each render): explicit user intent
-  // (placeholderSelected) OR "the gate plan is open but its row is missing" — when a held gate's
-  // plan IS the open plan, openPlan's [data-path] loop may have found no row to mark `.active`,
-  // so the placeholder stands in as the active row (renderSidebar omits it once the row exists,
-  // at which point that row carries `.active` via ctx.openPath instead).
+  // The placeholder's `.active` derivation (computed LIVE each render): the folded selected flag
+  // (placeholderSelected() — selection.k === "placeholder" for this tree) OR "the gate plan is open
+  // but its row is missing" — when a held gate's plan IS the open plan, openPlan's [data-path] loop
+  // may have found no row to mark `.active`, so the placeholder stands in as the active row
+  // (renderSidebar omits it once the row exists, at which point that row carries `.active` via
+  // ctx.openPath instead).
   const gate = orchSnapshot?.pendingApproval ?? null;
-  const standsInForOpenGatePlan = gate != null && openPath === asAbsPath(gate.planPath);
+  const standsInForOpenGatePlan = gate != null && openPath() === asAbsPath(gate.planPath);
   return {
-    openPath,
+    openPath: openPath(),
     collapseOverride,
     subCollapse,
     onOpen: (path, stem) => {
-      // Opening any real plan from the sidebar deselects the placeholder. openPlan's selection
-      // loop only touches [data-path] rows, so clear the placeholder's `.active` here directly.
-      placeholderSelected = false;
+      // Opening any real plan from the sidebar deselects the placeholder. openPlan sets
+      // selection=plan (so the folded placeholderSelected goes false), but it does NOT re-render the
+      // sidebar and its [data-path] loop only touches real rows — clear the placeholder's stale
+      // `.active` here directly.
       if (planListEl) {
         for (const el of Array.from(planListEl.querySelectorAll<HTMLElement>(".plan.placeholder"))) {
           el.classList.remove("active");
@@ -1899,12 +2098,13 @@ function makeSidebarCtx(): SidebarCtx {
       ? {
           treeId: runPlaceholder.treeId,
           label: runPlaceholder.label,
-          selected: placeholderSelected || standsInForOpenGatePlan,
+          selected: placeholderSelected() || standsInForOpenGatePlan,
         }
       : null,
     onPlaceholderOpen: () => {
+      // Clicking the placeholder makes it the active selection (the user wants to watch the run).
       switchToConversationTab();
-      placeholderSelected = true;
+      if (runPlaceholder) selection = { k: "placeholder", treeId: runPlaceholder.treeId };
       applyFilterAndRender();
     },
   };
@@ -2022,16 +2222,17 @@ function stemFromPath(absPath: AbsPath): Stem {
 // accent element the existing markup/CSS expect.
 function patchDocSrc(): void {
   if (!docSrcEl) return;
-  if (openPath === null) {
+  const op = openPath();
+  if (op === null) {
     docSrcEl.replaceChildren();
     return;
   }
   // A synthetic resume-sentinel row is not in the resolve cache (its stem is the tree_id, never
   // resolved through resolve_cwds) — its cwd rides the record's `cwd` instead. Read it from there so
   // the reader header shows the tree's cwd, not an empty string.
-  const text = isResumeSentinel(openPath)
-    ? displayCwd(lastRecords.find((r) => r.absolute_path === openPath)?.cwd ?? "")
-    : cwdDisplayForStem(stemFromPath(openPath));
+  const text = isResumeSentinel(op)
+    ? displayCwd(lastRecords.find((r) => r.absolute_path === op)?.cwd ?? "")
+    : cwdDisplayForStem(stemFromPath(op));
   docSrcEl.replaceChildren();
   if (!text) return;
   const folder = document.createElement("span");
@@ -2118,8 +2319,16 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
   // Navigation is FREE and never touches pendingReviews. "Viewing a review" is derived from
   // openPath (see currentReviewId), so simply opening a plan flips the bar to VIEWING (if this is a
   // reviewed plan's file) or SUMMARY (if a review is pending elsewhere) via the refreshReviewBar()
-  // call at the end of this function — no teardown/auto-resurface logic.
-  openPath = path;
+  // call at the end of this function — no teardown/auto-resurface logic. Set the selection union
+  // SYNCHRONOUSLY up front (so openPath() reflects it before any await): a sentinel path becomes the
+  // `sentinel` variant (no real file — its cwd rides the synthetic record); any other path is `plan`.
+  selection = isResumeSentinel(path)
+    ? {
+        k: "sentinel",
+        treeId: resumeSentinelTreeId(path),
+        cwd: lastRecords.find((r) => r.absolute_path === path)?.cwd ?? null,
+      }
+    : { k: "plan", path };
 
   // Take a render generation: any later open/reload bumps the guard and supersedes this
   // render, so its post-await pane mutations are skipped (no stale content landing late).
@@ -2196,8 +2405,12 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
     if (intent !== null && intent.trim() !== "") {
       readingPaneEl.classList.remove("raw");
       renderInto(readingPaneEl, intent, cwd ?? dirOf(path));
+      // Bug #7b: switching to a sentinel is a genuine plan change (openPath now reads the sentinel
+      // scheme) — discard any draft owned by the previously-open real plan. See openPlan's plan-text
+      // site for the full rationale.
+      invalidatePopover(readingPaneEl);
       readerScrollEl?.scrollTo({ top: 0 });
-      await settle(readingPaneEl);
+      await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
       if (!renderGuard.isCurrent(gen)) return;
       rebuildTocFromPane();
     } else {
@@ -2207,8 +2420,10 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
         "_This plan is in progress. Use **Resume** above to continue it._",
         cwd ?? dirOf(path),
       );
+      // Bug #7b: same sentinel-switch invalidation as the INTENT.md branch above.
+      invalidatePopover(readingPaneEl);
       readerScrollEl?.scrollTo({ top: 0 });
-      await settle(readingPaneEl);
+      await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
       if (!renderGuard.isCurrent(gen)) return;
       rebuildTocFromPane();
     }
@@ -2220,8 +2435,16 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
       // Sub-Plan 02: render full-fidelity markdown into #reading-pane. New opens
       // start at the top.
       renderInto(readingPaneEl, text, dirOf(path));
+      // Bug #7b: the popover lives OUTSIDE #reading-pane, so it SURVIVES this innerHTML wipe. Now that
+      // the fresh DOM is in place and openPath() (== getPlanPath) reflects this plan, invalidate it: a
+      // genuine plan switch (draft.planPath !== openPath()) DISCARDS the stale draft; a same-plan
+      // re-open PRESERVES it and re-anchors its range against these fresh nodes. MUST run AFTER
+      // renderInto (re-anchor needs the new nodes) and AFTER the synchronous selection flip up top (so
+      // a switch is seen as a path change). renderInto only runs for the current render (it sits inside
+      // the post-read isCurrent guard), so a superseded open never reaches this call.
+      invalidatePopover(readingPaneEl);
       readerScrollEl?.scrollTo({ top: 0 });
-      await settle(readingPaneEl);
+      await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
       // settle() is async; a newer render may have begun while it ran. Bail so a late
       // settle from a superseded render does not touch the pane.
       if (!renderGuard.isCurrent(gen)) return;
@@ -2253,18 +2476,14 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
   // sentinel (mark_viewed would reject — no file).
   if (!sentinel) await markViewed(path);
 
-  // openPath is now set + the plan rendered: refresh the bar so it flips to VIEWING (this plan is a
-  // pending review's file) or SUMMARY (a review is pending on a different plan) or hides (none
-  // pending). NOT guarded by renderGuard — the bar reflects pending-review state + openPath, not the
-  // rendered pane content. refreshCommentCount (fired un-awaited above) will re-refresh the bar once
-  // the authoritative count lands, so the VIEWING label shows the right comment count.
-  refreshReviewBar();
-
-  // Resume banner (Phase 5): re-evaluate on EVERY open. Orthogonal to refreshReviewBar — this reads
-  // the open plan's `.plan-tree/state.json` and shows a Resume button (resumable phase) / blocked
-  // message / nothing. Fire-and-forget (a read-only IPC); refreshResumeBanner guards against a fast
-  // A→B switch painting the stale plan's banner. NEVER throws (detectResumable wraps everything).
-  void refreshResumeBanner(path);
+  // openPath is now set + the plan rendered: re-derive BOTH affordances (Phase D #9). The bar flips to
+  // VIEWING (this plan is a pending review's file) / SUMMARY (a review pending elsewhere) / hidden, and
+  // the resume banner re-evaluates the open plan's `.plan-tree/state.json` — but only when nothing
+  // higher occupies the bar (precedence prototype > acceptance > review > resume). NOT guarded by
+  // renderGuard — the affordances reflect pending-review state + openPath, not the rendered pane
+  // content. refreshCommentCount (fired un-awaited above) re-refreshes the bar once the count lands.
+  // refreshAffordances is fire-and-forget for the resume read and guards a fast A→B switch internally.
+  refreshAffordances();
 
   // Conversation-history reconstruction (silent populate): replay this plan's PAST conversation into
   // the CONVERSATION tab without switching tabs — the user stays on PLAN; the reconstruction is ready
@@ -2284,10 +2503,10 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
 // shifts don't drift the viewport.
 // EXPORTED for testing the render-generation guard around the ToC rebuild (no behavior change).
 export async function reloadOpenPlan(): Promise<void> {
-  if (!readingPaneEl || !readerScrollEl || openPath === null) return;
+  const path = openPath();
+  if (!readingPaneEl || !readerScrollEl || path === null) return;
   // A reviewed plan is now a REAL file, so a live edit to it reloads normally (Claude revising the
   // plan after a deny updates the file in place — the user sees the revision live).
-  const path = openPath;
   // A synthetic resume sentinel has no file to reload (read_plan_contents would reject). Its pane is
   // a static placeholder painted in openPlan; a live `.plan-tree/state.json` edit re-surfaces via the
   // banner, not a pane reload. Bail before the read so no spurious "reload failed" is logged.
@@ -2302,8 +2521,13 @@ export async function reloadOpenPlan(): Promise<void> {
     // Superseded while reading — drop this stale reload entirely.
     if (!renderGuard.isCurrent(gen)) return;
     renderInto(readingPaneEl, text, dirOf(path));
+    // Bug #7b: a live reload keeps the SAME open plan (openPath unchanged), so this PRESERVES the
+    // user's in-progress draft and re-anchors its range against the freshly-rendered nodes — the app
+    // auto-reloads a plan WHILE it is being built, so hiding the draft on every reload would be a
+    // regression. MUST run after renderInto (re-anchor needs the new DOM). See render/comments.ts.
+    invalidatePopover(readingPaneEl);
     applyDelta(readerScrollEl, anchor);
-    await settle(readingPaneEl);
+    await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
     // settle() is async; bail so a superseded reload's second applyDelta never runs.
     if (!renderGuard.isCurrent(gen)) return;
     applyDelta(readerScrollEl, anchor);
@@ -2349,7 +2573,8 @@ async function refuseUnopenableReview(review: PendingReview): Promise<void> {
   console.error("plan review: the review's plan file could not be opened; refusing", review.reviewId);
   await resolveReview(review.reviewId, "deny", "Could not open the plan for review; aborting.");
   pendingReviews.delete(review.reviewId);
-  refreshReviewBar();
+  // Surface removal can un-suppress the resume banner (#9 precedence) — re-derive both surfaces.
+  refreshAffordances();
   setHookStatus(
     hookStatusEl,
     review.source === "in-process"
@@ -2401,12 +2626,36 @@ function newestPendingReview(): PendingReview | null {
   return newest;
 }
 
-// Resume the NEWEST pending review: open its real plan file through the normal flow (re-selecting its
-// sidebar row), switching the bar to VIEWING mode. No-op if nothing is pending. The hook is untouched.
+// Open a held gate's plan via the SAME flow onAwaitingApproval uses: flip to the Plan tab
+// synchronously (before any await), refresh the list so the plan's row exists, open it (selecting the
+// row + driving viewingGate), then re-assert the tab + bar. Shared by the gate observer and the
+// "Resume newest" path so both re-open a gate identically.
+async function openGatePlanFile(planPath: string): Promise<void> {
+  switchToPlanTab();
+  await refreshList();
+  try {
+    await openPlan(asAbsPath(planPath), stemFromBasename(planPath));
+  } catch (e) {
+    console.error("gate: openPlan of the pointed-at plan failed", e);
+  }
+  switchToPlanTab();
+  refreshReviewBar();
+}
+
+// Phase D #5 — resume the NEWEST pending SURFACE (derived from pendingSurfaces(), so it agrees with the
+// SUMMARY-mode count). A held orchestrator gate is the live, most-immediate surface: re-open its plan
+// via the SAME open path onAwaitingApproval uses (switching the bar back to VIEWING). Otherwise resume
+// the newest pending review's real plan file. No-op if nothing is pending. The hook/gate is untouched.
 function resumeNewestReview(): void {
+  const surfaces = pendingSurfaces();
+  if (surfaces.length === 0) return;
+  const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");
+  if (gateSurface && gateSurface.kind === "orchestrator-gate") {
+    void openGatePlanFile(gateSurface.gate.planPath);
+    return;
+  }
   const newest = newestPendingReview();
-  if (newest === null) return;
-  void openReviewPlanFile(newest);
+  if (newest !== null) void openReviewPlanFile(newest);
 }
 
 // One serialized `plan-changed` handler body. Runs to completion before the next queued
@@ -2416,9 +2665,10 @@ async function handlePlanChanged(changedPath: AbsPath): Promise<void> {
   // Keep the backend's notion of the open plan current (belt-and-suspenders; the open
   // plan is also held read by fiat backend-side). A synthetic resume sentinel has no real file —
   // set_open_plan would reject — so skip it (a sentinel's read-state is not tracked backend-side).
-  if (openPath !== null && !isResumeSentinel(openPath)) {
+  const op = openPath();
+  if (op !== null && !isResumeSentinel(op)) {
     try {
-      await invoke("set_open_plan", { path: openPath });
+      await invoke("set_open_plan", { path: op });
     } catch (e) {
       console.error("set_open_plan failed", e);
     }
@@ -2427,13 +2677,16 @@ async function handlePlanChanged(changedPath: AbsPath): Promise<void> {
   // If the OPEN plan changed, stamp it viewed BEFORE re-listing so list_plans never
   // momentarily bolds it (in addition to the open-path fiat). A sentinel is never a real
   // `changedPath` (no file watched), so this branch never runs for one — guard regardless.
-  if (openPath !== null && changedPath === openPath && !isResumeSentinel(openPath)) {
-    await markViewed(openPath);
+  if (op !== null && changedPath === op && !isResumeSentinel(op)) {
+    await markViewed(op);
   }
 
   await refreshList();
 
-  if (openPath !== null && changedPath === openPath) {
+  // Re-read openPath AFTER refreshList: a `plan` selection whose file just vanished has collapsed to
+  // `none` (resolveSelection), so there is nothing to reload.
+  const opAfter = openPath();
+  if (opAfter !== null && changedPath === opAfter) {
     await reloadOpenPlan();
   }
 }
@@ -2519,8 +2772,9 @@ window.addEventListener("DOMContentLoaded", () => {
   if (reviewApproveEl?.textContent) REVIEW_APPROVE_DEFAULT_LABEL = reviewApproveEl.textContent;
   hookStatusEl = document.querySelector("#hook-status");
 
-  // Resume banner (Phase 5): resolve its handles + wire the resume button. Orthogonal to the review
-  // bar — both surfaces may show. The button reads `pendingResume` (set by renderResumeBanner) and
+  // Resume banner (Phase 5): resolve its handles + wire the resume button. A separate surface from the
+  // review bar, but the LOWEST affordance (Phase D #9 precedence — refreshAffordances suppresses it
+  // while the bar shows a higher one). The button reads `pendingResume` (set by renderResumeBanner) and
   // drives getOrchestrator().resume(). The toast element is the resume_fallback notice target.
   resumeBannerEl = document.querySelector("#resume-banner");
   resumeBannerMsgEl = document.querySelector("#resume-banner-msg");
@@ -2695,7 +2949,7 @@ window.addEventListener("DOMContentLoaded", () => {
       // so the facade must not read "done" while the user owes a verdict).
       conversationHandle?.setIdleWaitingHint(snap.pendingPrototype != null || snap.pendingAcceptance != null);
       // Live-run placeholder (Bug A fix): the FIRST snapshot of each run (keyed by treeId) mints a
-      // placeholder sidebar row + selects it — the run has no real row until its plan file lands.
+      // placeholder sidebar row — the run has no real row until its plan file lands.
       if (
         isOrchestrationActive() &&
         snap.treeId &&
@@ -2703,10 +2957,18 @@ window.addEventListener("DOMContentLoaded", () => {
         runPlaceholder?.treeId !== snap.treeId
       ) {
         runPlaceholder = { treeId: snap.treeId, label: "New plan — drafting…" };
-        placeholderSelected = true;
+        // Make the placeholder the ACTIVE selection ONLY when nothing real is open. It must NOT clobber
+        // a plan/sentinel the user is viewing: the in-process review demo aligns the selection to the
+        // gate plan (__setOpenPathForMock) BEFORE this fires, and that selection drives the bar's
+        // viewingGate — folding placeholder over it would break VIEWING. When a real plan IS open the
+        // row still renders (runPlaceholder above) and goes `.active` via standsInForOpenGatePlan once
+        // the held gate's plan is the open one (the FIX-2 stand-in path).
+        if (selection.k === "none") selection = { k: "placeholder", treeId: snap.treeId };
         applyFilterAndRender();
       }
-      refreshReviewBar();
+      // Re-derive both affordances on every snapshot transition (the resume banner stays suppressed
+      // while the run owns the seam — detectResumable null — so this is a no-op for it until onDone).
+      refreshAffordances();
     },
     onAwaitingApproval: (gate) => {
       // GEN-2 UNIFIED GATE: decomposition (root included) and leaf gates arrive through the SAME
@@ -2719,27 +2981,16 @@ window.addEventListener("DOMContentLoaded", () => {
       // stream frames keep firing onActivity; suppressConversationFlip (keyed on pendingApproval,
       // already set in the snapshot by the time this observer hook fires) keeps them from stealing
       // the tab back. The tab is re-asserted after the awaits as a belt-and-suspenders.
+      // openGatePlanFile flips to the Plan tab SYNCHRONOUSLY (before its first await), refreshes the
+      // sidebar so the just-written plan's [data-path] row exists, opens it (selecting the row /
+      // driving viewingGate), then re-asserts the tab + bar. The placeholder deliberately stays
+      // SELECTED through the refresh: openPlan sets selection=plan(gate) synchronously, so the folded
+      // placeholderSelected goes false and the gate row carries `.active` — or, if its row still lags,
+      // the placeholder keeps standing in via standsInForOpenGatePlan. Shared verbatim with the
+      // "Resume newest" path (resumeNewestReview), so a gate re-opens identically either way.
       void (async () => {
         diag(`gate: onAwaitingApproval enter kind=${gate.kind} planPath=${gate.planPath}`);
-        switchToPlanTab();
-        // Refresh the sidebar FIRST so the just-written plan's [data-path] row exists before
-        // openPlan applies `.active` by data-path (mirrors openReviewPlanFile). The placeholder
-        // deliberately stays SELECTED through this render: clearing it before openPlan sets
-        // openPath left a window where NO row was active (the placeholder ceded, but the gate
-        // row couldn't take over yet).
-        await refreshList();
-        try {
-          await openPlan(asAbsPath(gate.planPath), stemFromBasename(gate.planPath));
-          // The gate plan is now open — ONLY now does the placeholder cede explicit selection:
-          // the real row carries `.active` via openPath, or (row still missing) the placeholder
-          // keeps standing in via the gate-standby derivation in makeSidebarCtx. If openPlan
-          // threw, the placeholder stays selected — it remains the only truthful active row.
-          placeholderSelected = false;
-        } catch (e) {
-          console.error("orchestrator gate: openPlan of the pointed-at plan failed", e);
-        }
-        switchToPlanTab();
-        refreshReviewBar();
+        await openGatePlanFile(gate.planPath);
         diag("gate: onAwaitingApproval exit (Plan tab asserted)");
       })();
     },
@@ -2770,9 +3021,14 @@ window.addEventListener("DOMContentLoaded", () => {
       conversationHandle?.setIdleWaitingHint(false);
       // Run finished: the placeholder's run is over (its real rows exist by now or never will).
       runPlaceholder = null;
-      placeholderSelected = false;
+      // If the placeholder was the active selection, fall back to the empty pane (a real plan/sentinel
+      // the user opened mid-run is left untouched — selection only collapses from the placeholder).
+      if (selection.k === "placeholder") selection = { k: "none" };
       applyFilterAndRender();
-      refreshReviewBar();
+      // The run ended: re-derive BOTH affordances. The open plan may now be RESUMABLE (the run was
+      // suppressing detectResumable via isOrchestrationActive) — refreshAffordances re-evaluates the
+      // resume banner WITHOUT reopening the plan.
+      refreshAffordances();
     },
     onFatal: () => {
       orchSnapshot = null;
@@ -2780,9 +3036,9 @@ window.addEventListener("DOMContentLoaded", () => {
       conversationHandle?.setIdleWaitingHint(false);
       // Fatal teardown: same placeholder clear as onDone.
       runPlaceholder = null;
-      placeholderSelected = false;
+      if (selection.k === "placeholder") selection = { k: "none" };
       applyFilterAndRender();
-      refreshReviewBar();
+      refreshAffordances();
     },
   });
 
@@ -2820,7 +3076,7 @@ window.addEventListener("DOMContentLoaded", () => {
       clearAll: (p) => invoke<CommentRecord[]>("clear_comments", { path: p }),
     };
     // The comment-path reader is simply the open plan's real path.
-    initComments(readingPaneEl, () => openPath, commentsIo);
+    initComments(readingPaneEl, openPath, commentsIo);
     // The facade hands us the MUTATED path + AUTHORITATIVE post-mutation count after an in-session
     // save/clear. Route to applyCommentCount (the Prompt-Feedback badge path, guarded to the open
     // plan), which also re-derives the #review-bar — so if the open plan IS a review, Submit enables
@@ -2840,6 +3096,13 @@ window.addEventListener("DOMContentLoaded", () => {
     //   Approve → (in-process reviews only, #review-approve) allow the held plan + begin building.
     //   Resume  → re-open the NEWEST pending review (summary mode → viewing mode).
     reviewSubmitEl?.addEventListener("click", () => {
+      // Bug #10 — EXACTLY-ONCE: a review action (submit OR the sibling approve) is already in flight.
+      // Bail BEFORE any branch runs so a fast double-click — or a cross click after an Approve — cannot
+      // start a second dispatch. This early-return is the invariant; the "submitting" disabled state
+      // (refreshReviewBar) is only the visual half and is not relied upon (a disabled button still
+      // receives a programmatically dispatched click, and the prototype/acceptance/summary submit paths
+      // are not disabled by the derivation at all).
+      if (submitInFlight || approveInFlight) return;
       // GEN-2 UNIFIED GATE: "Request changes" on the orchestrator's held gate — decomposition (root
       // included) OR leaf — routes into the ONE handle method requestChanges(pathKey, feedback). The
       // kind-routing (deny-resumes-the-decomposition-turn vs re-draft-the-leaf-in-place) lives in the
@@ -2848,28 +3111,35 @@ window.addEventListener("DOMContentLoaded", () => {
       // dispatch (they've been consumed into the feedback).
       const gate = viewingGate();
       if (gate) {
-        if (reviewSubmitEl?.disabled || openPath === null) return; // disabled at 0 comments
-        const planPath = openPath;
+        const planPath = openPath();
+        if (reviewSubmitEl?.disabled || planPath === null) return; // disabled at 0 comments
+        submitInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        refreshReviewBar();
         void (async () => {
-          let records: CommentRecord[] = [];
           try {
-            records = await invoke<CommentRecord[]>("get_comments", { path: planPath });
-          } catch (e) {
-            console.error("get_comments failed", e);
+            let records: CommentRecord[] = [];
+            try {
+              records = await invoke<CommentRecord[]>("get_comments", { path: planPath });
+            } catch (e) {
+              console.error("get_comments failed", e);
+            }
+            try {
+              await getOrchestrator().requestChanges(pathKey(gate.path), buildFeedbackPrompt(records));
+              // The held ExitPlanMode was resolved (deny + feedback) — drop the waiting label NOW.
+              notifyPermissionResolved?.(gate.toolUseId);
+            } catch (e) {
+              console.error("orchestrator gate: requestChanges failed", e);
+              return;
+            }
+            // Dispatch succeeded — echo a STRUCTURED, human-readable view of the comments the user
+            // submitted (one line per comment: anchor quote + comment text). NOT the wrapped
+            // buildFeedbackPrompt output (that is system text). Only after the send succeeded.
+            echoUserMessage?.(echoCommentsText(records));
+            if (readingPaneEl) await clearAllComments(readingPaneEl, planPath);
+          } finally {
+            submitInFlight = false;
+            refreshReviewBar();
           }
-          try {
-            await getOrchestrator().requestChanges(pathKey(gate.path), buildFeedbackPrompt(records));
-            // The held ExitPlanMode was resolved (deny + feedback) — drop the waiting label NOW.
-            notifyPermissionResolved?.(gate.toolUseId);
-          } catch (e) {
-            console.error("orchestrator gate: requestChanges failed", e);
-            return;
-          }
-          // Dispatch succeeded — echo a STRUCTURED, human-readable view of the comments the user
-          // submitted (one line per comment: anchor quote + comment text). NOT the wrapped
-          // buildFeedbackPrompt output (that is system text). Only after the send succeeded.
-          echoUserMessage?.(echoCommentsText(records));
-          if (readingPaneEl) await clearAllComments(readingPaneEl, planPath);
         })();
         return;
       }
@@ -2881,18 +3151,24 @@ window.addEventListener("DOMContentLoaded", () => {
       if (protoGate) {
         const feedback = prototypeFeedbackEl?.value.trim() ?? "";
         if (reviewSubmitEl?.disabled || feedback === "") return;
+        submitInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        refreshReviewBar();
         void (async () => {
           try {
-            await getOrchestrator().refinePrototype(feedback);
-          } catch (e) {
-            console.error("prototype gate: refinePrototype failed", e);
-            return;
+            try {
+              await getOrchestrator().refinePrototype(feedback);
+            } catch (e) {
+              console.error("prototype gate: refinePrototype failed", e);
+              return;
+            }
+            // Dispatch succeeded — echo the user's verbatim feedback as a bubble, THEN clear the
+            // textarea. (On the failure path above we returned without echoing or clearing.)
+            echoUserMessage?.(feedback);
+            if (prototypeFeedbackEl) prototypeFeedbackEl.value = "";
+          } finally {
+            submitInFlight = false;
+            refreshReviewBar();
           }
-          // Dispatch succeeded — echo the user's verbatim feedback as a bubble, THEN clear the
-          // textarea. (On the failure path above we returned without echoing or clearing.)
-          echoUserMessage?.(feedback);
-          if (prototypeFeedbackEl) prototypeFeedbackEl.value = "";
-          refreshReviewBar();
         })();
         return;
       }
@@ -2904,41 +3180,54 @@ window.addEventListener("DOMContentLoaded", () => {
       if (acceptGate) {
         const reason = prototypeFeedbackEl?.value.trim() ?? "";
         if (reviewSubmitEl?.disabled || reason === "") return;
+        submitInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        refreshReviewBar();
         void (async () => {
           try {
-            await getOrchestrator().divergeAcceptance(reason);
-          } catch (e) {
-            console.error("acceptance gate: divergeAcceptance failed", e);
-            return;
+            try {
+              await getOrchestrator().divergeAcceptance(reason);
+            } catch (e) {
+              console.error("acceptance gate: divergeAcceptance failed", e);
+              return;
+            }
+            echoUserMessage?.(`Accepted divergence from the baseline: ${reason}`);
+            if (prototypeFeedbackEl) prototypeFeedbackEl.value = "";
+            switchToConversationTab();
+          } finally {
+            submitInFlight = false;
+            refreshReviewBar();
           }
-          echoUserMessage?.(`Accepted divergence from the baseline: ${reason}`);
-          if (prototypeFeedbackEl) prototypeFeedbackEl.value = "";
-          switchToConversationTab();
-          refreshReviewBar();
         })();
         return;
       }
       const reviewId = currentReviewId();
-      if (reviewSubmitEl?.disabled || reviewId === null || openPath === null) return; // disabled at 0 comments
+      const planPath = openPath();
+      if (reviewSubmitEl?.disabled || reviewId === null || planPath === null) return; // disabled at 0 comments
       // Assemble the reason from the OPEN plan's persisted comments (the same gathering the overlay
       // Copy uses), then deny. ORDER MATTERS: build the reason from the comments FIRST, send the deny,
       // and ONLY on success CLEAR the comments (they've been consumed into the feedback). The plan
       // stays open + selected; clearing wipes its persisted comments + in-pane highlights.
-      const planPath = openPath;
+      submitInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+      refreshReviewBar();
       void (async () => {
-        let records: CommentRecord[] = [];
         try {
-          records = await invoke<CommentRecord[]>("get_comments", { path: planPath });
-        } catch (e) {
-          console.error("get_comments failed", e);
-        }
-        const sent = await resolveReview(reviewId, "deny", buildFeedbackPrompt(records));
-        // Clear the submitted plan's comments only AFTER the deny landed (the feedback carried them).
-        // facade clearAllComments removes highlights for planPath, clears the backend (clear_comments),
-        // and fires onCommentCountChanged → the count + review bar refresh to zero. planPath is still
-        // the open plan (we just submitted it), so its highlights visibly disappear.
-        if (sent && readingPaneEl) {
-          await clearAllComments(readingPaneEl, planPath);
+          let records: CommentRecord[] = [];
+          try {
+            records = await invoke<CommentRecord[]>("get_comments", { path: planPath });
+          } catch (e) {
+            console.error("get_comments failed", e);
+          }
+          const sent = await resolveReview(reviewId, "deny", buildFeedbackPrompt(records));
+          // Clear the submitted plan's comments only AFTER the deny landed (the feedback carried them).
+          // facade clearAllComments removes highlights for planPath, clears the backend (clear_comments),
+          // and fires onCommentCountChanged → the count + review bar refresh to zero. planPath is still
+          // the open plan (we just submitted it), so its highlights visibly disappear.
+          if (sent && readingPaneEl) {
+            await clearAllComments(readingPaneEl, planPath);
+          }
+        } finally {
+          submitInFlight = false;
+          refreshReviewBar();
         }
       })();
     });
@@ -2949,12 +3238,18 @@ window.addEventListener("DOMContentLoaded", () => {
     // SOLE path that reaches resolve_tool_permission(allow). resolveReview (in-process allow) round-
     // trips the review's toolUseId, sets the session to acceptEdits, and flips to the Conversation tab.
     reviewApproveEl?.addEventListener("click", () => {
+      // Bug #10 (sibling) — EXACTLY-ONCE: a review action (the sibling submit OR a prior approve) is
+      // already in flight. Bail BEFORE any branch runs so a fast double-click on Approve — or a cross
+      // click after Submit — cannot start a second dispatch. Mirrors the submit handler's guard;
+      // approve is correctness-only (no visual change), so the flag is NOT fed into the bar derivation.
+      if (submitInFlight || approveInFlight) return;
       // GEN-2 UNIFIED GATE: ONE Approve button, ONE handle method — approve(pathKey(gate.path)). The
       // dangerous routing (a decomposition approval arms the resuming hold + interrupts; a leaf
       // approval resolves + arms exec and never interrupts) lives in the orchestrator's exhaustive
       // gate.kind switch, NOT here. Flip to the Conversation tab so the next turn streams in place.
       const gate = viewingGate();
       if (gate) {
+        approveInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         void (async () => {
           try {
             await getOrchestrator().approve(pathKey(gate.path));
@@ -2964,6 +3259,8 @@ window.addEventListener("DOMContentLoaded", () => {
             switchToConversationTab();
           } catch (e) {
             console.error("orchestrator gate: approve failed", e);
+          } finally {
+            approveInFlight = false;
           }
         })();
         return;
@@ -2985,6 +3282,7 @@ window.addEventListener("DOMContentLoaded", () => {
         // refined — it is not yet the final artifact — so the floor classification does not apply
         // there; the user re-checks it on the round they actually approve as-is.
         const asWorkingReference = prototypeWorkingRefEl?.checked === true;
+        approveInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         void (async () => {
           try {
             if (feedback !== "") {
@@ -3003,6 +3301,8 @@ window.addEventListener("DOMContentLoaded", () => {
             switchToConversationTab();
           } catch (e) {
             console.error("prototype gate: apply-and-approve failed", e);
+          } finally {
+            approveInFlight = false;
           }
         })();
         return;
@@ -3013,19 +3313,25 @@ window.addEventListener("DOMContentLoaded", () => {
       // explicit action — no held tool to clear.
       const acceptGate = activeAcceptanceGate();
       if (acceptGate) {
+        approveInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         void (async () => {
           try {
             await getOrchestrator().approveAcceptance();
             switchToConversationTab();
           } catch (e) {
             console.error("acceptance gate: approve failed", e);
+          } finally {
+            approveInFlight = false;
           }
         })();
         return;
       }
       const reviewId = currentReviewId();
       if (reviewId === null) return;
-      void resolveReview(reviewId, "allow", "");
+      approveInFlight = true; // Bug #10: lock BEFORE the first await; reset on settle (every exit).
+      void resolveReview(reviewId, "allow", "").finally(() => {
+        approveInFlight = false;
+      });
     });
 
     // ---- #prototype-feedback / #prototype-open (PROTOTYPE mode only — Phase 4d) ---------------
@@ -3121,8 +3427,9 @@ window.addEventListener("DOMContentLoaded", () => {
           return;
         }
         disarm();
-        if (readingPaneEl && openPath !== null) {
-          void clearAllComments(readingPaneEl, openPath);
+        const op = openPath();
+        if (readingPaneEl && op !== null) {
+          void clearAllComments(readingPaneEl, op);
         }
       });
     }
@@ -3204,11 +3511,13 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   // A pending request was cancelled (hook gave up / timed out / removed its request). Drop it from
-  // pendingReviews. The open plan stays open — only the bar changes (drops to summary/hidden if this
-  // was the reviewed plan).
+  // pendingReviews. The open plan stays open. Removing this surface can un-suppress the resume banner
+  // (#9 precedence: a pending review outranks resume), so re-derive BOTH surfaces — without this, an
+  // out-of-band cancel of the LAST suppressing review would clear the bar but leave a resumable open
+  // plan's Resume button stuck hidden until re-open.
   function handleReviewCancelled(payload: ReviewCancelled): void {
     pendingReviews.delete(payload.review_id);
-    refreshReviewBar();
+    refreshAffordances();
   }
 
   void listen<ReviewRequested>("plan-review-requested", (event) => {
@@ -3382,7 +3691,9 @@ window.addEventListener("DOMContentLoaded", () => {
       )
     ) {
       runPlaceholder = null;
-      placeholderSelected = false;
+      // Drop the folded placeholder selection too (only if it WAS the placeholder — never clobber a
+      // real plan/sentinel the user opened mid-run).
+      if (selection.k === "placeholder") selection = { k: "none" };
       applyFilterAndRender();
     }
   });
@@ -3409,12 +3720,13 @@ window.addEventListener("DOMContentLoaded", () => {
     // Defense-in-depth: onDone/onFatal null orchSnapshot, but a user full-stop may not reach
     // either (cancel_agent_run tears the seam down out-of-band). A stale snapshot would keep a
     // dead gate driving the bar / the flip suppression / the agent-exit treeId comparison, so
-    // drop it here too and re-derive the bar.
+    // drop it here too and re-derive the affordances (a full-stop is a terminal transition: the open
+    // plan may now be resumable, so refreshAffordances re-evaluates the resume banner too).
     orchSnapshot = null;
     // Same defense for the idle-waiting hint: a full-stop kills any pending prototype gate, so the
     // facade must not keep showing "Waiting for your input…" against a dead run.
     conversationHandle?.setIdleWaitingHint(false);
-    refreshReviewBar();
+    refreshAffordances();
   });
 
   // ---- Phase 6 — launch recovery ----

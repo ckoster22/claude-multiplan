@@ -151,6 +151,127 @@ describe("ConversationModel — tool correlation", () => {
   });
 });
 
+describe("ConversationModel — a tool still running at turn end is interrupted, not running", () => {
+  it("a tool_use with NO matching result, then a result frame, derives 'interrupted' (not 'running')", () => {
+    // Bug #3: a tool_use whose tool_result never lands before the turn completes would otherwise
+    // stay "running" forever (its UI row pulses indefinitely). At turn-complete it must demote.
+    const m = new ConversationModel();
+    m.appendStream(toolUse(1, "t1", "Bash"));
+    // The turn completes WITHOUT a matching tool_result for t1.
+    m.appendStream(result(2));
+    const tool = m.derive().nodes.find((n) => n.type === "tool");
+    // FALSIFY: remove the turn-end demotion in derive() → the tool stays "running" → RED.
+    expect(tool!.type === "tool" && tool!.status).toBe("interrupted");
+  });
+
+  it("a tool_use with NO matching result, then an exit frame, also derives 'interrupted'", () => {
+    // The session exiting is just as much a turn-end signal as `result` — the same demotion applies.
+    const m = new ConversationModel();
+    m.appendStream(toolUse(1, "t1", "Read"));
+    m.appendExit({ code: 0 }, 2);
+    const tool = m.derive().nodes.find((n) => n.type === "tool");
+    expect(tool!.type === "tool" && tool!.status).toBe("interrupted");
+  });
+
+  it("a correlated (done) tool is NOT demoted at turn end (only running tools are touched)", () => {
+    // Guard against over-broad demotion: a tool that received its result keeps its terminal status.
+    const m = new ConversationModel();
+    m.appendStream(toolUse(1, "t1", "Read"));
+    m.appendStream(toolResult(2, "t1", "ok"));
+    m.appendStream(result(3));
+    const tool = m.derive().nodes.find((n) => n.type === "tool");
+    expect(tool!.type === "tool" && tool!.status).toBe("done");
+  });
+
+  // ---- MULTI-TURN: the model is session-scoped (persists across the orchestrator's many sequential
+  // sendMessage turns; reset() has no non-test callers). A `result` from turn 1 sets `complete` and it
+  // never resets, so an UNSCOPED demotion would wrongly flip a turn-2 tool that is still legitimately
+  // running. The demotion MUST be scoped to tools that precede the LATEST terminal frame (by seq).
+  it("MULTI-TURN: a turn-2 tool still running (after turn-1's result) stays 'running', NOT interrupted", () => {
+    const m = new ConversationModel();
+    // Turn 1: a tool that completes, then the turn's result.
+    m.appendStream(toolUse(1, "t1", "Read"));
+    m.appendStream(toolResult(2, "t1", "ok"));
+    m.appendStream(result(3));
+    // Turn 2: a fresh tool is mid-flight — NO result yet (this is the orchestrator's normal mode).
+    m.appendStream(toolUse(4, "t2", "Bash"));
+    const t2 = m.derive().nodes.find((n) => n.type === "tool" && n.id === "t2");
+    // FALSIFY: an unscoped demotion (complete is still true from turn 1) flips t2 → "interrupted" → RED.
+    expect(t2!.type === "tool" && t2!.status).toBe("running");
+  });
+
+  it("MULTI-TURN: a turn-1 tool abandoned BEFORE turn-1's result IS interrupted (genuine abandonment)", () => {
+    const m = new ConversationModel();
+    // Turn 1: t1 never gets its result; the turn's result lands AFTER it (a later terminal frame exists).
+    m.appendStream(toolUse(1, "t1", "Bash"));
+    m.appendStream(result(2));
+    // Turn 2: a fresh tool that is legitimately running (no later terminal frame).
+    m.appendStream(toolUse(3, "t2", "Read"));
+    const nodes = m.derive().nodes;
+    const t1 = nodes.find((n) => n.type === "tool" && n.id === "t1");
+    const t2 = nodes.find((n) => n.type === "tool" && n.id === "t2");
+    // t1 precedes the turn-1 result → interrupted; t2 follows it with no later terminal → still running.
+    expect(t1!.type === "tool" && t1!.status).toBe("interrupted");
+    expect(t2!.type === "tool" && t2!.status).toBe("running");
+  });
+});
+
+describe("ConversationModel — the turn-end demotion respects the session-resume boundary (segment-scoped)", () => {
+  // The model is NEVER reset across a session resume (quota auto-resume OR manual post-end Send — a
+  // headline feature). A resume spawns a FRESH sidecar whose wire seqCounter RESETS to 0 and which
+  // emits a NEW system_init, while the prior session's synthetic agent-exit was stamped at the
+  // controller's synthSeq base (~1e9). So raw seqs are NOT comparable across the resume: a resumed
+  // tool's low wire seq is below the prior session's terminal seq, which a naive `tool.seq <
+  // lastTerminalSeq` gate wrongly reads as "abandoned". The demotion must be scoped to the session
+  // SEGMENT (bumped on each non-first system_init) so a PRIOR-segment terminal never demotes a
+  // CURRENT-segment running tool.
+
+  it("CROSS-RESUME (manual end): a tool running after a resume (fresh system_init + reset wire seq) stays 'running'", () => {
+    const m = new ConversationModel();
+    // --- Segment 0 (first session): t1 is abandoned, then the session ends. The agent-exit carries the
+    // controller's synthSeq (~1e9), exactly as index.ts stamps it (appendExit(..., synthSeq++)).
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(toolUse(1, "t1", "Read")); // never receives a tool_result
+    m.appendExit({ code: 0 }, 1_000_000_000); // session end at synthSeq
+    // --- Segment 1 (resume): a fresh sidecar emits a new system_init and RESETS its wire seq to 0.
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(toolUse(1, "t2", "Bash")); // genuinely running in the resumed session
+    const t2 = m.derive().nodes.find((n) => n.type === "tool" && n.id === "t2");
+    // FALSIFY: a raw cross-segment seq compare (t2.seq 1 < the prior exit's 1e9) flips t2 →
+    // "interrupted" → RED. The segment boundary scopes the demotion to the resume.
+    expect(t2!.type === "tool" && t2!.status).toBe("running");
+  });
+
+  it("CROSS-RESUME (manual end): the PRE-resume abandoned tool is STILL 'interrupted' (fix didn't just disable demotion)", () => {
+    const m = new ConversationModel();
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(toolUse(1, "t1", "Read"));
+    m.appendExit({ code: 0 }, 1_000_000_000);
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(toolUse(1, "t2", "Bash"));
+    const t1 = m.derive().nodes.find((n) => n.type === "tool" && n.id === "t1");
+    // t1's segment-0 exit is causally AFTER it → genuinely abandoned → interrupted (this stays green
+    // even pre-fix; it guards that the segment scoping does not over-suppress real abandonment).
+    expect(t1!.type === "tool" && t1!.status).toBe("interrupted");
+  });
+
+  it("CROSS-RESUME (quota / clean prior turn): after a result-completed segment + resume, a new running tool stays 'running'", () => {
+    const m = new ConversationModel();
+    // --- Segment 0: a turn completes cleanly (result). NOTE the result's seq (3) is a SMALL number —
+    // the resumed wire seqs fall below it, so even without the synthSeq exit the naive gate misfires.
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(toolUse(1, "t1", "Read"));
+    m.appendStream(toolResult(2, "t1", "ok"));
+    m.appendStream(result(3));
+    // --- Segment 1 (resume after the quota refreshed / a follow-up Send): fresh system_init, seq reset.
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(toolUse(1, "t2", "Bash")); // running in the resumed segment
+    const t2 = m.derive().nodes.find((n) => n.type === "tool" && n.id === "t2");
+    // FALSIFY: a raw compare (t2.seq 1 < the prior segment's result seq 3) flips t2 → "interrupted" → RED.
+    expect(t2!.type === "tool" && t2!.status).toBe("running");
+  });
+});
+
 describe("ConversationModel — subagent grouping (frozen keys only, NO name)", () => {
   it("nests a tool_use carrying parent_tool_use_id under a group keyed by that parent", () => {
     const m = new ConversationModel();

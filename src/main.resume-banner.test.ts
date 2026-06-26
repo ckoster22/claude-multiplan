@@ -97,6 +97,9 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "list_pending_reviews") return Promise.resolve([]);
     if (cmd === "agent_auth_status") return Promise.resolve({ hasToken: true });
     if (cmd === "hook_status") return Promise.resolve(false);
+    // The in-process review path (handleToolPermissionRequested) materializes the plan via this
+    // command and reviews the returned path; hand back a stable in-process review plan path.
+    if (cmd === "write_agent_plan") return Promise.resolve("/home/u/.claude/plans/inproc-review.md");
     void path;
     return Promise.resolve(undefined);
   }),
@@ -132,7 +135,9 @@ import {
   __setActiveOrchestratorForTest,
   __resetOrchestratorForTest,
   type OrchestratorHandle,
+  type OrchestratorObserver,
 } from "./conversation/orchestrator";
+import type { PlanTreeSnapshot2 } from "./conversation/orchestrator";
 
 // ---- ledger fixtures (mirror resume-rehydrate.test.ts constructors) ---------------------------
 const nnOf = (n: number) => parseNn(n);
@@ -341,6 +346,8 @@ function makeStubHandle(resumeReturn: boolean | (() => Promise<boolean>) = true)
     teardown: vi.fn(noop),
     orchestrationActive: vi.fn(() => false),
     resuming: vi.fn(() => false),
+    quotaPaused: vi.fn(() => false),
+    notifyAgentExit: vi.fn(noop),
     dispatch: vi.fn(noop),
   } as unknown as OrchestratorHandle;
   return { handle, resume };
@@ -1178,5 +1185,215 @@ describe("Phase 4b — synthetic resume sentinel rows", () => {
       document.querySelector<HTMLElement>("#reading-pane .empty-state"),
       "pane must NOT reset while the placeholder stands in",
     ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Phase D #9 — the Affordance model: ONE refreshAffordances() re-derives BOTH surfaces on every run
+// transition. A plan open DURING an active run shows NO resume banner (detectResumable yields nothing
+// while an orchestration owns the seam). When the run ENDS (onDone), refreshAffordances re-evaluates
+// the STILL-open plan's resumability and the #resume-plan-btn appears — WITHOUT reopening the plan.
+// ---------------------------------------------------------------------------------------------
+describe("Phase D #9 — resume banner re-derives when the run ends (refreshAffordances on onDone)", () => {
+  beforeEach(() => {
+    H.invokeCalls = [];
+    H.listeners = {};
+    H.rows = [];
+    H.stateJson = null;
+    H.artifactPresent = true;
+    H.stateReadError = false;
+    __resetReviewStateForTest();
+    __resetOrchestratorForTest();
+    __setActiveOrchestratorForTest(null);
+    document.body.innerHTML = "";
+  });
+
+  it("a plan open during an active run shows NO resume banner; onDone makes #resume-plan-btn appear without reopening", async () => {
+    // P is a resumable tree (leaf gate, artifact present), listed.
+    H.stateJson = ledgerJson(
+      leafNode(1, "awaiting-approval", { planPath: "/home/u/.claude/plans/01.md" }),
+      TREE,
+    );
+    H.artifactPresent = true;
+    H.rows = [planRow(PLAN, "p", TREE, CWD)];
+
+    // A stub handle whose subscribe CAPTURES every subscriber (main.ts's gate controller AND the
+    // conversation facade) so the test can fire onDone on the one(s) that define it. The module-level
+    // active-orchestrator flag (isOrchestrationActive) is driven separately.
+    const observers: OrchestratorObserver[] = [];
+    const handle = makeStubHandle().handle;
+    (handle as { subscribe: unknown }).subscribe = vi.fn((obs: OrchestratorObserver) => {
+      observers.push(obs);
+      return () => {};
+    });
+    __setOrchestratorForTest(handle);
+    __setActiveOrchestratorForTest(handle); // a run is LIVE → isOrchestrationActive() === true
+    bootDom();
+    await flush();
+
+    // Open P WHILE the run is active → detectResumable short-circuits → NO resume banner.
+    document.querySelector<HTMLElement>(`[data-path="${PLAN}"]`)!.click();
+    await flush();
+    const btn = document.querySelector<HTMLButtonElement>("#resume-plan-btn")!;
+    expect(btn.classList.contains("hidden"), "no resume banner while the run is active").toBe(true);
+    // "Reopened" is signalled by a fresh set_open_plan (openPlan calls it; detectResumable, which only
+    // re-EVALUATES the banner, never does). Count it now so we can prove onDone did not reopen P.
+    const setOpenDuringRun = H.invokeCalls.filter((c) => c.cmd === "set_open_plan").length;
+
+    // The run ENDS: the orchestration deregisters (isOrchestrationActive → false) and onDone fires.
+    // refreshAffordances re-derives the resume banner for the STILL-open P (now resumable).
+    __setActiveOrchestratorForTest(null);
+    // Fire onDone on main.ts's GATE-CONTROLLER observer (identified by onAwaitingApproval) — that is
+    // the one whose onDone calls refreshAffordances. (The conversation facade subscribes its own
+    // observer too; firing its onDone is unrelated noise.)
+    const gateObserver = observers.find((o) => typeof o.onAwaitingApproval === "function");
+    expect(gateObserver, "main.ts subscribed the gate-controller observer").toBeDefined();
+    gateObserver!.onDone!({} as PlanTreeSnapshot2);
+    await flush();
+
+    // The resume button NOW appears — and P was NOT reopened (no additional set_open_plan: the banner
+    // was re-evaluated in place, the reading pane untouched).
+    expect(btn.classList.contains("hidden"), "resume button appears once the run ends").toBe(false);
+    const setOpenAfterDone = H.invokeCalls.filter((c) => c.cmd === "set_open_plan").length;
+    expect(setOpenAfterDone, "the plan was re-evaluated, NOT reopened").toBe(setOpenDuringRun);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Phase D #9 FIX 3 — removing a SUPPRESSING review surface re-derives the (now-unsuppressed) banner.
+// The #9 precedence suppresses the resume banner while the review bar shows a pending review. When the
+// LAST such review is removed out-of-band (plan-review-cancelled → handleReviewCancelled), the surface
+// removal must re-derive BOTH affordances — else a resumable open plan's Resume button stays stuck
+// hidden until re-open. The fix switched handleReviewCancelled (+ resolveReview / refuseUnopenableReview)
+// from refreshReviewBar() to refreshAffordances().
+// ---------------------------------------------------------------------------------------------
+describe("Phase D #9 FIX 3 — cancelling the last pending review re-derives the suppressed resume banner", () => {
+  beforeEach(() => {
+    H.invokeCalls = [];
+    H.listeners = {};
+    H.rows = [];
+    H.stateJson = null;
+    H.artifactPresent = true;
+    H.stateReadError = false;
+    __resetReviewStateForTest();
+    __resetOrchestratorForTest();
+    __setActiveOrchestratorForTest(null); // NOT orchestrating — detectResumable won't short-circuit
+    document.body.innerHTML = "";
+  });
+
+  it("a resumable open plan with one pending external review → banner suppressed; cancelling the review reveals #resume-plan-btn without reopening", async () => {
+    const REVIEW_PLAN = "/home/u/.claude/plans/review-r.md";
+    // P is resumable (leaf gate, artifact present) and listed; the review plan is separate/unlisted.
+    H.stateJson = ledgerJson(
+      leafNode(1, "awaiting-approval", { planPath: "/home/u/.claude/plans/01.md" }),
+      TREE,
+    );
+    H.artifactPresent = true;
+    H.rows = [planRow(PLAN, "p", TREE, CWD)];
+    __setOrchestratorForTest(makeStubHandle().handle);
+    bootDom();
+    await flush();
+
+    // An external review arrives for a DIFFERENT plan and yanks the pane to it (VIEWING).
+    const reqHandlers = H.listeners["plan-review-requested"] ?? [];
+    expect(reqHandlers.length, "plan-review-requested listener registered").toBeGreaterThan(0);
+    for (const h of reqHandlers)
+      h({ payload: { review_id: "rev-R", plan_file_path: REVIEW_PLAN, plan_text: "# r\n" } });
+    await flush();
+
+    // Browse to the resumable plan P: SUMMARY mode (a review pending elsewhere) → the #9 precedence
+    // SUPPRESSES the resume banner even though P is resumable.
+    document.querySelector<HTMLElement>(`[data-path="${PLAN}"]`)!.click();
+    await flush();
+    const btn = document.querySelector<HTMLButtonElement>("#resume-plan-btn")!;
+    expect(btn.classList.contains("hidden"), "resume banner suppressed while a review is pending").toBe(true);
+    const reviewBarHidden = document.querySelector<HTMLElement>("#review-bar")!.classList.contains("hidden");
+    expect(reviewBarHidden, "the review bar IS showing (SUMMARY) — it is what suppresses resume").toBe(false);
+    const setOpenBeforeCancel = H.invokeCalls.filter((c) => c.cmd === "set_open_plan").length;
+
+    // The review is cancelled out-of-band → handleReviewCancelled → refreshAffordances re-derives the
+    // now-unsuppressed banner for the still-open P.
+    const cancelHandlers = H.listeners["plan-review-cancelled"] ?? [];
+    expect(cancelHandlers.length, "plan-review-cancelled listener registered").toBeGreaterThan(0);
+    for (const h of cancelHandlers) h({ payload: { review_id: "rev-R" } });
+    await flush();
+
+    // Resume button REAPPEARS — and P was NOT reopened (no fresh set_open_plan).
+    expect(btn.classList.contains("hidden"), "resume button reappears after the last review is cancelled").toBe(false);
+    const setOpenAfterCancel = H.invokeCalls.filter((c) => c.cmd === "set_open_plan").length;
+    expect(setOpenAfterCancel, "P was re-evaluated in place, NOT reopened").toBe(setOpenBeforeCancel);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Phase D #9 FIX 4 — purgeInprocReviews must re-derive the (un-suppressed) banner too. The agent-exit
+// and agent-error-fatal callers rely on purge's OWN refresh (unlike #conversation-cancel, they don't
+// call refreshAffordances themselves). When purge removes the LAST in-process review, a resumable open
+// plan's Resume affordance must reappear. Fix: purgeInprocReviews calls refreshAffordances (not just
+// refreshReviewBar).
+// ---------------------------------------------------------------------------------------------
+describe("Phase D #9 FIX 4 — purging the last in-process review (agent-exit) re-derives the suppressed banner", () => {
+  beforeEach(() => {
+    H.invokeCalls = [];
+    H.listeners = {};
+    H.rows = [];
+    H.stateJson = null;
+    H.artifactPresent = true;
+    H.stateReadError = false;
+    __resetReviewStateForTest();
+    __resetOrchestratorForTest();
+    __setActiveOrchestratorForTest(null); // a BARE session (no orchestration) — the in-process review
+    document.body.innerHTML = ""; //          path mints the review, and detectResumable won't short-circuit
+  });
+
+  it("in-process review held + a resumable plan P open → banner suppressed; agent-exit purge reveals #resume-plan-btn without reopening P", async () => {
+    // P is resumable (leaf gate, artifact present) and listed.
+    H.stateJson = ledgerJson(
+      leafNode(1, "awaiting-approval", { planPath: "/home/u/.claude/plans/01.md" }),
+      TREE,
+    );
+    H.artifactPresent = true;
+    H.rows = [planRow(PLAN, "p", TREE, CWD)];
+    __setOrchestratorForTest(makeStubHandle().handle);
+    bootDom();
+    await flush();
+
+    // A bare-session ExitPlanMode reaches the canUseTool seam → handleToolPermissionRequested mints an
+    // IN-PROCESS pending review (source "in-process") + opens its materialized plan (VIEWING).
+    const permHandlers = H.listeners["tool-permission-requested"] ?? [];
+    expect(permHandlers.length, "tool-permission-requested listener registered").toBeGreaterThan(0);
+    for (const h of permHandlers)
+      h({
+        payload: {
+          seq: 1,
+          kind: "tool_permission_requested",
+          id: "tu-1",
+          tool: "ExitPlanMode",
+          input: { plan: "# in-process plan\n" },
+          agent_id: null,
+        },
+      });
+    await flush();
+
+    // Browse to the resumable plan P → SUMMARY (the in-process review is pending) → banner SUPPRESSED.
+    document.querySelector<HTMLElement>(`[data-path="${PLAN}"]`)!.click();
+    await flush();
+    const btn = document.querySelector<HTMLButtonElement>("#resume-plan-btn")!;
+    expect(btn.classList.contains("hidden"), "resume banner suppressed while the in-process review is held").toBe(true);
+    expect(document.querySelector<HTMLElement>("#review-bar")!.classList.contains("hidden")).toBe(false);
+    const setOpenBeforeExit = H.invokeCalls.filter((c) => c.cmd === "set_open_plan").length;
+
+    // The bare session ends: agent-exit → purgeInprocReviews removes the LAST in-process review. Its
+    // OWN refresh must re-derive the now-unsuppressed banner for the still-open P (the #conversation-
+    // cancel sibling is NOT involved on this path).
+    const exitHandlers = H.listeners["agent-exit"] ?? [];
+    expect(exitHandlers.length, "agent-exit listener registered").toBeGreaterThan(0);
+    for (const h of exitHandlers) h({ payload: { code: 0 } });
+    await flush();
+
+    // Resume button REAPPEARS — and P was NOT reopened (no fresh set_open_plan).
+    expect(btn.classList.contains("hidden"), "resume button reappears after the purge re-derives affordances").toBe(false);
+    const setOpenAfterExit = H.invokeCalls.filter((c) => c.cmd === "set_open_plan").length;
+    expect(setOpenAfterExit, "P was re-evaluated in place, NOT reopened").toBe(setOpenBeforeExit);
   });
 });

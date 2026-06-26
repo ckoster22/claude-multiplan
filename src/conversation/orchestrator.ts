@@ -1392,16 +1392,12 @@ export function isOrchestratorResuming(): boolean {
 // Construct an orchestrator. `deps` defaults to the real Tauri-bound deps; tests inject fakes.
 export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): OrchestratorHandle {
   // The current in-memory state (null until start). Every transition replaces it via dispatch().
+  // LIFECYCLE field (NOT a per-run transient — kept outside RunState; reset separately by START).
   let state: PlanTreeState2 | null = null;
-  // The cwd for all .plan-tree/ writes (captured at start).
-  let cwd = "";
-  // Whether this orchestration is active (true between start and terminal).
+  // Whether this orchestration is active (true between start and terminal). LIFECYCLE field.
   let active = false;
-  // Observers + a held interactive permission id (for purge on cancel).
+  // Observers the renderer/main.ts subscribe to (fired by the notify* effects + onSnapshot). LIFECYCLE.
   const observers = new Set<OrchestratorObserver>();
-  // The id of any currently-held interactive permission (ExitPlanMode/AskUserQuestion) so cancel()
-  // can purge it (deny) rather than strand the sidecar's held resolver.
-  let heldPermissionId: string | null = null;
   let torn = false;
 
   // ---- driver-owned sequencer state (NOT part of the frozen reducer/ledger) ------------------
@@ -1447,134 +1443,126 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // recon/sizer/exec/summary boundary. No buffer — resume-turn chatter is dropped by design (it
     // must not leak into the deferred step's capture).
     | { tag: "resuming"; nextPath: NodePath };
-  // The original request (threaded into draft prompts) and a per-node mandate map.
-  let request = "";
-  // The current armed step + its own buffer (idle = no armed step). See the sequencer header above.
-  let awaiting: Awaiting = { tag: "idle" };
-  // pathKey -> the completed node's summary text (threaded forward into later sibling prompts).
-  // Keyed by the branded PathKey so a bare string cannot address it.
-  const summaries = new Map<PathKey, string>();
-  // pathKey -> the node's structured Mandate, rebuilt from the decomposition plan body at every
-  // decomposition ExitPlanMode parse (so re-drafts replace stale sections). Empty in the degenerate
-  // single path (no decomposition plan exists) — mandateFor falls back to a title-only Mandate from
-  // the tree.
-  let mandates = new Map<PathKey, Mandate>();
-  // toolUseId -> the AskUserQuestion's questions (retained for the CLARIFY_ANSWERED updatedInput
-  // reshape; the reducer nulls pendingClarify before the effect runs, so state can't supply them).
-  const clarifyQuestions = new Map<string, AskUserQuestionItem[]>();
-  // The confirmed intent (the intent-clarifier's final message), captured at the intent boundary and
-  // threaded into the planning-decision prompts (recon + decomposition-draft). null when no/empty
-  // intent was confirmed — in which case those prompts are byte-identical to their pre-feature form.
-  let confirmedIntent: string | null = null;
-  // VISUAL-PROTOTYPE driver state (transient, never persisted — same boundary as confirmedIntent):
-  // the prose intent captured alongside a held prototype (composeIntentMd's first argument at
-  // approvePrototype), and the DRIVER-OWNED refinement-round counter. ROUND DISCIPLINE
-  // (documented): prototypeRound counts COMPLETED refine requests — reset to 0 in start(),
-  // incremented ONLY in refinePrototype() (never clarifier-supplied), and the gate is minted with
-  // round = prototypeRound + 1 (1-based "which prototype round produced this gate"). So the first
-  // gate is round 1, the gate after one refine is round 2, and after 3 refines the gate carries
-  // round 4 ≥ 3 REGARDLESS of anything the clarifier outputs — the UI's loop-escape threshold
-  // ("after 3 rounds always offer proceed-as-is") can never be gamed by model output.
-  let pendingIntentText: string | null = null;
-  let prototypeRound = 0;
-  // COMBINED apply-and-approve driver flag (transient, driver-owned — NEVER model/agent-controlled,
-  // same boundary as prototypeRound). When the user types feedback AND clicks approve,
-  // refinePrototype(feedback, { autoApprove: true }) loops the prototype back for one more round
-  // BUT arms this flag so that, when the revised prototype block arrives at the intent-ingestion
-  // branch, the driver auto-resolves the gate forward (PROTOTYPE_READY → PROTOTYPE_APPROVED → recon)
-  // WITHOUT surfacing another review round. Reset to false everywhere prototypeRound is reset.
-  let autoApproveNext = false;
-  // RESUME SUPPORT — the SDK session_id captured off the system_init frame. Held in a plain driver
-  // variable the instant the frame arrives (so the id is never lost even if the dispatch below is
-  // a no-op), in parallel with the ledger's self-persisted sdk_session_id (SESSION_INITIALIZED).
-  let sdkSessionId: string | null = null;
-  // RESUME (Phase 3) — THE resumed-gate flag. When resume() re-presents an approval gate purely from
-  // disk (no live ExitPlanMode is held — the sidecar's held resolver died with the prior process),
-  // the gate's toolUseId is a SYNTHETIC `"resumed:<pathKey>"` sentinel, NOT a live permission id.
-  // At most ONE gate is ever pending (single-session), so a single boolean disambiguates the held
-  // gate's provenance. approve()/requestChanges() read it to take the resumed continuation-prompt
-  // path (send an explicit prompt into the resumed conversation) instead of resolving the dead id.
-  // This is DELIBERATELY a driver-local transient — it is never serialized into the ledger (the
-  // ApprovalGate2 type is owned by Phase 1/2 and the field would otherwise ride clone2/state.json).
-  // Set when resumeActionForPhase reconstructs a gate; cleared the moment that gate resolves.
-  let resumedGate = false;
-  // PHASE 5 — THE single pending adjustment note from the most recent parent review (driver-side
-  // only, NEVER persisted — same boundary as summaries/mandates). Deliberately a single nullable
-  // field, NOT a Map: at most one note can be pending by construction (the review turn sits
-  // between the reviewed child and the next sibling — no second review can run before the note is
-  // consumed). `parentKey` scopes it: only children of THAT parent (adjustNoteFor) ever see it.
-  // LIFECYCLE: set (or nulled, on NONE) at every PARENT_REVIEW_DONE; injected into the next
-  // child's recon AND draft prompts; CLEARED when that child's DRAFTED event (NODE_DRAFTED or a
-  // nested DECOMPOSITION_DRAFTED) is dispatched — i.e. after BOTH prompt injections have been sent.
-  let adjustNote: { parentKey: PathKey; note: string } | null = null;
-  // DERIVED WRITE POLICY tracking: the last permission mode this driver KNOWS the session is in.
-  // The session opens in plan mode (start()); `null` means UNKNOWN — set whenever an ExitPlanMode is
-  // resolved allow (the SDK exits plan mode out-of-band on approval), forcing the next dispatch to
-  // re-assert writePolicyFor2(state.root). Mode is a PURE function of the ledger; this is only the
-  // cache that avoids redundant set_agent_permission_mode calls.
-  let assertedPolicy: WritePolicy | null = "plan";
-  // TURN WATCHDOG (one shared slot — only one turn is ever in flight): the live timer handle armed
-  // alongside every `{tag:"resuming"}` hold AND (PHASE 5, DA P4 follow-up) every `summary` and
-  // `parent-review` turn. If the awaited turn's `result` never arrives, a silently-stuck hold
-  // would hang the run with no terminal signal — so the watchdog drives it to a LOUD terminal
-  // FATAL instead (through the same serialized-queue + notifyFatal path enqueueIngest uses for a
-  // throwing frame). Cleared when a result consumes the armed variant, when a new arm replaces it,
-  // and at every terminal (Stop / FATAL / done via markTerminal).
-  let turnWatchdog: unknown = null;
-  // PHASE 4 — QUOTA AUTO-RESUME in-memory state (transient, NEVER persisted — same boundary as the
-  // sequencer/watchdog; only the auto-resume BUDGET rides the ledger). Non-null between a
-  // quota_exceeded pause and its resume/cancel. Captures:
-  //   - resetAt: epoch-ms the quota refreshes (the timer target + the wall-clock re-check anchor);
-  //   - remaining: the auto-resume budget left (carried from notifyQuotaPaused — always > 0 here;
-  //     an exhausted pause records `exhausted: true` and schedules no timer);
-  //   - source: the detection carrier (for the observer/banner);
-  //   - awaitingVariant: the in-flight turn captured AT PAUSE TIME, re-armed verbatim on resume so
-  //     the resumed turn advances the SAME sequencer step the wall interrupted;
-  //   - exhausted: budget spent — no timer, Cancel-only surface;
-  //   - priorExited: has the paused sidecar session's `agent-exit` been observed yet? The resume
-  //     cannot re-`startSession` until the prior child is reaped (the Rust one-session guard). Set
-  //     by notifyAgentExit(); fireResume defers (re-checks on exit) when false.
-  //   - backstopAttempts: how many times fireResume has armed the bounded prior-exit backstop timer
-  //     while deferring on !priorExited. notifyAgentExit() is the PRIMARY path that proceeds the
-  //     deferred resume; this counter bounds the FALLBACK (a lost agent-exit must not hang the run
-  //     forever) — after QUOTA_PRIOR_EXIT_BACKSTOP_MAX arms the resume proceeds anyway (the Rust
-  //     one-session guard will reject + surface if the child truly is still alive). Reset whenever a
-  //     fresh pause is armed.
-  let quotaPause:
-    | {
-        resetAt: number;
-        remaining: number;
-        source: string;
-        awaitingVariant: Awaiting;
-        exhausted: boolean;
-        priorExited: boolean;
-        backstopAttempts: number;
-      }
-    | null = null;
-  // DA-I5 (integration fix) — SYNCHRONOUS quota-pause-pending flag. The QUOTA_PAUSED dispatch that
-  // installs `quotaPause` runs in a LATER microtask than the agent-stream listener that sees the
-  // quota_exceeded frame (it goes through enqueueIngest), so `quotaPause` is NOT yet set on a
-  // same-tick agent-stream(quota_exceeded) + agent-exit delivery. BOTH agent-exit listeners
-  // (index.ts AND main.ts) must classify that exit as a PAUSE, not an end-of-run. index.ts had a
-  // private closure flag; main.ts could not read it. This flag — set synchronously via the handle's
-  // markQuotaPausePending() the instant the frame is seen — makes the SHARED quotaPaused() probe
-  // synchronously correct for both. It is SUBSUMED once `quotaPause` is installed (quotaPaused()
-  // ORs both), and is CLEARED at every place the pause is resolved: QUOTA_RESUMED (fireResume),
-  // cancel()/teardown/markTerminal, and any NON-quota terminal — so it can never linger and
-  // mis-classify a later genuine exit as paused.
-  let quotaPausePending = false;
-  // The live quota resume-timer handle (one slot — at most one pause is armed at a time). Cleared on
-  // resume, cancel, teardown, and every terminal (mirror clearTurnWatchdog) so a paused timer can
-  // never fire into a dead run.
-  let quotaTimer: unknown = null;
+
+  // ---- RunState: EVERY per-run transient in ONE freshly-allocated bundle (#2) ----------------
+  //
+  // The driver holds ONE handle across runs (the live app's singleton). A per-run transient left
+  // populated bleeds run A's context into run B — a stale prior-sibling summary threaded into a
+  // brand-new plan, a stale mandate titling a new node, a stale held-permission id. Bundling ALL of
+  // them here means a fresh run allocates a fresh RunState (freshRunState) and EVERY transient resets
+  // TOGETHER: the cross-run-leak class is unrepresentable by construction (you cannot reset
+  // `summaries` yet forget `mandates`). The run LIFECYCLE fields (state/active/observers/torn) are
+  // deliberately OUT — they are not per-run *data* that bleeds (and `state` is reset by START). The
+  // wake-seam unsubscribe (quotaWakeOff) + the test-only ingestSeen counter also stay out (a managed
+  // resource handle / a per-HANDLE counter). Allocated fresh in start()/resume(); deliberately NOT
+  // nulled at markTerminal — cancel() reads run.heldPermissionId AFTER markTerminal to purge the held
+  // resolver, and the next start()/resume() replaces the bundle wholesale anyway.
+
+  // The in-memory quota pause (transient, never persisted — only the auto-resume BUDGET rides the
+  // ledger). Non-null between a quota_exceeded pause and its resume/cancel. Fields: resetAt = epoch-ms
+  // the quota refreshes (timer target + wall-clock re-check anchor); remaining = auto-resume budget
+  // left (always > 0 when not exhausted); source = detection carrier (observer/banner); awaitingVariant
+  // = the in-flight turn captured AT PAUSE, re-armed verbatim on resume; exhausted = budget spent (no
+  // timer, Cancel-only surface); priorExited = has the paused sidecar's agent-exit been observed (the
+  // respawn precondition — the Rust one-session guard); backstopAttempts = bounded !priorExited defers.
+  interface QuotaPause {
+    resetAt: number;
+    remaining: number;
+    source: string;
+    awaitingVariant: Awaiting;
+    exhausted: boolean;
+    priorExited: boolean;
+    backstopAttempts: number;
+  }
+
+  interface RunState {
+    // The cwd for all .plan-tree/ writes (captured at start) + the original request (threaded into
+    // draft prompts).
+    cwd: string;
+    request: string;
+    // The current armed sequencer step + its own buffer (idle = no armed step). See the Awaiting header.
+    awaiting: Awaiting;
+    // pathKey -> the completed node's summary text (threaded forward into later sibling prompts). Keyed
+    // by the branded PathKey so a bare string cannot address it.
+    summaries: Map<PathKey, string>;
+    // pathKey -> the node's structured Mandate, rebuilt at every decomposition ExitPlanMode parse (so
+    // re-drafts replace stale sections). Empty in the degenerate single path — mandateFor falls back to
+    // a title-only Mandate from the tree.
+    mandates: Map<PathKey, Mandate>;
+    // toolUseId -> the AskUserQuestion's questions (retained for the CLARIFY_ANSWERED updatedInput
+    // reshape; the reducer nulls pendingClarify before the effect runs, so state can't supply them).
+    clarifyQuestions: Map<string, AskUserQuestionItem[]>;
+    // The confirmed intent (the intent-clarifier's final message), threaded into recon + decomposition-
+    // draft. null when no/empty intent was confirmed (those prompts stay byte-identical pre-feature).
+    confirmedIntent: string | null;
+    // VISUAL-PROTOTYPE state: the prose intent captured alongside a held prototype (composeIntentMd's
+    // first arg at approvePrototype), and the DRIVER-OWNED refine-round counter (counts COMPLETED refine
+    // requests; the gate is minted round prototypeRound+1, so the UI loop-escape threshold can't be gamed).
+    pendingIntentText: string | null;
+    prototypeRound: number;
+    // COMBINED apply-and-approve latch (driver-owned, NEVER model-controlled): the revised prototype
+    // block auto-resolves the gate forward instead of surfacing another review round.
+    autoApproveNext: boolean;
+    // The SDK session_id captured off system_init (parallel to the ledger's self-persisted copy) — held
+    // so the id is never lost even if the SESSION_INITIALIZED dispatch is a no-op.
+    sdkSessionId: string | null;
+    // The id of any currently-held interactive permission (ExitPlanMode/AskUserQuestion) so cancel() can
+    // purge it (deny) rather than strand the sidecar's held resolver.
+    heldPermissionId: string | null;
+    // RESUME — the resumed-gate flag: a re-presented gate's toolUseId is a synthetic `resumed:` sentinel,
+    // NOT a live id; approve()/requestChanges() read this to take the resumed continuation-prompt path.
+    resumedGate: boolean;
+    // PHASE 5 — the single pending adjustment note from the most recent parent review (parentKey scopes
+    // it: only children of THAT parent ever see it). At most one can be pending by construction.
+    adjustNote: { parentKey: PathKey; note: string } | null;
+    // DERIVED WRITE POLICY cache: the last permission mode the driver knows the session is in (null =
+    // unknown, forcing a re-assert). Mode is a PURE function of the ledger; this only avoids redundant setMode.
+    assertedPolicy: WritePolicy | null;
+    // TURN WATCHDOG handle (one shared slot — one turn in flight): armed alongside every resuming hold
+    // AND every summary/parent-review/intent turn; a missing result drives a LOUD terminal FATAL.
+    turnWatchdog: unknown;
+    // QUOTA AUTO-RESUME: the in-memory pause, the live resume-timer handle, the synchronous pause-pending
+    // flag (the shared quotaPaused() probe), and the capture-bridge read by the notify* effect handlers.
+    quotaPause: QuotaPause | null;
+    quotaPausePending: boolean;
+    quotaTimer: unknown;
+    pendingQuotaCapture: Awaiting | null;
+  }
+
+  // Allocate a fresh per-run transient bundle. Defaults match the pre-bundle initial values
+  // (assertedPolicy "plan"; start() overrides it to "prototype", resume() to the derived policy).
+  function freshRunState(cwd: string, request: string): RunState {
+    return {
+      cwd,
+      request,
+      awaiting: { tag: "idle" },
+      summaries: new Map(),
+      mandates: new Map(),
+      clarifyQuestions: new Map(),
+      confirmedIntent: null,
+      pendingIntentText: null,
+      prototypeRound: 0,
+      autoApproveNext: false,
+      sdkSessionId: null,
+      heldPermissionId: null,
+      resumedGate: false,
+      adjustNote: null,
+      assertedPolicy: "plan",
+      turnWatchdog: null,
+      quotaPause: null,
+      quotaPausePending: false,
+      quotaTimer: null,
+      pendingQuotaCapture: null,
+    };
+  }
+
+  // The current run's transient bundle. Allocated fresh at construction; REPLACED wholesale in
+  // start()/resume() so a fresh run can never inherit a prior run's transients (#2).
+  let run: RunState = freshRunState("", "");
   // The unsubscribe fn for the wake seam (document.visibilitychange), wired once at start/resume and
-  // torn down with the run. Null when no wake subscription is live.
+  // torn down with the run. Null when no wake subscription is live. NOT a RunState transient — a
+  // managed resource handle (installWakeSeam tears down the prior subscription on re-install).
   let quotaWakeOff: (() => void) | null = null;
-  // BRIDGE: the awaiting variant captured in the quota_exceeded ingest branch, read by the
-  // notifyQuotaPaused/notifyQuotaExhausted effect handlers (which run synchronously inside the
-  // QUOTA_PAUSED dispatch). Set just before that dispatch and cleared just after — never observed
-  // outside that single synchronous window.
-  let pendingQuotaCapture: Awaiting | null = null;
   // TEST-ONLY OBSERVABILITY: how many ingest-impl thunks the queue actually DEQUEUED and INVOKED (each
   // impl bumps this at its very top, BEFORE the terminal guard). Lets the error-isolation test prove a
   // throw in one frame did NOT poison the queue — the next frame's thunk still ran up to the guard —
@@ -1590,7 +1578,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   const priorSummaries = (parentPath: NodePath): string[] => {
     const parentKey = pathKey(parentPath);
     const prefix = parentKey === "" ? "" : `${parentKey}.`;
-    return [...summaries.entries()]
+    return [...run.summaries.entries()]
       .filter(([k]) => k.startsWith(prefix) && !k.slice(prefix.length).includes("."))
       .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
       .map(([, text]) => text);
@@ -1604,16 +1592,16 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // pending AND `path` is a child of the parent that issued it (the parentKey scope guard — a
   // stale note can never leak into another level's prompts). Root prompts never carry one.
   const adjustNoteFor = (path: NodePath): string | null => {
-    if (!adjustNote || path.length === 0) return null;
-    return adjustNote.parentKey === pathKey(parentPathOf(path)) ? adjustNote.note : null;
+    if (!run.adjustNote || path.length === 0) return null;
+    return run.adjustNote.parentKey === pathKey(parentPathOf(path)) ? run.adjustNote.note : null;
   };
 
   // PHASE 5 — the adjust-note CLEAR POINT (see the adjustNote lifecycle note): called when a
   // child's DRAFTED event lands. By then BOTH prompt injections (the child's recon and draft
   // prompts) have been sent, so the note has fully served its one-sibling scope.
   const clearAdjustNoteOnDraft = (path: NodePath): void => {
-    if (adjustNote && path.length > 0 && adjustNote.parentKey === pathKey(parentPathOf(path))) {
-      adjustNote = null;
+    if (run.adjustNote && path.length > 0 && run.adjustNote.parentKey === pathKey(parentPathOf(path))) {
+      run.adjustNote = null;
     }
   };
 
@@ -1622,7 +1610,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // title-only Mandate read from the tree node itself (the degenerate single path, where no
   // decomposition plan exists).
   const mandateFor = (path: NodePath): Mandate => {
-    const parsed = mandates.get(pathKey(path));
+    const parsed = run.mandates.get(pathKey(path));
     if (parsed) return parsed;
     const node = state ? nodeAtPath(state.root, path) : null;
     return {
@@ -1642,7 +1630,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     name: string,
     contents: string,
   ): Promise<PlanTreeFilePath> =>
-    (await deps.writePlanTreeFile(cwd, name, contents)) as PlanTreeFilePath;
+    (await deps.writePlanTreeFile(run.cwd, name, contents)) as PlanTreeFilePath;
 
   // The injected clock (defaults to Date.now): stamps updated_ms at the single persist path.
   const nowFn = deps.now ?? ((): number => Date.now());
@@ -1675,7 +1663,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // Tear down the combined apply-and-approve latch with the session: a flag left set across a
     // terminal could auto-resolve a future run's first gate. (Reset alongside prototypeRound in
     // start()/resume() too; this covers cancel()/FATAL/Stop where those resets don't run.)
-    autoApproveNext = false;
+    run.autoApproveNext = false;
     if (activeOrchestrator === handle) activeOrchestrator = null;
   };
 
@@ -1706,7 +1694,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // IDLE at both call sites (the intent turn ended; the gate was turn-completion-signaled), so the
   // recon prompt opens a fresh turn — no resuming hold, no interrupt.
   const resolveApprove = async (gate: PrototypeGate, asWorkingReference = false): Promise<void> => {
-    const intentContents = composeIntentMd(pendingIntentText ?? "", gate, cwd);
+    const intentContents = composeIntentMd(run.pendingIntentText ?? "", gate, run.cwd);
     // WORKING-REFERENCE FREEZE (Phase 3): when the user marked the prototype a working reference,
     // freeze .plan-tree/prototype/ → .plan-tree/baseline/ BEFORE dispatching, so the on-disk copy
     // exists when the reducer records baseline_ + persists. The freeze is best-effort for the RECON
@@ -1721,8 +1709,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     if (asWorkingReference) {
       try {
         if (deps.ensureBaselineDir && deps.freezeBaseline) {
-          await deps.ensureBaselineDir(cwd);
-          await deps.freezeBaseline(cwd);
+          await deps.ensureBaselineDir(run.cwd);
+          await deps.freezeBaseline(run.cwd);
           froze = true;
           diag("resolveApprove: working reference — froze .plan-tree/prototype/ → .plan-tree/baseline/");
         } else {
@@ -1734,11 +1722,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       }
     }
     await dispatch({ type: "PROTOTYPE_APPROVED", intentContents, asWorkingReference: froze, frozenMs: nowFn() });
-    pendingIntentText = null;
+    run.pendingIntentText = null;
     // Arm BEFORE sending (the result may arrive as this sendMessage resolves — see start()).
-    awaiting = { tag: "recon", path: [], buffer: "" };
+    run.awaiting = { tag: "recon", path: [], buffer: "" };
     diag("resolveApprove: INTENT.md written, armed recon, sending reconPrompt");
-    await deps.sendMessage(reconPrompt(request, confirmedIntent));
+    await deps.sendMessage(reconPrompt(run.request, run.confirmedIntent));
   };
 
   // Execute a single effect against the injected deps. Persist writes the schema-2 ledger to
@@ -1758,11 +1746,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // not an ordering sequence — under the production Date.now() clock, two persists within
         // the same millisecond carry equal stamps (non-decreasing, not strictly increasing).
         state = { ...state, updated_ms: nowFn() };
-        await deps.writePlanTreeFile(cwd, "state.json", JSON.stringify(toLedger2(state)));
+        await deps.writePlanTreeFile(run.cwd, "state.json", JSON.stringify(toLedger2(state)));
         return;
       }
       case "writePlanTreeFile": {
-        await deps.writePlanTreeFile(cwd, eff.name, eff.contents);
+        await deps.writePlanTreeFile(run.cwd, eff.name, eff.contents);
         return;
       }
       case "deletePlanTreeFile": {
@@ -1777,7 +1765,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           return;
         }
         try {
-          await deps.deletePlanTreeFile(cwd, eff.name);
+          await deps.deletePlanTreeFile(run.cwd, eff.name);
         } catch (err) {
           console.error(`delete_plan_tree_file failed (non-fatal): ${eff.name}`, err);
           diag(`deletePlanTreeFile failed (non-fatal): ${eff.name}: ${String(err)}`);
@@ -1787,7 +1775,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       case "resetPlanTreeDir": {
         // START reconciliation: sweep stale prior-run files into .plan-tree/.archive/ BEFORE the
         // genesis persist lands (effect ordering is the reducer's responsibility).
-        await deps.resetPlanTreeDir(cwd);
+        await deps.resetPlanTreeDir(run.cwd);
         return;
       }
       case "resolvePermission": {
@@ -1800,16 +1788,16 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // plan mode on the equivalent continuation), as is the held-id clear. Real ids never carry
         // this prefix, so the NON-resumed path is untouched.
         if (eff.id.startsWith("resumed:")) {
-          if (heldPermissionId === eff.id) heldPermissionId = null;
-          if (eff.allow) assertedPolicy = null;
+          if (run.heldPermissionId === eff.id) run.heldPermissionId = null;
+          if (eff.allow) run.assertedPolicy = null;
           return;
         }
         // CLARIFY_ANSWERED reshape: the reducer can only carry the answers (it nulls pendingClarify
         // before this effect runs). For a known clarify id, rebuild the SDK's expected
         // updatedInput:{questions, answers} from the driver-retained questions + the answers parsed
         // from the reducer's JSON message, and DROP the raw message.
-        if (clarifyQuestions.has(eff.id)) {
-          const questions = clarifyQuestions.get(eff.id)!;
+        if (run.clarifyQuestions.has(eff.id)) {
+          const questions = run.clarifyQuestions.get(eff.id)!;
           let answers: AskUserQuestionAnswers = {};
           if (eff.message) {
             try {
@@ -1824,23 +1812,23 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
             allow: eff.allow,
             updatedInput: { questions, answers },
           });
-          clarifyQuestions.delete(eff.id);
-          if (heldPermissionId === eff.id) heldPermissionId = null;
+          run.clarifyQuestions.delete(eff.id);
+          if (run.heldPermissionId === eff.id) run.heldPermissionId = null;
           return;
         }
         await deps.resolvePermission({ id: eff.id, allow: eff.allow, message: eff.message });
         // The held resolver is now resolved — no longer needs purging on cancel.
-        if (heldPermissionId === eff.id) heldPermissionId = null;
+        if (run.heldPermissionId === eff.id) run.heldPermissionId = null;
         // A non-clarify allow resolution is an ExitPlanMode approval: the SDK exits plan mode
         // out-of-band, so the session mode is now UNKNOWN — the dispatch seam re-asserts the
         // derived policy right after this effect loop.
-        if (eff.allow) assertedPolicy = null;
+        if (eff.allow) run.assertedPolicy = null;
         return;
       }
       case "notifyAwaitingApproval": {
         // Remember the held ExitPlanMode id so cancel() can purge it. The UNIFIED gate: this fires
         // for decomposition gates (root included) AND leaf gates alike.
-        heldPermissionId = eff.gate.toolUseId;
+        run.heldPermissionId = eff.gate.toolUseId;
         for (const o of observers) o.onAwaitingApproval?.(eff.gate);
         return;
       }
@@ -1865,7 +1853,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         const openTarget = eff.gate.openTarget ?? "index.html";
         const augmented: AcceptanceGate = {
           ...eff.gate,
-          cwd,
+          cwd: run.cwd,
           openTarget,
           runCommand: eff.gate.runCommand,
         };
@@ -1875,7 +1863,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         for (const o of observers) o.onAcceptanceReview?.(augmented);
         if (deps.openBaseline && openTarget !== null) {
           try {
-            await deps.openBaseline(cwd, openTarget);
+            await deps.openBaseline(run.cwd, openTarget);
             diag(`notifyAcceptanceReview: opened baseline "${openTarget}"`);
           } catch (err) {
             console.error("open_baseline failed (non-fatal)", err);
@@ -1923,11 +1911,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // capturing the in-flight turn (bridged from the ingest branch via pendingQuotaCapture; idle
         // if absent — defensive), then schedule the wall-clock-aware resume timer. The observer/banner
         // (Phase 5) and notification (Phase 8) consume onQuotaPaused.
-        quotaPause = {
+        run.quotaPause = {
           resetAt: eff.resetAt,
           remaining: eff.remaining,
           source: eff.source,
-          awaitingVariant: pendingQuotaCapture ?? { tag: "idle" },
+          awaitingVariant: run.pendingQuotaCapture ?? { tag: "idle" },
           exhausted: false,
           priorExited: false,
           backstopAttempts: 0,
@@ -1941,11 +1929,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // Install the pause as EXHAUSTED (no timer scheduled — Cancel is the only affordance) so the
         // synchronous quotaPaused() probe still reads true (the session stays "paused", not torn down)
         // and the wall-clock reset time is retained for the banner. Surface via onQuotaExhausted.
-        quotaPause = {
+        run.quotaPause = {
           resetAt: eff.resetAt,
           remaining: 0,
           source: eff.source,
-          awaitingVariant: pendingQuotaCapture ?? { tag: "idle" },
+          awaitingVariant: run.pendingQuotaCapture ?? { tag: "idle" },
           exhausted: true,
           priorExited: false,
           backstopAttempts: 0,
@@ -2008,9 +1996,9 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // poked.
     if (active) {
       const policy = writePolicyFor2(next.root);
-      if (policy !== assertedPolicy) {
+      if (policy !== run.assertedPolicy) {
         await deps.setMode(policy);
-        assertedPolicy = policy;
+        run.assertedPolicy = policy;
       }
     }
     emitSnapshot(toSnapshot2(next));
@@ -2079,9 +2067,9 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     deps.clearTimeout ?? ((h: unknown): void => clearTimeout(h as ReturnType<typeof setTimeout>));
 
   const clearTurnWatchdog = (): void => {
-    if (turnWatchdog !== null) {
-      cancelTimer(turnWatchdog);
-      turnWatchdog = null;
+    if (run.turnWatchdog !== null) {
+      cancelTimer(run.turnWatchdog);
+      run.turnWatchdog = null;
     }
   };
 
@@ -2095,18 +2083,18 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     const armedKey = pathKey(forPath);
     const timeoutMs = label === "intent" ? INTENT_RESULT_TIMEOUT_MS : TURN_RESULT_TIMEOUT_MS;
     diag(`armTurnWatchdog: ${label} turn at "${armedKey}"; watchdog ${timeoutMs}ms`);
-    turnWatchdog = scheduleTimer(() => {
-      turnWatchdog = null;
+    run.turnWatchdog = scheduleTimer(() => {
+      run.turnWatchdog = null;
       void enqueueIngest(async () => {
-        if (!active || awaiting.tag !== label) return; // the result won the race (or terminal)
+        if (!active || run.awaiting.tag !== label) return; // the result won the race (or terminal)
         const armed =
-          awaiting.tag === "summary"
-            ? awaiting.path
-            : awaiting.tag === "parent-review"
-              ? awaiting.parentPath
+          run.awaiting.tag === "summary"
+            ? run.awaiting.path
+            : run.awaiting.tag === "parent-review"
+              ? run.awaiting.parentPath
               : []; // the intent turn is the ROOT's genesis turn (no per-node path)
         if (pathKey(armed) !== armedKey) return; // a different turn of the same tag is in flight
-        awaiting = { tag: "idle" };
+        run.awaiting = { tag: "idle" };
         await dispatch({
           type: "FATAL",
           message:
@@ -2127,17 +2115,17 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // pattern).
   const armResuming = (nextPath: NodePath): void => {
     clearTurnWatchdog();
-    awaiting = { tag: "resuming", nextPath };
+    run.awaiting = { tag: "resuming", nextPath };
     diag(
       `armResuming: deferred recon for "${pathKey(nextPath)}"; watchdog ${RESUME_RESULT_TIMEOUT_MS}ms`,
     );
-    turnWatchdog = scheduleTimer(() => {
-      turnWatchdog = null;
+    run.turnWatchdog = scheduleTimer(() => {
+      run.turnWatchdog = null;
       void enqueueIngest(async () => {
         // The result won the race (or the run already concluded) — no fatal.
-        if (!active || awaiting.tag !== "resuming") return;
-        const stuckPath = awaiting.nextPath;
-        awaiting = { tag: "idle" };
+        if (!active || run.awaiting.tag !== "resuming") return;
+        const stuckPath = run.awaiting.nextPath;
+        run.awaiting = { tag: "idle" };
         await dispatch({
           type: "FATAL",
           message:
@@ -2164,13 +2152,13 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       case "intent":
         // The intent turn re-confirms the user's intent (visual clarifier). confirmedIntent is not
         // yet captured (the turn that produces it was interrupted), so re-issue the original ask.
-        return quotaResumeWrap(intentPrompt(request));
+        return quotaResumeWrap(intentPrompt(run.request));
       case "recon":
         // Root recon (path []) threads confirmedIntent; a sub-recon threads the node's mandate +
         // prior sibling summaries + any parent adjust note — exactly like the live/resume sends.
         return quotaResumeWrap(
           path.length === 0
-            ? reconPrompt(request, confirmedIntent)
+            ? reconPrompt(run.request, run.confirmedIntent)
             : subReconPrompt(path, mandateFor(path), priorSummaries(parentPathOf(path)), adjustNoteFor(path)),
         );
       case "sizer":
@@ -2190,7 +2178,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // ids; remaining-sibling discovery reads the live tree (already in-memory at resume time).
         const reviewedChild = awaitingVariant.reviewedChild;
         const parentPath = awaitingVariant.parentPath;
-        const childSummary = summaries.get(pathKey(reviewedChild)) ?? "";
+        const childSummary = run.summaries.get(pathKey(reviewedChild)) ?? "";
         const parentNode = state ? nodeAtPath(state.root, parentPath) : null;
         const remaining =
           parentNode && parentNode.state.stage === "split"
@@ -2211,9 +2199,9 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   };
 
   const clearQuotaTimer = (): void => {
-    if (quotaTimer !== null) {
-      cancelTimer(quotaTimer);
-      quotaTimer = null;
+    if (run.quotaTimer !== null) {
+      cancelTimer(run.quotaTimer);
+      run.quotaTimer = null;
     }
   };
 
@@ -2223,25 +2211,25 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // must not survive the pause's resolution (else a later genuine exit would mis-classify as paused).
   const clearQuotaPause = (): void => {
     clearQuotaTimer();
-    quotaPause = null;
-    quotaPausePending = false;
+    run.quotaPause = null;
+    run.quotaPausePending = false;
   };
 
   // Schedule (or RE-schedule) the resume timer for the currently-armed pause. The delay is computed
   // from the WALL CLOCK at schedule time (max(0, resetAt - now)) so a re-schedule after an early
   // fire targets the true remaining delta. No-op when no (non-exhausted) pause is armed.
   const scheduleQuotaTimer = (): void => {
-    if (!quotaPause || quotaPause.exhausted) return;
+    if (!run.quotaPause || run.quotaPause.exhausted) return;
     // BELT-AND-SUSPENDERS (degraded-reset): never schedule a resume to a non-positive/non-finite
     // resetAt — that is the sentinel a degraded result-carrier quota carries, and a timer to epoch 0
     // would fire immediately back into the wall. The reducer already routes these to exhausted (no
     // timer); this is defense in depth in case a degraded pause is ever installed non-exhausted.
-    if (!(quotaPause.resetAt > 0)) return;
+    if (!(run.quotaPause.resetAt > 0)) return;
     clearQuotaTimer();
-    const delay = Math.max(0, quotaPause.resetAt - nowFn());
-    diag(`scheduleQuotaTimer: resetAt=${quotaPause.resetAt} delay=${delay}ms remaining=${quotaPause.remaining}`);
-    quotaTimer = scheduleTimer(() => {
-      quotaTimer = null;
+    const delay = Math.max(0, run.quotaPause.resetAt - nowFn());
+    diag(`scheduleQuotaTimer: resetAt=${run.quotaPause.resetAt} delay=${delay}ms remaining=${run.quotaPause.remaining}`);
+    run.quotaTimer = scheduleTimer(() => {
+      run.quotaTimer = null;
       void enqueueIngest(() => fireResume());
     }, delay);
   };
@@ -2259,32 +2247,32 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   //      re-enter fireResume once the exit lands. (In the live app the sidecar gracefulExit(0)s right
   //      after emitting quota_exceeded, so the exit reliably follows; this guard makes the order safe.)
   const fireResume = async (): Promise<void> => {
-    if (!active || !quotaPause || quotaPause.exhausted) return;
-    if (quotaPause.remaining <= 0) return;
+    if (!active || !run.quotaPause || run.quotaPause.exhausted) return;
+    if (run.quotaPause.remaining <= 0) return;
     // BELT-AND-SUSPENDERS (degraded-reset): a non-positive/non-finite resetAt is the undeterminable
     // sentinel — treat as exhausted, never resume (a resume to epoch 0 lands straight back in the wall).
-    if (!(quotaPause.resetAt > 0)) return;
+    if (!(run.quotaPause.resetAt > 0)) return;
     const nowMs = nowFn();
-    if (nowMs < quotaPause.resetAt) {
-      diag(`fireResume: early (now=${nowMs} < resetAt=${quotaPause.resetAt}) — re-scheduling`);
+    if (nowMs < run.quotaPause.resetAt) {
+      diag(`fireResume: early (now=${nowMs} < resetAt=${run.quotaPause.resetAt}) — re-scheduling`);
       scheduleQuotaTimer();
       return;
     }
-    if (!quotaPause.priorExited) {
+    if (!run.quotaPause.priorExited) {
       // The prior sidecar has not exited yet. notifyAgentExit() is the PRIMARY path that proceeds this
       // deferred resume the instant the exit lands. But a lost/never-delivered exit must not hang the
       // run forever — arm a BOUNDED backstop timer that re-enters fireResume. After the bounded number
       // of arms, PROCEED anyway (fall through below): the Rust one-session guard rejects + surfaces a
       // fatal if the child is genuinely still alive, which beats a silent forever-hang.
-      if (quotaPause.backstopAttempts < QUOTA_PRIOR_EXIT_BACKSTOP_MAX) {
-        quotaPause.backstopAttempts++;
+      if (run.quotaPause.backstopAttempts < QUOTA_PRIOR_EXIT_BACKSTOP_MAX) {
+        run.quotaPause.backstopAttempts++;
         diag(
-          `fireResume: prior session has not exited yet — deferring (backstop ${quotaPause.backstopAttempts}/${QUOTA_PRIOR_EXIT_BACKSTOP_MAX}); notifyAgentExit() or backstop will re-check`,
+          `fireResume: prior session has not exited yet — deferring (backstop ${run.quotaPause.backstopAttempts}/${QUOTA_PRIOR_EXIT_BACKSTOP_MAX}); notifyAgentExit() or backstop will re-check`,
         );
         // Reuse the (now-fired, null) quotaTimer slot so clearQuotaPause/cancel/teardown clears it.
         clearQuotaTimer();
-        quotaTimer = scheduleTimer(() => {
-          quotaTimer = null;
+        run.quotaTimer = scheduleTimer(() => {
+          run.quotaTimer = null;
           void enqueueIngest(() => fireResume());
         }, QUOTA_PRIOR_EXIT_BACKSTOP_MS);
         return;
@@ -2294,7 +2282,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       );
       // Fall through to the respawn — do NOT defer again.
     }
-    const pause = quotaPause;
+    const pause = run.quotaPause;
     // Re-open the session resuming the prior transcript — the SAME shape resume() uses. Resolving the
     // session id off `state` (the ledger's self-persisted sdk_session_id); a missing id ⇒ a fresh
     // session (the sidecar's expired-transcript fallback emits resume_fallback, tolerated below).
@@ -2316,16 +2304,33 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // post-resume capture holds ONLY the fresh, complete re-emission (quotaResumePrompt instructs a
     // full re-emit, not a continue-from-the-middle). Carrying the stale partial would concatenate it
     // with the continuation and corrupt the downstream artifact (recon.md / INTENT.md / summary).
-    awaiting =
+    run.awaiting =
       pause.awaitingVariant.tag === "resuming" || pause.awaitingVariant.tag === "idle"
         ? { tag: "idle" }
         : { ...pause.awaitingVariant, buffer: "" };
+    // #8 — RE-ARM THE TURN WATCHDOG for the watched generation tags. The resumed turn is a REAL
+    // generation turn again (the model re-emits its artifact under the quota-resume note), so a
+    // silently-stuck resumed turn must drive to a loud terminal FATAL exactly as a never-paused turn
+    // would — fireResume previously re-armed `awaiting` but NOT its watchdog, so a resumed summary /
+    // parent-review / intent turn that produced no result hung the run forever with no terminal
+    // signal. The watch path is computed PER TAG, NOT from the generic capturedPath below:
+    // capturedPath resolves to [] (root) for a parent-review variant (it carries `parentPath`, not
+    // `path`), and armTurnWatchdog's fire guard compares against awaiting.parentPath — so a
+    // root-keyed arm is INERT for a non-root parent-review and the hang would persist for that tag.
+    // Map: summary → .path, parent-review → .parentPath, intent → []. The other captured tags
+    // (recon/sizer/exec) are ALSO result-bounded, but they carry NO turn watchdog at their live
+    // (never-paused) arming sites — they were never watchdog-guarded by design — so the resume
+    // re-arms none for them either, matching that live posture.
+    const rearmed = pause.awaitingVariant;
+    if (rearmed.tag === "summary") armTurnWatchdog("summary", rearmed.path);
+    else if (rearmed.tag === "parent-review") armTurnWatchdog("parent-review", rearmed.parentPath);
+    else if (rearmed.tag === "intent") armTurnWatchdog("intent", []);
     const capturedPath =
       "path" in pause.awaitingVariant
         ? (pause.awaitingVariant.path as NodePath)
         : ([] as NodePath);
     await deps.startSession({
-      cwd,
+      cwd: run.cwd,
       permissionMode: policy,
       ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
     });
@@ -2347,7 +2352,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     }
     if (!deps.onWake) return;
     quotaWakeOff = deps.onWake(() => {
-      if (!active || !quotaPause || quotaPause.exhausted) return;
+      if (!active || !run.quotaPause || run.quotaPause.exhausted) return;
       diag("onWake: page visible; re-checking quota reset against wall clock");
       void enqueueIngest(() => fireResume());
     });
@@ -2370,7 +2375,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // dispatch/sendMessage so a same-tick trailing frame can't act on a dead run. ingestSeen++ records
     // that the queued work reached this guard (a falsifiability hook for the chain-not-poisoned test).
     ingestSeen++;
-    diag(`ingestStreamImpl: kind=${frame.kind} active=${active} awaiting=${awaiting.tag}`);
+    diag(`ingestStreamImpl: kind=${frame.kind} active=${active} awaiting=${run.awaiting.tag}`);
     if (!active) {
       diag("ingestStreamImpl: SWALLOWED by !active guard (terminal)");
       return;
@@ -2384,8 +2389,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // during the hold must NOT re-arm it — answerClarify alone owns the resume. The `result`
     // frame is deliberately excluded: the intent branch below consumes it and disarms.
     if (
-      awaiting.tag === "intent" &&
-      turnWatchdog !== null &&
+      run.awaiting.tag === "intent" &&
+      run.turnWatchdog !== null &&
       (frame.kind === "assistant_text" ||
         frame.kind === "tool_use" ||
         frame.kind === "tool_result" ||
@@ -2401,8 +2406,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // it touches NO `awaiting` variant and runs regardless of the armed tag — the reducer arc is
       // a pure ledger stamp (idempotent; re-dispatching the same id is a no-op). Returns here so the
       // frame never falls through to the `result`-only sequencer below.
-      sdkSessionId = frame.session_id;
-      diag(`system_init: captured sdk session_id=${sdkSessionId}`);
+      run.sdkSessionId = frame.session_id;
+      diag(`system_init: captured sdk session_id=${run.sdkSessionId}`);
       if (frame.session_id && frame.session_id !== state?.sdk_session_id) {
         await dispatch({ type: "SESSION_INITIALIZED", sessionId: frame.session_id });
       }
@@ -2422,20 +2427,20 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       //     notifyQuotaExhausted (fail-closed: no budget ⇒ remaining 0). The notify* effect handler
       //     installs the in-memory pause + schedules the timer (paused) or no timer (exhausted).
       // NOT terminal — `active` stays true through the pause.
-      diag(`quota_exceeded: pausing run; resetAt=${frame.resetAt} source=${frame.source} awaiting=${awaiting.tag}`);
-      const captured: Awaiting = awaiting;
+      diag(`quota_exceeded: pausing run; resetAt=${frame.resetAt} source=${frame.source} awaiting=${run.awaiting.tag}`);
+      const captured: Awaiting = run.awaiting;
       clearTurnWatchdog();
-      awaiting = { tag: "idle" };
-      pendingQuotaCapture = captured;
+      run.awaiting = { tag: "idle" };
+      run.pendingQuotaCapture = captured;
       await dispatch({ type: "QUOTA_PAUSED", resetAt: frame.resetAt, source: frame.source });
-      pendingQuotaCapture = null;
+      run.pendingQuotaCapture = null;
       return;
     }
     if (frame.kind === "assistant_text") {
       // Append to the CURRENT variant's buffer only; drop while idle OR resuming (no cross-step
       // merge — resume-turn chatter must never leak into the deferred step's capture).
-      if (awaiting.tag !== "idle" && awaiting.tag !== "resuming") {
-        awaiting = { ...awaiting, buffer: awaiting.buffer + (awaiting.buffer ? "\n" : "") + frame.text };
+      if (run.awaiting.tag !== "idle" && run.awaiting.tag !== "resuming") {
+        run.awaiting = { ...run.awaiting, buffer: run.awaiting.buffer + (run.awaiting.buffer ? "\n" : "") + frame.text };
       }
       return;
     }
@@ -2443,7 +2448,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // Swallow rule: an unarmed (`idle`) `result` is no boundary. (A post-approval/advance resume
     // result is NOT idle anymore — it lands while `{tag:"resuming"}` holds the deferred next step,
     // and is consumed by the `resuming` branch below.)
-    if (awaiting.tag === "idle") return;
+    if (run.awaiting.tag === "idle") return;
 
     // PHASE 0 — SESSION-LIMIT LOOP-STOP GUARD. A genuine FAILED turn (`is_error`) in an ARMED step
     // must TERMINATE the run, never be consumed as a normal turn boundary that advances/re-prompts
@@ -2461,17 +2466,17 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // genuine failure: disarm, FATAL (full teardown via notifyFatal→endSdkSession), and return.
     if (
       frame.is_error &&
-      awaiting.tag !== "resuming" &&
+      run.awaiting.tag !== "resuming" &&
       !frame.deliberateInterrupt &&
       frame.subtype !== "error_during_execution"
     ) {
-      diag(`result(is_error) in armed turn "${awaiting.tag}" — FATAL (no advance): ${frame.result}`);
-      awaiting = { tag: "idle" };
+      diag(`result(is_error) in armed turn "${run.awaiting.tag}" — FATAL (no advance): ${frame.result}`);
+      run.awaiting = { tag: "idle" };
       await dispatch({ type: "FATAL", message: frame.result ?? "Run failed" });
       return;
     }
 
-    switch (awaiting.tag) {
+    switch (run.awaiting.tag) {
       case "resuming": {
         // The in-flight decomposition-approval-resumed turn just ended — normally because the
         // approve() decomposition branch interrupted it (the aborted turn's `result`, subtype
@@ -2480,14 +2485,14 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // on — by construction it can belong to no other step (the resuming tag was armed in place
         // of any inline send). Consume the hold, disarm the watchdog, and fire the deferred recon
         // turn.
-        const nextPath = awaiting.nextPath;
+        const nextPath = run.awaiting.nextPath;
         clearTurnWatchdog();
         diag(`resuming branch: resume result consumed, firing deferred recon for "${pathKey(nextPath)}"`);
         // Arm BEFORE sending (the result may arrive as this sendMessage resolves — see start()).
         // PER-LEVEL threading: the deferred first child sees ITS OWN level's completed siblings
         // (none yet, by construction — it is the first), never another level's. The first child of
         // a fresh decomposition has no pending adjust note either (adjustNoteFor is the scope guard).
-        awaiting = { tag: "recon", path: nextPath, buffer: "" };
+        run.awaiting = { tag: "recon", path: nextPath, buffer: "" };
         await deps.sendMessage(
           subReconPrompt(
             nextPath,
@@ -2507,20 +2512,20 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         //   • NO-PROTOTYPE / no block (incl. the plain-prose case, where
         //     parsePrototypeBlock returns the buffer untouched) ⇒ the pre-feature path
         //     byte-identical: INTENT_CLARIFIED (writes INTENT.md), then send recon + arm `recon`.
-        const buffered = awaiting.buffer;
-        awaiting = { tag: "idle" };
+        const buffered = run.awaiting.buffer;
+        run.awaiting = { tag: "idle" };
         clearTurnWatchdog(); // the awaited intent result arrived — disarm its watchdog
         const parsed = parsePrototypeBlock(buffered);
         // Capture the confirmed intent for downstream prompt threading (recon + decomposition-
         // draft). A whitespace-only confirmation collapses to null so those prompts stay byte-
         // identical to their pre-feature form.
-        confirmedIntent = parsed.intentText.trim() ? parsed.intentText.trim() : null;
+        run.confirmedIntent = parsed.intentText.trim() ? parsed.intentText.trim() : null;
         if (parsed.prototype !== null) {
           // ALWAYS capture THIS turn's intent text for downstream composition (never a stale prior
           // round's value) — both the interactive gate and the auto-approve arc compose from it.
-          pendingIntentText = parsed.intentText;
-          const gate: PrototypeGate = { ...parsed.prototype, round: prototypeRound + 1, cwd };
-          if (autoApproveNext) {
+          run.pendingIntentText = parsed.intentText;
+          const gate: PrototypeGate = { ...parsed.prototype, round: run.prototypeRound + 1, cwd: run.cwd };
+          if (run.autoApproveNext) {
             // COMBINED apply-and-approve: the user typed feedback AND clicked approve last round, so
             // the revised prototype is a DOWNSTREAM SPEC — do not surface another review round. The
             // root is currently in clarifying-intent (refinePrototype moved it there), so we CANNOT
@@ -2536,7 +2541,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
             diag(
               `intent branch (auto-approve): prototype block parsed (kind=${gate.kind}, round=${gate.round}) — silent PROTOTYPE_READY → resolveApprove`,
             );
-            autoApproveNext = false;
+            run.autoApproveNext = false;
             await dispatch({ type: "PROTOTYPE_READY", gate }, { suppressNotifyPrototypeReview: true });
             await resolveApprove(gate);
             return;
@@ -2553,33 +2558,33 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // recon path (the feedback was already applied). Clear the latch; do NOT route through
         // PROTOTYPE_APPROVED (the root is in clarifying-intent and INTENT_CLARIFIED is the legal
         // transition from there).
-        if (autoApproveNext) {
+        if (run.autoApproveNext) {
           diag("intent branch (auto-approve): no prototype block — falling through to INTENT_CLARIFIED");
-          autoApproveNext = false;
+          run.autoApproveNext = false;
         }
         diag("intent branch: dispatching INTENT_CLARIFIED");
         await dispatch({ type: "INTENT_CLARIFIED", intent: parsed.intentText });
         // Arm BEFORE sending (the result may arrive as this sendMessage resolves — see start()).
-        awaiting = { tag: "recon", path: [], buffer: "" };
+        run.awaiting = { tag: "recon", path: [], buffer: "" };
         diag("intent branch: armed recon, sending reconPrompt");
-        await deps.sendMessage(reconPrompt(request, confirmedIntent));
+        await deps.sendMessage(reconPrompt(run.request, run.confirmedIntent));
         return;
       }
       case "recon": {
         // UNIFIED recon: the ROOT ([]) routes to the sizer; a child node routes to its draft turn
         // (gen-1's root-recon + sub-recon branches, keyed on path depth).
-        const path = awaiting.path;
-        const reconText = awaiting.buffer;
-        awaiting = { tag: "idle" };
+        const path = run.awaiting.path;
+        const reconText = run.awaiting.buffer;
+        run.awaiting = { tag: "idle" };
         if (path.length === 0) {
           // ROOT recon. DRIVER-WRITE BOUNDARY (the cutover seam): gen-2 NODE_RECON_DONE carries no
           // text and emits no write effect — the driver physically writes recon.md FIRST (matching
           // the gen-1 effect ordering: recon.md before the persist), then dispatches.
           diag("recon branch (root): writing recon.md + dispatching NODE_RECON_DONE");
-          await deps.writePlanTreeFile(cwd, "recon.md", reconText);
+          await deps.writePlanTreeFile(run.cwd, "recon.md", reconText);
           await dispatch({ type: "NODE_RECON_DONE", path });
           // Arm BEFORE sending (the result may arrive as this sendMessage resolves — see start()).
-          awaiting = { tag: "sizer", path: [], buffer: "" };
+          run.awaiting = { tag: "sizer", path: [], buffer: "" };
           await deps.sendMessage(sizerPrompt());
           return;
         }
@@ -2606,20 +2611,20 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         }
         // PHASE 4 — EVERY OTHER non-root node runs the per-node sizer next (the prompt sequence
         // mirrors the root: recon → sizer). Arm BEFORE sending (see start()).
-        awaiting = { tag: "sizer", path, buffer: "" };
+        run.awaiting = { tag: "sizer", path, buffer: "" };
         await deps.sendMessage(sizerPrompt());
         return;
       }
       case "sizer": {
         // Scan buffered lines; take the LAST SIZER match (avoid a stray top-level echo).
-        const path = awaiting.path;
+        const path = run.awaiting.path;
         let sizer = null as ReturnType<typeof parseSizerDecision>;
-        for (const line of awaiting.buffer.split(/\r?\n/)) {
+        for (const line of run.awaiting.buffer.split(/\r?\n/)) {
           const parsed = parseSizerDecision(line);
           if (parsed) sizer = parsed;
         }
-        const sizerBuffer = awaiting.buffer;
-        awaiting = { tag: "idle" };
+        const sizerBuffer = run.awaiting.buffer;
+        run.awaiting = { tag: "idle" };
         if (!sizer) {
           // TWO-OUTCOME SIZER: the decision union is "single" | "split" — anything else (a stale
           // `escalate` from an old prompt, an unknown decision word, or no SIZER line at all) is
@@ -2640,7 +2645,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // mandate. Either way the next signal is the ExitPlanMode hold (not a `result`) — idle.
         const sendDecompositionDraft = async (): Promise<void> => {
           if (path.length === 0) {
-            await deps.sendMessage(masterDraftPrompt(request, undefined, confirmedIntent, hasBaseline()));
+            await deps.sendMessage(masterDraftPrompt(run.request, undefined, run.confirmedIntent, hasBaseline()));
           } else {
             await deps.sendMessage(
               nestedDecompositionDraftPrompt(
@@ -2665,7 +2670,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
                 const childPath = activePath();
                 if (childPath !== null) {
                   // Arm BEFORE sending (the result may arrive as this sendMessage resolves).
-                  awaiting = { tag: "recon", path: childPath, buffer: "" };
+                  run.awaiting = { tag: "recon", path: childPath, buffer: "" };
                   await deps.sendMessage(
                     subReconPrompt(
                       childPath,
@@ -2707,23 +2712,23 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       }
       // eslint-disable-next-line no-fallthrough -- unreachable: every sizer arm returns above.
       case "exec": {
-        const path = awaiting.path;
-        awaiting = { tag: "idle" };
+        const path = run.awaiting.path;
+        run.awaiting = { tag: "idle" };
         await dispatch({ type: "EXEC_DONE", path });
         // Arm BEFORE sending (the result may arrive as this sendMessage resolves — see start()). The
         // fresh `summary` variant gets buffer:"" — exec-phase chatter is dropped, not threaded.
         // PHASE 5: every summary turn is watchdog-bounded (no result ⇒ loud FATAL, never a hang).
-        awaiting = { tag: "summary", path, buffer: "" };
+        run.awaiting = { tag: "summary", path, buffer: "" };
         armTurnWatchdog("summary", path);
         await deps.sendMessage(summaryPrompt(path, hasBaseline()));
         return;
       }
       case "summary": {
-        const path = awaiting.path;
-        const summaryText = awaiting.buffer;
-        awaiting = { tag: "idle" };
+        const path = run.awaiting.path;
+        const summaryText = run.awaiting.buffer;
+        run.awaiting = { tag: "idle" };
         clearTurnWatchdog(); // the awaited summary result arrived — disarm its watchdog
-        summaries.set(pathKey(path), summaryText);
+        run.summaries.set(pathKey(path), summaryText);
         // DRIVER-SIDE WRITE (mirrors the plan write seam): physically write summaryName2(path) FIRST
         // and mint the brand from the write's returned path — so SUMMARY_WRITTEN carries the FILE's
         // path, never its text (the old text-as-path bug, now uncompilable). The reducer then
@@ -2764,7 +2769,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
               // identical to a roll-up window (inRollupWindow(root) is true here), so without this
               // short-circuit the driver would erroneously send a roll-up summary prompt for the
               // root (which writes no roll-up). Arm idle and wait for the user's verdict.
-              awaiting = { tag: "idle" };
+              run.awaiting = { tag: "idle" };
               diag("summary consume: root parked at the forced acceptance gate — awaiting verdict");
             } else if (nextNode && nextNode.state.stage === "split" && nextNode.state.phase === "reviewing") {
               // PHASE 5 — THE PARENT-REVIEW TURN: the reducer moved the parent (nextPath) to
@@ -2778,13 +2783,13 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
                   const sibPath: NodePath = [...nextPath, c.nn];
                   return { path: sibPath, mandate: mandateFor(sibPath) };
                 });
-              awaiting = { tag: "parent-review", parentPath: nextPath, reviewedChild: path, buffer: "" };
+              run.awaiting = { tag: "parent-review", parentPath: nextPath, reviewedChild: path, buffer: "" };
               armTurnWatchdog("parent-review", nextPath);
               await deps.sendMessage(parentReviewPrompt(path, summaryText, remaining));
             } else if (nextNode && inRollupWindow(nextNode)) {
               // ROLL-UP turn for the parent: its summary is awaited like any node summary — the
               // `summary` variant re-armed with the PARENT's path (PHASE 5: watchdog-bounded).
-              awaiting = { tag: "summary", path: nextPath, buffer: "" };
+              run.awaiting = { tag: "summary", path: nextPath, buffer: "" };
               armTurnWatchdog("summary", nextPath);
               await deps.sendMessage(rollupSummaryPrompt(nextPath, priorSummaries(nextPath)));
             } else {
@@ -2815,9 +2820,9 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // activates the next sibling's recon in the tree), stash the single pending note, then
         // send the next child's recon INLINE — the review result IS the boundary (nothing is in
         // flight; arming `resuming` here would wait for a result that can never arrive).
-        const parentPath = awaiting.parentPath;
-        const reviewBuffer = awaiting.buffer;
-        awaiting = { tag: "idle" };
+        const parentPath = run.awaiting.parentPath;
+        const reviewBuffer = run.awaiting.buffer;
+        run.awaiting = { tag: "idle" };
         clearTurnWatchdog(); // the awaited review result arrived — disarm its watchdog
         const parsed = parseParentReview(reviewBuffer);
         if (parsed === null) {
@@ -2829,7 +2834,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         await dispatch({ type: "PARENT_REVIEW_DONE", path: parentPath, note });
         // THE SINGLE NOTE SLOT: set on ADJUST, NULLED on NONE/unparseable (a stale prior note can
         // never survive a NONE review). Scoped to this parent's children via parentKey.
-        adjustNote = note !== null ? { parentKey: pathKey(parentPath), note } : null;
+        run.adjustNote = note !== null ? { parentKey: pathKey(parentPath), note } : null;
         diag(
           `parent-review: done for "${pathKey(parentPath)}" — ${note !== null ? `ADJUST note stashed (${JSON.stringify(note.slice(0, 120))})` : "NONE (no note)"}`,
         );
@@ -2837,7 +2842,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         if (nextPath !== null) {
           // Arm BEFORE sending (see start()). The note (if any) injects into THIS recon prompt —
           // and into the same child's draft prompt later — then clears at its DRAFTED dispatch.
-          awaiting = { tag: "recon", path: nextPath, buffer: "" };
+          run.awaiting = { tag: "recon", path: nextPath, buffer: "" };
           await deps.sendMessage(
             subReconPrompt(
               nextPath,
@@ -2880,10 +2885,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // run). Resolve it as a DENY with a corrective message so the SDK feeds it back as the tool
       // error and the turn finishes its work instead. LOUD diag either way.
       const inReviewWindow =
-        awaiting.tag === "parent-review" ||
+        run.awaiting.tag === "parent-review" ||
         (node.state.stage === "split" && node.state.phase === "reviewing");
       const inSummaryWindow =
-        awaiting.tag === "summary" || (node.state.stage === "split" && inRollupWindow(node));
+        run.awaiting.tag === "summary" || (node.state.stage === "split" && inRollupWindow(node));
       // EXEC window is keyed on the ACTIVE NODE'S state, which is authoritative — NOT on
       // `awaiting.tag === "exec"`: after a leaf approve the reducer moves the node to leaf/executing
       // AND arms exec together, but `awaiting` can lag the node state (e.g. a stale "exec" tag left
@@ -2900,7 +2905,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           : `this turn must not call ExitPlanMode — finish the ${inReviewWindow ? "review" : "summary"} text`;
         const turnLabel = inExecWindow ? "exec" : inReviewWindow ? "review" : "summary";
         diag(
-          `rogue ExitPlanMode DENIED: id=${req.id} during the ${turnLabel} window (node=${node.state.stage}/${node.state.phase}, awaiting=${awaiting.tag}) — this turn must not draft`,
+          `rogue ExitPlanMode DENIED: id=${req.id} during the ${turnLabel} window (node=${node.state.stage}/${node.state.phase}, awaiting=${run.awaiting.tag}) — this turn must not draft`,
         );
         await deps.resolvePermission({
           id: req.id,
@@ -2956,8 +2961,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // degenerates to the gen-1 full replace (every key descends from "").
         const parentKey = pathKey(path);
         const childPrefix = parentKey === "" ? "" : `${parentKey}.`;
-        mandates = new Map([
-          ...[...mandates.entries()].filter(([k]) => !k.startsWith(childPrefix)),
+        run.mandates = new Map([
+          ...[...run.mandates.entries()].filter(([k]) => !k.startsWith(childPrefix)),
           ...parsed.subplans.map(
             (s): [PathKey, Mandate] => [
               pathKey([...path, s.nn]),
@@ -2975,7 +2980,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // "<pathKey>-plan.md" for a nested split (planName2). Written BETWEEN the two dispatches
         // to preserve the gen-1 wire order: writeAgentPlan → state.json (children persist) →
         // plan file → state.json (gate persist) → onAwaitingApproval.
-        await deps.writePlanTreeFile(cwd, planName2(path), plan);
+        await deps.writePlanTreeFile(run.cwd, planName2(path), plan);
         // THE UNIFIED GATE: DECOMPOSITION_DRAFTED sets pendingApproval (kind "decomposition") and
         // emits notifyAwaitingApproval — the reducer owns the gate surface now (no driver-side
         // sentinel, no masterToolUseId).
@@ -3033,11 +3038,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     }
     if (req.tool === "AskUserQuestion") {
       const questions = (req.input as AskUserQuestionInput).questions;
-      clarifyQuestions.set(req.id, questions);
+      run.clarifyQuestions.set(req.id, questions);
       // INTENT-WATCHDOG PAUSE: a held AskUserQuestion inside the intent turn waits on the USER —
       // arbitrarily long, legitimately. The intent watchdog must not FATAL a healthy run parked on
       // a clarify gate; it re-arms when answerClarify resolves the hold.
-      if (awaiting.tag === "intent") clearTurnWatchdog();
+      if (run.awaiting.tag === "intent") clearTurnWatchdog();
       await dispatch({ type: "CLARIFY_REQUESTED", toolUseId: req.id, questions });
       return;
     }
@@ -3057,8 +3062,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // depth). Skips entirely when no readPlanTreeFile dep is wired (older fakes) — the resumed run then
   // threads no prior context (degraded, not broken).
   const reloadDriverStateFromDisk = async (root: TreeNode): Promise<void> => {
-    summaries.clear();
-    mandates = new Map();
+    run.summaries.clear();
+    run.mandates = new Map();
     const read = deps.readPlanTreeFile;
     if (!read) return;
     // Depth-first walk minting each node's NodePath. For EVERY node whose state carries a non-null
@@ -3075,14 +3080,14 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         node.state.stage !== "open" &&
         node.state.summaryPath !== null
       ) {
-        const text = await read(cwd, summaryName2(path));
-        if (text !== null) summaries.set(pathKey(path), text);
+        const text = await read(run.cwd, summaryName2(path));
+        if (text !== null) run.summaries.set(pathKey(path), text);
       }
       // MANDATES: a split node that actually drafted a decomposition (planPath non-null) records its
       // children's mandates from that plan file. A planPath-less split is the root confident-single
       // collapse (no decomposition plan exists) — nothing to parse.
       if (node.state.stage === "split" && node.state.planPath !== null) {
-        const plan = await read(cwd, planName2(path));
+        const plan = await read(run.cwd, planName2(path));
         if (plan !== null) {
           // BEST-EFFORT reload (degraded, not broken). INV-2: a malformed on-disk decomposition
           // (header-less or out-of-range — a PlanValidationError) must NOT abort the whole resume;
@@ -3093,7 +3098,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           try {
             const parsed = parseSubPlanHeaders(plan);
             for (const s of parsed.subplans) {
-              mandates.set(pathKey([...path, s.nn]), {
+              run.mandates.set(pathKey([...path, s.nn]), {
                 title: s.title,
                 sectionBody: s.body,
                 masterPreamble: parsed.preamble,
@@ -3135,7 +3140,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // real on-disk path the user reviews by joining it under <cwd>/.plan-tree/. The live
       // decomposition write used the SAME path for both planPath and plansDirPath, so mirror that.
       const planPath =
-        plan.gateKind === "decomposition" ? `${cwd}/.plan-tree/${plan.planPath}` : plan.planPath;
+        plan.gateKind === "decomposition" ? `${run.cwd}/.plan-tree/${plan.planPath}` : plan.planPath;
       const plansDirPath = plan.plansDirPath ?? planPath;
       // INV-3 — PHASE-ONLY RE-ARM. recoveryFor returns the SAME opaque decomposition gate ResumePlan
       // for BOTH `open/decomposing` (a draft that survived but whose DRAFTED gate event died) and
@@ -3161,9 +3166,9 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         redraftCount: plan.redraftCount,
       };
       if (state) state.pendingApproval = gate;
-      heldPermissionId = gate.toolUseId;
-      resumedGate = true;
-      awaiting = { tag: "idle" };
+      run.heldPermissionId = gate.toolUseId;
+      run.resumedGate = true;
+      run.awaiting = { tag: "idle" };
       diag(
         `resume: re-presenting ${gate.kind} gate at "${pathKey(gate.path)}" from disk (planPath=${planPath}, synthetic id=${gate.toolUseId})`,
       );
@@ -3183,20 +3188,20 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // "index.html" (mirroring the runEffect augmentation); runCommand is unknown on resume (the
       // reducer never knew it and it was never serialized). round is 1 (single-round acceptance today).
       const gate: AcceptanceGate = {
-        cwd,
+        cwd: run.cwd,
         openTarget: "index.html",
         runCommand: null,
         round: 1,
       };
       if (state) state.pendingAcceptance = gate;
-      awaiting = { tag: "idle" }; // no turn in flight — the gate waits on a human verdict.
-      diag(`resume: re-minting the forced acceptance gate (cwd=${cwd}, openTarget=${gate.openTarget})`);
+      run.awaiting = { tag: "idle" }; // no turn in flight — the gate waits on a human verdict.
+      diag(`resume: re-minting the forced acceptance gate (cwd=${run.cwd}, openTarget=${gate.openTarget})`);
       for (const o of observers) o.onAcceptanceReview?.(gate);
       // Best-effort OPEN the baseline so the user can exercise the just-built result against it — the
       // same non-fatal best-effort the live notifyAcceptanceReview effect performs.
       if (deps.openBaseline && gate.openTarget !== null) {
         try {
-          await deps.openBaseline(cwd, gate.openTarget);
+          await deps.openBaseline(run.cwd, gate.openTarget);
           diag(`resume acceptance: opened baseline "${gate.openTarget}"`);
         } catch (err) {
           console.error("open_baseline failed (non-fatal)", err);
@@ -3220,11 +3225,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // resolves, exactly the start() discipline), arm the intent watchdog, and re-send intentPrompt
       // SEEDED FROM THE ROOT TITLE (`request`, the original request read in resume()). The next
       // clarifier turn is then handled by the SAME `case "intent"` consume branch a fresh run uses.
-      await deps.ensurePrototypeDir?.(cwd);
-      awaiting = { tag: "intent", buffer: "" };
+      await deps.ensurePrototypeDir?.(run.cwd);
+      run.awaiting = { tag: "intent", buffer: "" };
       armTurnWatchdog("intent", []);
       diag(`resume: re-entering genesis clarify (restart from "${plan.from}"), sending intentPrompt seeded from title`);
-      await deps.sendMessage(intentPrompt(request));
+      await deps.sendMessage(intentPrompt(run.request));
       return;
     }
     if (plan.kind === "prototype-gate") {
@@ -3245,18 +3250,18 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // via the reducer — there is no PROTOTYPE_READY to replay; the root is ALREADY prototype-review),
       // fire onPrototypeReview, emit a snapshot. Send NO prompt — the gate resolves through the
       // approvePrototype()/refinePrototype() handle methods, exactly like a live prototype gate.
-      const protoDir = `${cwd}/.plan-tree/prototype`;
+      const protoDir = `${run.cwd}/.plan-tree/prototype`;
       const gate: PrototypeGate = {
         kind: "html",
         paths: [`${protoDir}/index.html`],
         screenshot: null,
         inlinePreview: null,
         variants: [],
-        round: prototypeRound + 1,
-        cwd,
+        round: run.prototypeRound + 1,
+        cwd: run.cwd,
       };
       if (state) state.pendingPrototype = gate;
-      awaiting = { tag: "idle" };
+      run.awaiting = { tag: "idle" };
       diag(`resume: re-presenting prototype-review gate from disk (dir=${protoDir}, round=${gate.round})`);
       for (const o of observers) o.onPrototypeReview?.(gate);
       if (state) emitSnapshot(toSnapshot2(state));
@@ -3280,7 +3285,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           `${node ? `${node.state.stage}/${node.state.phase}` : "missing"}, not ` +
           `open/awaiting-decomposition-approval (approving it would dead-end). Start a new plan.`;
         diag(reason);
-        awaiting = { tag: "idle" };
+        run.awaiting = { tag: "idle" };
         await dispatch({ type: "FATAL", message: reason });
         return;
       }
@@ -3327,7 +3332,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
               (plan.hazard ? ` (${plan.hazard})` : "") +
               ". Start a new plan.";
             diag(reason);
-            awaiting = { tag: "idle" };
+            run.awaiting = { tag: "idle" };
             await dispatch({ type: "FATAL", message: reason });
             return;
           }
@@ -3335,7 +3340,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // ARM BEFORE SEND (the continue turn's result may land as sendMessage resolves — start()
         // discipline). The node STAYS leaf/executing (no APPROVE); EXEC_DONE on the next result then
         // advances it to summary exactly as a normal execution completion does.
-        awaiting = { tag: "exec", path: plan.path, buffer: "" };
+        run.awaiting = { tag: "exec", path: plan.path, buffer: "" };
         diag(
           `resume: CONTINUING leaf/executing at "${pathKey(plan.path)}" (audit-and-continue, planPath=${plan.planPath}) — armed exec, NOT re-presenting the approval gate`,
         );
@@ -3357,9 +3362,9 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           redraftCount: nodeAtPath(state!.root, plan.path)?.redraftCount ?? 0,
         };
         if (state) state.pendingApproval = gate;
-        heldPermissionId = gate.toolUseId;
-        resumedGate = true;
-        awaiting = { tag: "idle" };
+        run.heldPermissionId = gate.toolUseId;
+        run.resumedGate = true;
+        run.awaiting = { tag: "idle" };
         diag(`resume: rewinding to leaf-approval gate at "${pathKey(plan.path)}" from disk (planPath=${plan.planPath})`);
         for (const o of observers) o.onAwaitingApproval?.(gate);
         if (state) emitSnapshot(toSnapshot2(state));
@@ -3373,7 +3378,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         (plan.hazard ? ` (${plan.hazard})` : "") +
         ". Start a new plan.";
       diag(reason);
-      awaiting = { tag: "idle" };
+      run.awaiting = { tag: "idle" };
       await dispatch({ type: "FATAL", message: reason });
       return;
     }
@@ -3383,17 +3388,17 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     const path = plan.path;
     switch (plan.awaiting) {
       case "recon": {
-        awaiting = { tag: "recon", path, buffer: "" };
+        run.awaiting = { tag: "recon", path, buffer: "" };
         const prompt =
           path.length === 0
-            ? reconPrompt(request, confirmedIntent)
+            ? reconPrompt(run.request, run.confirmedIntent)
             : subReconPrompt(path, mandateFor(path), priorSummaries(parentPathOf(path)), adjustNoteFor(path));
         diag(`resume: re-sending recon prompt for "${pathKey(path)}"`);
         await deps.sendMessage(prompt);
         return;
       }
       case "sizer": {
-        awaiting = { tag: "sizer", path, buffer: "" };
+        run.awaiting = { tag: "sizer", path, buffer: "" };
         diag(`resume: re-sending sizer prompt for "${pathKey(path)}"`);
         await deps.sendMessage(sizerPrompt());
         return;
@@ -3404,7 +3409,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // child (line: recon branch leaf send). masterDraftPrompt is the DECOMPOSITION draft, which
         // is a "gate" phase here, never "draft". So subDraftPrompt is the faithful re-send. The next
         // signal is the node's ExitPlanMode hold (not a `result`), so stay idle.
-        awaiting = { tag: "idle" };
+        run.awaiting = { tag: "idle" };
         diag(`resume: re-sending leaf draft prompt for "${pathKey(path)}"`);
         await deps.sendMessage(
           subDraftPrompt(
@@ -3434,10 +3439,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // The next signal after the draft is the node's ExitPlanMode hold (routed by the active node's
         // open/decomposing state in ingestPermissionImpl), NOT a `result` — so arm idle, exactly as the
         // live decompose step leaves `awaiting` idle.
-        awaiting = { tag: "idle" };
+        run.awaiting = { tag: "idle" };
         diag(`resume: re-sending decompose draft prompt for "${pathKey(path)}"`);
         if (path.length === 0) {
-          await deps.sendMessage(masterDraftPrompt(request, undefined, confirmedIntent, hasBaseline()));
+          await deps.sendMessage(masterDraftPrompt(run.request, undefined, run.confirmedIntent, hasBaseline()));
         } else {
           await deps.sendMessage(
             nestedDecompositionDraftPrompt(
@@ -3461,7 +3466,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // branch, which OVERWRITES summaryName2(path) (idempotent) and dispatches SUMMARY_WRITTEN{path}
         // to complete the split and continue the ascent. NO decomposition gate is re-presented (the node
         // is already split — a re-presented gate would dead-end on approve).
-        awaiting = { tag: "summary", path, buffer: "" };
+        run.awaiting = { tag: "summary", path, buffer: "" };
         armTurnWatchdog("summary", path);
         diag(`resume: re-running roll-up summary turn for "${pathKey(path)}"`);
         await deps.sendMessage(rollupSummaryPrompt(path, priorSummaries(path)));
@@ -3492,14 +3497,14 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           throw new Error(`resume review: reviewing node "${pathKey(path)}" has no summarized child to review`);
         }
         const reviewedChild: NodePath = [...path, reviewedChildNode.nn];
-        const childSummary = summaries.get(pathKey(reviewedChild)) ?? "";
+        const childSummary = run.summaries.get(pathKey(reviewedChild)) ?? "";
         const remaining = node.state.children
           .filter((c) => c.state.stage === "open" && c.state.phase === "pending")
           .map((c) => {
             const sibPath: NodePath = [...path, c.nn];
             return { path: sibPath, mandate: mandateFor(sibPath) };
           });
-        awaiting = { tag: "parent-review", parentPath: path, reviewedChild, buffer: "" };
+        run.awaiting = { tag: "parent-review", parentPath: path, reviewedChild, buffer: "" };
         armTurnWatchdog("parent-review", path);
         diag(`resume: re-running parent-review turn for "${pathKey(path)}" (reviewed child "${pathKey(reviewedChild)}")`);
         await deps.sendMessage(parentReviewPrompt(reviewedChild, childSummary, remaining));
@@ -3519,13 +3524,16 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // letting the next frame still run (a poisoned chain would silently drop every later frame).
   let ingestQueue: Promise<void> = Promise.resolve();
   const enqueueIngest = (work: () => Promise<void>): Promise<void> => {
-    const run = ingestQueue.then(work);
+    // `chained` is the queue-tail promise for THIS frame's work (named to avoid shadowing the
+    // module-level `run: RunState` bundle — a future edit in this scope must touch the bundle, not
+    // this local promise).
+    const chained = ingestQueue.then(work);
     // ERROR ISOLATION + VISIBLE FAILURE: a throw in one frame must not silently stall the run (it
     // would hang with no terminal signal). Log it, then drive the run to a terminal FATAL state so
     // the UI surfaces the error and resets. The fatal-dispatch itself is wrapped so a throw there
     // (e.g. the run is already terminal) still leaves the tail RESOLVED — the chain is never
     // poisoned and later frames (if any) can still run.
-    ingestQueue = run.catch(async (err) => {
+    ingestQueue = chained.catch(async (err) => {
       console.error("orchestrator ingest frame failed", err);
       // LOUD diag: if a pre-result frame throws here it dispatches FATAL -> markTerminal, which would
       // deactivate the orchestrator BEFORE the recon result lands (making the bridge gate false — the
@@ -3558,15 +3566,13 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // Idempotent-guarded: a second start while active is a no-op (the seam is single-owner). Return
       // false so the composer does not treat a dead start as a real one (and close its modal).
       if (active) return false;
-      cwd = startCwd;
-      request = startRequest;
-      // Fresh run: no intent confirmed yet (captured at the intent boundary below), no pending
-      // adjust note, and no prototype state (a stale round count must never leak across runs).
-      confirmedIntent = null;
-      adjustNote = null;
-      pendingIntentText = null;
-      prototypeRound = 0;
-      autoApproveNext = false;
+      // #2 — ALLOCATE A FRESH PER-RUN BUNDLE. A run shares ONE orchestrator handle with the next (the
+      // app holds a singleton), so any per-run map/flag left populated would bleed run A's context into
+      // run B's prompts (a stale prior-sibling summary threaded into a brand-new plan; a stale mandate
+      // titling a new node; a held-permission id from a torn run). Replacing the WHOLE bundle resets
+      // every transient TOGETHER — forgetting to reset one (the prior HIGH-severity leak: summaries/
+      // mandates/clarifyQuestions/heldPermissionId/resumedGate were not reset before) is unrepresentable.
+      run = freshRunState(startCwd, startRequest);
       // The session below opens in the DERIVED GENESIS policy ("prototype": the root opens in
       // clarifying-intent, where writePolicyFor2 derives "prototype" — throwaway prototype
       // artifacts may be written under .plan-tree/prototype/, nothing else). Initializing the
@@ -3574,7 +3580,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // matters because the session is not open yet at that dispatch (the sidecar drops a
       // pre-start set-permission-mode). The first real assert is "plan" at the
       // INTENT_CLARIFIED/PROTOTYPE_APPROVED boundary, when the session is live.
-      assertedPolicy = "prototype";
+      run.assertedPolicy = "prototype";
       active = true;
       activeOrchestrator = handle;
       // PHASE 4 — wire the wake seam for the lifetime of the run (torn down at markTerminal). A
@@ -3592,7 +3598,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       try {
         const treeId = newTreeId();
         // Genesis: build the fresh tree (persists state.json). START now lands in `clarifying-intent`.
-        await dispatch({ type: "START", treeId, request, nowMs: nowFn() });
+        await dispatch({ type: "START", treeId, request: run.request, nowMs: nowFn() });
         // PHASE 6 — QUOTA AUTO-RESUME BUDGET. Resolve the composer's choice (impure localStorage read
         // confined to defaultDeps) and stamp it onto the fresh ledger via QUOTA_BUDGET_SET. Dispatched
         // AT START (after the genesis ledger exists, before the first turn) so a quota wall mid-run
@@ -3606,17 +3612,17 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // Open the single SDK session in the derived genesis policy ("prototype" — see the
         // assertedPolicy note above), then send the INTENT prompt and arm "intent" so the first
         // turn-completion `result` advances the sequencer (intent → recon/prototype-review → …).
-        await deps.startSession({ cwd, permissionMode: "prototype" });
+        await deps.startSession({ cwd: run.cwd, permissionMode: "prototype" });
         // VISUAL MODE: pre-create <cwd>/.plan-tree/prototype/ BEFORE the intent prompt goes out —
         // the sidecar's "prototype" policy only allows writes UNDER the dir (it cannot mkdir it),
         // and the prompt tells the clarifier the dir already exists. Optional dep (older fakes):
         // absent ⇒ skipped.
-        await deps.ensurePrototypeDir?.(cwd);
+        await deps.ensurePrototypeDir?.(run.cwd);
         // Arm BEFORE sending: send_agent_message returns once the line is queued, and the turn's
         // `result` frame can reach ingestStream before/at the same flush as this await settling. If we
         // armed after the await, that result would land while awaiting is idle and be swallowed —
         // the run would halt at the opening phase (the minecraft-clone bug, now at the intent arm).
-        awaiting = { tag: "intent", buffer: "" };
+        run.awaiting = { tag: "intent", buffer: "" };
         armTurnWatchdog("intent", []);
         diag("start(): armed intent, sending intentPrompt");
         // Multimodal first turn: thread the user's attached images into ONLY this first intent send
@@ -3625,12 +3631,12 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // visual context into the text-only subagents it spawns.
         const hasStartImages = !!(startImages && startImages.length);
         await deps.sendMessage(
-          intentPrompt(request, hasStartImages),
+          intentPrompt(run.request, hasStartImages),
           hasStartImages ? startImages : undefined,
         );
       } catch (err) {
         markTerminal("start() threw");
-        awaiting = { tag: "idle" };
+        run.awaiting = { tag: "idle" };
         // Best-effort: if startSession already opened the SDK session before the throw, end it so a
         // live session can never coexist with isOrchestrationActive()===false (the Stop-routing
         // desync endSdkSession exists to prevent). Both inner calls are individually caught.
@@ -3650,8 +3656,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // nulls all transient gates). A torn ledger throws here — let it propagate to the caller (the
       // frontend wraps the click), nothing is registered yet.
       state = rehydrateState2(ledger);
-      cwd = resumeCwd;
-      request = ledger.root.title;
+      // #2 — allocate a fresh per-run bundle for the resumed run (every transient reset together). The
+      // re-presented gate / re-sent step below re-arms exactly what the resumed phase needs; the
+      // non-serialized summaries/mandates are reloaded from disk by reloadDriverStateFromDisk, and the
+      // sdk_session_id is re-seeded from the ledger after the resumable check.
+      run = freshRunState(resumeCwd, ledger.root.title);
       // DISK-PROBE SEAM (real wiring): resumeScopeForRoot is PURE+synchronous, but the decomposing
       // disambiguation needs a real on-disk check (does planName2(activePath) exist under
       // <cwd>/.plan-tree/?). recoveryFor only ever probes the ACTIVE node's path (the open/decomposing
@@ -3663,7 +3672,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       const decompositionArtifactCache = new Map<string, boolean>();
       const activeForProbe = activePathOf(state.root);
       if (activeForProbe !== null && deps.readPlanTreeFile) {
-        const text = await deps.readPlanTreeFile(cwd, planName2(activeForProbe));
+        const text = await deps.readPlanTreeFile(run.cwd, planName2(activeForProbe));
         decompositionArtifactCache.set(pathKey(activeForProbe), text !== null);
       }
       const decompositionArtifactExists = (path: NodePath): boolean =>
@@ -3679,23 +3688,17 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         state = null;
         return false;
       }
-      // Reset the genuinely-unrecoverable transients (the genesis-window captures are gone on a
-      // restart): no confirmed intent, no pending adjust note, no prototype round. summaries/mandates
-      // are reloaded from disk below (NOT left stale).
-      confirmedIntent = null;
-      adjustNote = null;
-      pendingIntentText = null;
-      prototypeRound = 0;
-      autoApproveNext = false;
-      resumedGate = false;
-      sdkSessionId = state.sdk_session_id ?? null;
+      // RESUME re-seeds the SDK session id from the ledger (freshRunState defaulted it null). All other
+      // transients were already zeroed by the fresh-bundle allocation above; the non-serialized
+      // summaries/mandates are reloaded from disk by reloadDriverStateFromDisk below.
+      run.sdkSessionId = state.sdk_session_id ?? null;
       // DERIVED POLICY: the session must open in the policy the rehydrated tree implies — executing →
       // acceptEdits (SDK default), planning → plan, genesis window → prototype. Per the CLAUDE.md
       // "prototype permission seam" gotcha the startSession dep already maps policy → SDK mode; prime
       // the cache to the SAME value so the first post-resume dispatch's policy seam fires no redundant
       // setMode (and a pre-send setMode can't race a not-yet-live session).
       const policy = writePolicyFor2(state.root);
-      assertedPolicy = policy;
+      run.assertedPolicy = policy;
       active = true;
       activeOrchestrator = handle;
       // PHASE 4 — wire the wake seam for the resumed run too (a resumed run can hit a quota wall).
@@ -3712,7 +3715,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // undefined sdk_session_id ⇒ the dep omits resumeSessionId ⇒ a fresh session (the sidecar's
         // expired-transcript fallback emits a non-fatal resume_fallback frame and runs the step fresh).
         await deps.startSession({
-          cwd,
+          cwd: run.cwd,
           permissionMode: policy,
           ...(state.sdk_session_id !== undefined ? { resumeSessionId: state.sdk_session_id } : {}),
         });
@@ -3720,7 +3723,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         await resumeActionForPhase(scope.plan);
       } catch (err) {
         markTerminal("resume() threw");
-        awaiting = { tag: "idle" };
+        run.awaiting = { tag: "idle" };
         await endSdkSession();
         throw err;
       }
@@ -3750,15 +3753,15 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // we send the continuation prompt INLINE and never interrupt. The reducer transitions the tree
       // exactly as the live path does (leaf→executing / open→split); its resolvePermission effect
       // against the synthetic id is dropped by runEffect's resumed short-circuit.
-      if (resumedGate) {
-        resumedGate = false;
+      if (run.resumedGate) {
+        run.resumedGate = false;
         switch (gate.kind) {
           case "leaf": {
             // The reducer moves the leaf to executing (policy → acceptEdits at the dispatch seam),
             // resolving the synthetic id is a no-op. Then instruct the resumed conversation to
             // implement the approved plan and arm `exec` (arm-before-send) for the exec result.
             await dispatch({ type: "APPROVE", path });
-            awaiting = { tag: "exec", path, buffer: "" };
+            run.awaiting = { tag: "exec", path, buffer: "" };
             diag(`resumed approve (leaf) at "${pathKey(path)}": sending implement prompt, armed exec`);
             await deps.sendMessage(resumedLeafApprovalPrompt(gate.planPath));
             return;
@@ -3770,7 +3773,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
             // fire the first child's recon INLINE — nothing is in flight, so no resuming hold / no
             // interrupt (unlike the live decomposition approve).
             const read = deps.readPlanTreeFile;
-            const planText = read ? await read(cwd, planName2(path)) : null;
+            const planText = read ? await read(run.cwd, planName2(path)) : null;
             if (planText === null) {
               throw new Error(
                 `resumed approve (decomposition) at "${pathKey(path)}": decomposition plan ${planName2(path)} not found on disk — cannot re-derive children`,
@@ -3794,7 +3797,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
               if (err instanceof PlanValidationError) {
                 diag(`resumed approve (decomposition) at "${pathKey(path)}": on-disk master malformed, denying for redraft — ${err.message}`);
                 await dispatch({ type: "DECOMPOSITION_CHANGES_REQUESTED", path, feedback: err.message });
-                awaiting = { tag: "idle" };
+                run.awaiting = { tag: "idle" };
                 await deps.sendMessage(resumedDecompositionChangesPrompt(err.message));
                 return;
               }
@@ -3804,8 +3807,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
             // not — the node was still open/awaiting-decomposition-approval, artifact-free at rest).
             const parentKey = pathKey(path);
             const childPrefix = parentKey === "" ? "" : `${parentKey}.`;
-            mandates = new Map([
-              ...[...mandates.entries()].filter(([k]) => !k.startsWith(childPrefix)),
+            run.mandates = new Map([
+              ...[...run.mandates.entries()].filter(([k]) => !k.startsWith(childPrefix)),
               ...parsed.subplans.map(
                 (s): [PathKey, Mandate] => [
                   pathKey([...path, s.nn]),
@@ -3823,7 +3826,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
             // (arm-before-send). activePath() reads the freshly-materialized first child.
             const nextPath = activePath();
             if (nextPath !== null) {
-              awaiting = { tag: "recon", path: nextPath, buffer: "" };
+              run.awaiting = { tag: "recon", path: nextPath, buffer: "" };
               diag(`resumed approve (decomposition) at "${pathKey(path)}": firing recon for first child "${pathKey(nextPath)}"`);
               await deps.sendMessage(
                 subReconPrompt(
@@ -3902,7 +3905,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           // the user just approved. Arm "exec" (capturing the path at arm time) so the NEXT
           // `result` (exec completion) is caught.
           await dispatch({ type: "APPROVE", path });
-          awaiting = { tag: "exec", path, buffer: "" };
+          run.awaiting = { tag: "exec", path, buffer: "" };
           return;
         }
       }
@@ -3930,19 +3933,19 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // resolvePermission-deny effect against the synthetic id is dropped by runEffect — and we send
       // an explicit redraft prompt carrying the feedback INLINE. The next signal is the re-draft's
       // fresh ExitPlanMode hold (a permission frame, not a `result`), so arm idle.
-      if (resumedGate) {
-        resumedGate = false;
+      if (run.resumedGate) {
+        run.resumedGate = false;
         switch (gate.kind) {
           case "decomposition": {
             await dispatch({ type: "DECOMPOSITION_CHANGES_REQUESTED", path, feedback });
-            awaiting = { tag: "idle" };
+            run.awaiting = { tag: "idle" };
             diag(`resumed requestChanges (decomposition) at "${pathKey(path)}": sending redraft prompt`);
             await deps.sendMessage(resumedDecompositionChangesPrompt(feedback));
             return;
           }
           case "leaf": {
             await dispatch({ type: "REQUEST_CHANGES", path, feedback });
-            awaiting = { tag: "idle" };
+            run.awaiting = { tag: "idle" };
             diag(`resumed requestChanges (leaf) at "${pathKey(path)}": sending redraft prompt`);
             await deps.sendMessage(resumedLeafChangesPrompt(feedback));
             return;
@@ -3955,14 +3958,14 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           // The reducer denies the held permission with the feedback, discards the stale child
           // parse, and moves the node back to open/decomposing for the same-turn redraft.
           await dispatch({ type: "DECOMPOSITION_CHANGES_REQUESTED", path, feedback });
-          awaiting = { tag: "idle" };
+          run.awaiting = { tag: "idle" };
           return;
         }
         case "leaf": {
           // The reducer denies with feedback; the node re-drafts IN PLACE (active path fixed,
           // redraftCount incremented).
           await dispatch({ type: "REQUEST_CHANGES", path, feedback });
-          awaiting = { tag: "idle" };
+          run.awaiting = { tag: "idle" };
           return;
         }
       }
@@ -3973,7 +3976,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       await dispatch({ type: "CLARIFY_ANSWERED", toolUseId, answers });
       // INTENT-WATCHDOG RESUME: the clarify hold resolved, the intent turn is generating again —
       // re-arm the paused watchdog (see the AskUserQuestion ingest branch).
-      if (awaiting.tag === "intent") armTurnWatchdog("intent", []);
+      if (run.awaiting.tag === "intent") armTurnWatchdog("intent", []);
     },
 
     approvePrototype: async (opts) => {
@@ -3992,21 +3995,21 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // DRIVER-OWNED round increment (see the prototypeRound discipline note): count the refine
       // request itself, so the NEXT gate is minted round prototypeRound+1 regardless of clarifier
       // output.
-      prototypeRound++;
+      run.prototypeRound++;
       await dispatch({ type: "PROTOTYPE_REFINED", feedback });
       // COMBINED apply-and-approve: arm the auto-approve latch LAST, only after the dispatch above
       // has resolved — so a dispatch throw can never leave the flag set with no turn in flight.
       // The intent-ingestion branch reads this flag when the revised prototype block arrives and
       // auto-resolves the gate forward (PROTOTYPE_READY → PROTOTYPE_APPROVED) instead of surfacing
       // another review round.
-      if (opts?.autoApprove) autoApproveNext = true;
+      if (opts?.autoApprove) run.autoApproveNext = true;
       // Re-arm the intent turn (same genesis arm + watchdog) BEFORE sending. The session is idle
       // — the intent turn that surfaced this gate already ended — so nothing is in flight to
       // interrupt; the refine prompt simply opens the next visual round's turn.
-      awaiting = { tag: "intent", buffer: "" };
+      run.awaiting = { tag: "intent", buffer: "" };
       armTurnWatchdog("intent", []);
       diag(
-        `refinePrototype: round=${prototypeRound}, autoApprove=${opts?.autoApprove === true}, re-armed intent, sending refine prompt`,
+        `refinePrototype: round=${run.prototypeRound}, autoApprove=${opts?.autoApprove === true}, re-armed intent, sending refine prompt`,
       );
       await deps.sendMessage(refinePrototypePrompt(feedback));
     },
@@ -4062,15 +4065,15 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // right-siblings); left-siblings and their subtrees are never matched.
       for (const resetKey of resetKeys) {
         const subtreePrefix = `${resetKey}.`;
-        for (const k of [...summaries.keys()]) {
-          if (k === resetKey || k.startsWith(subtreePrefix)) summaries.delete(k);
+        for (const k of [...run.summaries.keys()]) {
+          if (k === resetKey || k.startsWith(subtreePrefix)) run.summaries.delete(k);
         }
       }
       // Drive the target's recon turn. The session is idle (the gate was a post-completion hold), so
       // the recon prompt opens a fresh turn — no resuming hold, no interrupt. Arm BEFORE sending.
       const nextPath = activePath();
       if (nextPath !== null) {
-        awaiting = { tag: "recon", path: nextPath, buffer: "" };
+        run.awaiting = { tag: "recon", path: nextPath, buffer: "" };
         diag(`refineAcceptance: reset "${pathKey(target)}" + right-siblings, armed recon at "${pathKey(nextPath)}"`);
         await deps.sendMessage(
           subReconPrompt(
@@ -4098,12 +4101,12 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // sentinel — the sidecar holds NO resolver for it, so purging it would call a dead id. Skip the
       // purge for synthetic ids (clear the local state + the resumed flag). Real held ids purge as
       // before.
-      resumedGate = false;
-      if (heldPermissionId && heldPermissionId.startsWith("resumed:")) {
-        heldPermissionId = null;
-      } else if (heldPermissionId) {
-        const id = heldPermissionId;
-        heldPermissionId = null;
+      run.resumedGate = false;
+      if (run.heldPermissionId && run.heldPermissionId.startsWith("resumed:")) {
+        run.heldPermissionId = null;
+      } else if (run.heldPermissionId) {
+        const id = run.heldPermissionId;
+        run.heldPermissionId = null;
         try {
           await deps.resolvePermission({
             id,
@@ -4135,9 +4138,9 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
 
     orchestrationActive: () => active,
 
-    resuming: () => awaiting.tag === "resuming",
+    resuming: () => run.awaiting.tag === "resuming",
 
-    quotaPaused: () => quotaPause !== null || quotaPausePending,
+    quotaPaused: () => run.quotaPause !== null || run.quotaPausePending,
 
     markQuotaPausePending: () => {
       // DA-I5 — set synchronously by the agent-stream listener the instant a quota_exceeded frame is
@@ -4145,7 +4148,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // quotaPaused() synchronously-correct for the same-tick agent-exit both listeners (index.ts +
       // main.ts) consult. Cleared whenever the pause resolves (clearQuotaPause: QUOTA_RESUMED,
       // cancel/teardown/markTerminal).
-      quotaPausePending = true;
+      run.quotaPausePending = true;
     },
 
     notifyAgentExit: () => {
@@ -4153,9 +4156,9 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // armed: record the exit and, if the resume timer already fired and was waiting on it, kick the
       // deferred resume (serialized through enqueueIngest, the timer-fired path). No-op otherwise
       // (a genuine end-of-run exit, or an exit while no pause is armed). Idempotent.
-      if (!quotaPause || quotaPause.exhausted) return;
-      if (quotaPause.priorExited) return;
-      quotaPause.priorExited = true;
+      if (!run.quotaPause || run.quotaPause.exhausted) return;
+      if (run.quotaPause.priorExited) return;
+      run.quotaPause.priorExited = true;
       diag("notifyAgentExit: prior paused session exited; re-checking deferred resume");
       void enqueueIngest(() => fireResume());
     },
@@ -4166,6 +4169,18 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // TEST-ONLY: register this handle's ingest-seen counter accessor so __ingestSeenForTest(handle) can
   // observe how many ingest thunks the queue actually invoked. Off the frozen interface (a side table).
   ingestSeenAccessors.set(handle, () => ingestSeen);
+
+  // TEST-ONLY (#2 cross-run-leak guard): expose the per-run transient sizes so a test can prove a
+  // FRESH run resets every per-run map/flag (no run-A summary/mandate/clarify/adjust bleeding into
+  // run B). These read the per-run transients directly; the leak class is closed by allocating a
+  // fresh bundle in start()/resume(), and this accessor is the falsifiable witness. Off the frozen
+  // interface (a side table).
+  runTransientAccessors.set(handle, () => ({
+    summaries: run.summaries.size,
+    mandates: run.mandates.size,
+    clarifyQuestions: run.clarifyQuestions.size,
+    adjustNotePresent: run.adjustNote !== null,
+  }));
 
   return handle;
 }
@@ -4179,6 +4194,30 @@ const ingestSeenAccessors = new WeakMap<OrchestratorHandle, () => number>();
 // unknown handle. NOT part of the frozen UI contract.
 export function __ingestSeenForTest(handle: OrchestratorHandle): number {
   return ingestSeenAccessors.get(handle)?.() ?? 0;
+}
+
+// TEST-ONLY (#2) — the per-run transient sizes snapshot shape + side table.
+interface RunTransientSizes {
+  summaries: number;
+  mandates: number;
+  clarifyQuestions: number;
+  adjustNotePresent: boolean;
+}
+const runTransientAccessors = new WeakMap<OrchestratorHandle, () => RunTransientSizes>();
+
+// TEST-ONLY (#2): read `handle`'s per-run transient sizes (summaries/mandates/clarifyQuestions map
+// sizes + whether an adjust note is pending). A fresh run MUST reset all of these — this is the
+// witness for the cross-run-leak guard. Returns the empty shape for an unknown handle. NOT part of
+// the frozen UI contract.
+export function __runTransientSizesForTest(handle: OrchestratorHandle): RunTransientSizes {
+  return (
+    runTransientAccessors.get(handle)?.() ?? {
+      summaries: 0,
+      mandates: 0,
+      clarifyQuestions: 0,
+      adjustNotePresent: false,
+    }
+  );
 }
 
 // ---- shared singleton + test hooks ----------------------------------------------------------

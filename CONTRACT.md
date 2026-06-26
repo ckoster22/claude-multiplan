@@ -782,6 +782,18 @@ divs we create** — it never re-wires the sanitized SVG content.
   matches the approved prototype.
 - **`settle()` ordering unchanged:** wrapping the SVG in `.mermaid-viewport > .mermaid-stage` adds
   no `<img>`, so `awaitImages` scroll-anchoring (§"`settle()` ordering") is unaffected.
+- **Generation-aware cooperative cancellation (Bug #12-core — additive, backward-compatible).**
+  `renderDiagrams(paneEl, isCurrent?)` and `settle(paneEl, imageTimeoutMs?, isCurrent?)` take an
+  optional **TRAILING** `isCurrent: () => boolean` predicate (NOT an options object — the positional
+  `settle(pane, 30)` and `settle(readingPaneEl)` callers must keep compiling). `settle` forwards it
+  to `renderDiagrams`. **Omitted ⇒ always-current**, so existing callers are byte-for-byte unchanged.
+  `renderDiagrams` checks it at three bail points — BEFORE each `mermaid.render` (a superseded pass
+  stops emitting diagrams), AFTER each `mermaid.render` resolves but BEFORE `el.replaceWith(box)` /
+  the controller build (a pass superseded WHILE awaiting render leaves the live DOM untouched and
+  builds no orphan controller; the `finally` still removes mermaid's transient container), and
+  BEFORE `_controllers.set` (a superseded pass never overwrites the current generation's controller
+  entry / wins the teardown race). These are **best-effort** cooperative guards around the async
+  `mermaid.render`, **not** compile-time invariants.
 
 ### Pure pan/zoom module (`src/render/panzoom.ts`)
 
@@ -809,6 +821,18 @@ command, never the DOM. `PlanRecord` is **UNCHANGED (11 keys)** — comments do 
 | `#sp-cancel` | inside `#sel-popover` | cancel button (hide + discard) |
 | `#sp-save` | inside `#sel-popover` | save (create mode) / clear-this-comment (view mode) |
 | `.cmt-hl` + `data-c="{id}"` | inside `#reading-pane` | committed highlight span(s); a multi-element selection yields **several sibling spans sharing one `data-c`** (never crosses element boundaries — no `surroundContents`). `.cmt-hl.active` is the hover/active variant. |
+
+> **Popover is plan-OWNED (Bug #7 — additive).** The `create`/`view` popover state captures the
+> `planPath` open at selection time. (1) **Save bail:** `#sp-save` is a no-op (never calls
+> `set_comments`) when the open plan has changed since capture (`state.planPath !== getPlanPath()`) —
+> the stashed range belongs to the old plan's DOM. (2) **`invalidatePopover(paneEl)`** (new facade
+> export, to be wired at the `renderInto` wipe sites in the `main.ts` reading-pane lane) routes
+> through `renderPopover` — preserving the
+> "`renderPopover` is the SOLE writer of `#sel-popover.hidden`/`#sp-quote`/`#sp-text`" invariant. It
+> **hides** the popover only on a **genuine plan-path change**; on a **same-plan live reload** (the
+> pane auto-reloads while a plan is built) it **PRESERVES** the in-progress draft (the typed `#sp-text`
+> is untouched) and **re-anchors** its stashed range to the freshly-rendered DOM. Safe to call on every
+> wipe; no-op for an uninitialized pane.
 
 ### New CSS tokens
 
@@ -3692,6 +3716,7 @@ the divergence lives entirely in `src/styles.css` behind `.conv-tool[data-status
 | `done` | Ultra-slim, borderless, dimmed one-liner: small **done-dot** (the `.conv-tool-status::before`, `background: var(--live)`) replaces the now-hidden `.conv-tool-status-text`; mono badge collapses to a tiny glyph; `.conv-tool-summary` keeps `nowrap`/`ellipsis`; `.conv-tool-chevron` is hidden and **revealed on `:hover` and while `.expanded`**; detail (`.conv-tool-body`) hidden until expanded. |
 | `running` | Prominent accent card (`background: var(--conv-tool-run-bg)`, `1px solid var(--accent-soft)`); bold mono `.conv-tool-name`; uppercase accent `.conv-tool-status` containing the live `.conv-tool-pulse` dot; chevron always visible. |
 | `error` | Danger treatment at the new density (`border: var(--conv-danger)`, `background: var(--conv-danger-soft)`); **never collapses** to the slim done treatment; `.conv-tool-result-error` color is **unchanged**. |
+| `interrupted` | A tool still `running` when its turn ended (its `tool_result` never landed — see the seq-scoped turn-end demotion in `stream.ts` `derive()`). Mirrors the muted, slim **done** treatment (borderless, dimmed, hover-reveal chevron, indented body) but is **NON-pulsing** (no `.conv-tool-pulse` is emitted — the guard is `node.status === "running"` only) and uses a **neutral faint dot** (`.conv-tool-status::before`, `background: var(--text-faint)`), deliberately **NOT** the green `--live` done-dot. Unlike done it **keeps** `.conv-tool-status-text` visible (faint italic `"interrupted"`). Carries the same slim head padding + badge sizing as the done sibling. |
 
 Shared: `.conv-tool-body { display: none }` / `.conv-tool.expanded .conv-tool-body { display: block }`
 (unchanged toggle); the done body is indented to align under the row content. The `.conv-stream`

@@ -11,17 +11,19 @@
 // #review-bar state (the old titlebar Prompt Feedback button + overlay have been removed).
 
 /**
- * The pure, derived state of the persistent #review-bar. Three modes:
+ * The pure, derived state of the persistent #review-bar. Four modes:
  *   - "hidden":  no pending reviews at all → the bar is not shown.
  *   - "viewing": the open plan IS a pending review's plan file → Submit is shown (acting on that
  *                review); Resume is hidden.
  *   - "summary": pending reviews exist but the user is browsing a non-reviewed plan (or nothing) →
  *                only a count label + Resume are shown; Submit is hidden (the pending review stays
  *                resumable but does not trap navigation).
+ *   - "submitting": a submit is already in flight (refinement of "viewing") → Submit DISABLED and
+ *                Approve HIDDEN so a fast double-click cannot fire a second submit. Bug #10.
  */
 export interface ReviewBarState {
   barVisible: boolean;
-  mode: "viewing" | "summary" | "hidden";
+  mode: "viewing" | "summary" | "hidden" | "submitting";
   label: string;
   submitVisible: boolean;
   submitDisabled: boolean;
@@ -61,6 +63,11 @@ export function applyReviewBarState(input: {
   // existing caller (and the existing snapshot) is byte-identical. Only affects approveVisible +
   // submitLabel in VIEWING mode; all other fields are unchanged for both sources.
   source?: "external" | "in-process";
+  // Bug #10: true while a submit is already in flight. Defaults to false so every existing caller
+  // (and the existing snapshot) is byte-identical. Only meaningful while VIEWING — a submit can only
+  // be in flight after clicking Submit on the viewed review — where it produces the "submitting"
+  // mode (Submit disabled, Approve hidden) so a fast double-click cannot double-submit.
+  submitInFlight?: boolean;
 }): ReviewBarState {
   const source = input.source ?? "external";
   if (input.pendingCount === 0) {
@@ -79,6 +86,22 @@ export function applyReviewBarState(input: {
   if (input.viewing) {
     const n = input.viewedCommentCount;
     const inProcess = source === "in-process";
+    // Bug #10: a submit is already in flight. Lock the bar — Submit disabled, Approve hidden — so a
+    // fast double-click cannot fire a second submit before the first round-trip completes. This is a
+    // refinement of "viewing" (submit only exists while viewing), so it lives inside this branch.
+    if (input.submitInFlight) {
+      return {
+        barVisible: true,
+        mode: "submitting",
+        label: "Submitting…",
+        submitVisible: true,
+        submitDisabled: true,
+        resumeVisible: false,
+        clearVisible: false,
+        approveVisible: false,
+        submitLabel: inProcess ? "Request changes" : "Submit",
+      };
+    }
     return {
       barVisible: true,
       mode: "viewing",

@@ -17,6 +17,7 @@ vi.mock("./render", () => ({
   onCommentCountChanged: vi.fn(),
   loadCommentsFor: vi.fn(async () => []),
   clearAllComments: vi.fn(),
+  invalidatePopover: vi.fn(),
 }));
 vi.mock("./render/scroll", () => ({
   captureAnchor: vi.fn(),
@@ -32,9 +33,12 @@ import {
   suppressConversationFlip,
   placeholderVisible,
   shouldClearPlaceholderOnExit,
+  computeAffordance,
+  openPlan,
   __setRunPlaceholderForTest,
 } from "./main";
 import { scrollToHeading } from "./render/scroll";
+import { settle, invalidatePopover } from "./render";
 import { invoke } from "@tauri-apps/api/core";
 import type { TocEntry } from "./render";
 import { asAbsPath, asStem, type PlanRecord, type SidebarCtx } from "./types";
@@ -932,6 +936,28 @@ describe("shouldClearPlaceholderOnExit — clears ONLY a placeholder no ACTIVE o
   });
 });
 
+// ---- Phase D #9: the Affordance precedence (prototype > acceptance > review > resume) -----------
+
+describe("computeAffordance — prototype > acceptance > review > resume (at most ONE active)", () => {
+  // Falsifiability (verified): reordering any pair of branches in computeAffordance flips the matching
+  // precedence assertion → RED.
+  it("prototype outranks everything", () => {
+    expect(computeAffordance({ prototype: true, acceptance: true, review: true, resume: true })).toBe("prototype");
+  });
+  it("acceptance outranks review + resume", () => {
+    expect(computeAffordance({ prototype: false, acceptance: true, review: true, resume: true })).toBe("acceptance");
+  });
+  it("review outranks resume", () => {
+    expect(computeAffordance({ prototype: false, acceptance: false, review: true, resume: true })).toBe("review");
+  });
+  it("resume is the lowest non-none affordance", () => {
+    expect(computeAffordance({ prototype: false, acceptance: false, review: false, resume: true })).toBe("resume");
+  });
+  it("none when no signal is set", () => {
+    expect(computeAffordance({ prototype: false, acceptance: false, review: false, resume: false })).toBe("none");
+  });
+});
+
 // ---- Bug B fix: the onActivity conversation-tab flip suppression -------------------------------
 
 describe("suppressConversationFlip — keyed STRICTLY on pendingApproval", () => {
@@ -956,5 +982,101 @@ describe("suppressConversationFlip — keyed STRICTLY on pendingApproval", () =>
     // Extra transient-gate fields must be IGNORED — only pendingApproval suppresses.
     const snap = { pendingApproval: null, pendingClarify: { toolUseId: "t1" } };
     expect(suppressConversationFlip(snap)).toBe(false);
+  });
+});
+
+// ---- Phase E #12 / #7b — reading-pane render wiring (cooperative cancellation + popover invalidate) -
+//
+// These pin the PRODUCTION CALL SITES that activate two render-core fixes:
+//   #12  settle(pane, _, isCurrent) must receive a predicate tied to the LIVE renderGuard, so an
+//        overlapping open/reload can cancel a superseded mermaid render mid-flight. (The cancellation
+//        SEMANTICS — renderDiagrams bailing on isCurrent()===false — are falsifiably covered in
+//        src/render/mermaid.test.ts; here we assert main.ts wires a real, generation-aware predicate
+//        rather than the always-current default, and that supersession flips it.)
+//   #7b  invalidatePopover(readingPaneEl) must be called at each reading-pane wipe+repopulate so a
+//        cross-plan draft is discarded (and a same-plan reload re-anchored). The DISCARD/PRESERVE
+//        semantics live in src/render/comments.test.ts; here we assert the main-level call happens.
+//
+// We boot the real main.ts against the mocked ./render facade (settle/invalidatePopover are vi.fn
+// spies) and drive the EXPORTED openPlan, so the assertions read the real call sites, not a re-impl.
+describe("Phase E #12/#7b — openPlan wires settle cancellation + popover invalidation", () => {
+  function bootReaderDom(): void {
+    vi.mocked(invoke).mockImplementation((cmd: string) => {
+      switch (cmd) {
+        case "read_plan_contents":
+          return Promise.resolve("# heading\n\nbody text\n");
+        case "get_comment_count":
+          return Promise.resolve(0);
+        case "list_pending_reviews":
+          return Promise.resolve([]);
+        case "resolve_cwds":
+          return Promise.resolve({});
+        case "read_plan_transcript":
+          return Promise.resolve({ found: false, path: null, cwd: null, session_id: null, lines: [] });
+        case "list_plans":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(undefined);
+      }
+    });
+    document.body.innerHTML = `
+      <div class="tab-row"><span class="tab active" data-tab="plans">Plans</span></div>
+      <div class="tab-pane active" id="tab-plans"><span id="plan-count"></span>
+        <div class="plan-list" id="plan-list"></div></div>
+      <div class="tab-pane" id="tab-contents"><div class="toc-list" id="toc-list"></div></div>
+      <main id="reader-scroll">
+        <div class="doc-header"><div id="doc-filename"></div><div id="doc-src"></div></div>
+        <div class="resume-banner hidden" id="resume-banner"><span id="resume-banner-msg"></span>
+          <button id="resume-plan-btn" class="hidden"></button>
+          <span class="resume-confirm hidden" id="resume-confirm"><span id="resume-hazard"></span>
+            <button id="resume-confirm-btn"></button><button id="resume-cancel-btn"></button></span></div>
+        <div class="review-bar hidden" id="review-bar"><span id="review-bar-label"></span>
+          <button id="review-submit" disabled></button><button id="review-clear"></button>
+          <button id="review-approve" class="hidden"></button><button id="review-resume"></button></div>
+        <div class="md" id="reading-pane"></div>
+      </main>`;
+    (document.querySelector("#reader-scroll") as HTMLElement).scrollTo = () => {};
+    window.dispatchEvent(new Event("DOMContentLoaded"));
+  }
+
+  const A = asAbsPath("/home/u/.claude/plans/a.md");
+  const B = asAbsPath("/home/u/.claude/plans/b.md");
+
+  it("#12: settle receives an isCurrent predicate tied to the live renderGuard (a later open flips it false)", async () => {
+    bootReaderDom();
+    vi.mocked(settle).mockClear();
+
+    await openPlan(A, asStem("a"));
+
+    // settle was invoked WITH a 3rd-arg predicate — NOT the always-current default (undefined).
+    const calls = vi.mocked(settle).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const isCurrent = calls[calls.length - 1][2] as undefined | (() => boolean);
+    expect(typeof isCurrent).toBe("function");
+    // While A is the current render, its predicate reports true (this render may still mutate the pane).
+    expect(isCurrent!()).toBe(true);
+
+    // Open B: bumps the render generation, superseding A. A's captured predicate must now report false,
+    // so A's in-flight renderDiagrams would cooperatively bail instead of corrupting B's pane. (If the
+    // call site passed `() => true` or omitted the arg, this flip could not happen — the falsification.)
+    await openPlan(B, asStem("b"));
+    expect(isCurrent!()).toBe(false);
+  });
+
+  it("#7b: opening a plan invalidates the pane popover, and a switch A→B re-invalidates (no cross-plan draft survives)", async () => {
+    bootReaderDom();
+    const pane = document.querySelector("#reading-pane");
+    vi.mocked(invalidatePopover).mockClear();
+
+    await openPlan(A, asStem("a"));
+    // The wipe+repopulate ran invalidatePopover against the reading pane (discard/preserve decided in
+    // render/comments by comparing the draft's planPath to the now-current openPath()).
+    expect(vi.mocked(invalidatePopover)).toHaveBeenCalledWith(pane);
+    const afterA = vi.mocked(invalidatePopover).mock.calls.length;
+
+    await openPlan(B, asStem("b"));
+    // Switching plans re-runs the wipe → invalidate; in production this is where a draft owned by A is
+    // discarded (its planPath !== openPath()===B), so no cross-plan popover survives the switch.
+    expect(vi.mocked(invalidatePopover).mock.calls.length).toBeGreaterThan(afterA);
   });
 });

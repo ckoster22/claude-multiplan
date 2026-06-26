@@ -304,8 +304,13 @@ type PopoverState =
       blockLine: number | null;
       blockEndLine: number | null;
       occurrence: number;
+      // Bug #7: the plan this draft was captured against (getPlanPath() at selection time). A save
+      // bails if the open plan has changed (saving would anchor the comment to the WRONG plan), and
+      // the invalidate seam discards the draft on a genuine plan-path change but preserves it on a
+      // same-plan live reload.
+      planPath: string | null;
     }
-  | { kind: "view"; id: number };
+  | { kind: "view"; id: number; planPath: string | null };
 
 // A capture snapshot taken at mouseup (everything needed to build a record on save).
 interface Capture {
@@ -529,6 +534,7 @@ export function initComments(
       blockLine: capture.blockLine,
       blockEndLine: capture.blockEndLine,
       occurrence: capture.occurrence,
+      planPath: getPlanPath(), // own this draft to the plan open at selection time (Bug #7)
     });
   });
 
@@ -540,7 +546,7 @@ export function initComments(
     const id = Number(hl.dataset.c);
     if (!Number.isInteger(id)) return;
     e.stopPropagation();
-    renderPopover({ kind: "view", id });
+    renderPopover({ kind: "view", id, planPath: getPlanPath() }); // own to the open plan (Bug #7)
   });
 
   cancelEl?.addEventListener("click", () => renderPopover({ kind: "hidden" }));
@@ -548,6 +554,13 @@ export function initComments(
   saveEl?.addEventListener("click", () => {
     const path = getPlanPath();
     if (path === null) {
+      renderPopover({ kind: "hidden" });
+      return;
+    }
+    // Bug #7a: the draft/view is OWNED by the plan it was captured against. If the open plan
+    // changed out from under it (path !== state.planPath), the stashed range belongs to the OLD
+    // plan's DOM — saving would anchor the comment to the wrong plan. Discard, never save.
+    if ((state.kind === "create" || state.kind === "view") && state.planPath !== path) {
       renderPopover({ kind: "hidden" });
       return;
     }
@@ -583,11 +596,48 @@ export function initComments(
     renderPopover({ kind: "hidden" });
   });
 
+  // ---- Bug #7b: plan-owned popover invalidation (to be called by the facade at a renderInto wipe;
+  //       the caller wiring lives in the main.ts reading-pane lane and is not in place yet) ----
+  //
+  // The popover lives OUTSIDE #reading-pane (~line 362), so it SURVIVES the pane's innerHTML wipe.
+  // The app auto-reloads a plan WHILE it is being built, so on a same-plan reload we must PRESERVE
+  // the user's in-progress draft — hiding it on every wipe would destroy that draft each reload (a
+  // regression). We therefore invalidate ONLY on a genuine plan-path CHANGE; for a same-plan reload
+  // we keep the draft and re-anchor its stashed range against the freshly-rendered DOM (the old
+  // range points at detached nodes). renderPopover stays the SOLE writer of #sel-popover.hidden /
+  // #sp-quote / #sp-text: the hide path routes through it, while the same-plan re-anchor mutates
+  // ONLY state.range (and repositions), never those DOM elements — so the typed comment in #sp-text
+  // is left untouched.
+  function invalidateOrReanchor(): void {
+    if (state.kind === "hidden") return; // nothing to preserve or discard
+    if (state.planPath !== getPlanPath()) {
+      // Genuine plan-path change: the draft/view belonged to a DIFFERENT plan. Discard it.
+      renderPopover({ kind: "hidden" });
+      return;
+    }
+    // Same-plan reload: PRESERVE the draft. Re-anchor a create draft's range so a later Save wraps
+    // the live nodes (a view draft holds only an id, which applyComments re-highlights on the fresh
+    // pane — nothing to re-anchor). If the quoted text no longer exists after the reload, keep the
+    // stale range; Save still persists a correct record that re-anchors on the next applyComments.
+    if (state.kind === "create") {
+      const root =
+        state.blockLine === null
+          ? paneEl
+          : paneEl.querySelector<HTMLElement>(`[data-source-line="${state.blockLine}"]`);
+      const fresh = findRangeForRecord(root, state.quote, state.occurrence);
+      if (fresh) {
+        state = { ...state, range: fresh };
+        if (popEl) positionPopover(popEl, fresh);
+      }
+    }
+  }
+
   // Expose loadCommentsFor + clearAll to the facade-level exports (main.ts calls them via the
   // facade). Each is a per-pane closure (over `cache`, `io`, `paneEl`, `fireCountChanged`) looked
   // up by pane element so the facade re-exports a single thin wrapper without leaking the cache.
   loaderRegistry.set(paneEl, loadCommentsFor);
   clearAllRegistry.set(paneEl, clearAll);
+  invalidateRegistry.set(paneEl, invalidateOrReanchor);
 }
 
 // ---- Facade-level loader registry ----------------------------------------------------------
@@ -618,6 +668,27 @@ export function clearAllComments(paneEl: HTMLElement, path: string): Promise<voi
   const clear = clearAllRegistry.get(paneEl);
   if (!clear) return Promise.resolve();
   return clear(path);
+}
+
+// ---- Facade-level popover-invalidation registry (Bug #7b; mirrors clearAllRegistry) ----------
+//
+// renderPopover is closure-private inside initComments, so we expose the invalidate seam through
+// the same module-level per-pane lookup pattern rather than letting the facade toggle `.hidden`
+// directly (which would break the "renderPopover is the SOLE writer of #sel-popover.hidden"
+// invariant). The closure decides, per its OWN draft, whether to discard (genuine plan-path change)
+// or preserve+re-anchor (same-plan reload).
+const invalidateRegistry = new WeakMap<HTMLElement, () => void>();
+
+/**
+ * Invalidate (or re-anchor) the popover for `paneEl` after a renderInto wipe. On a genuine
+ * plan-path CHANGE it hides the popover (the draft belonged to the now-closed plan); on a same-plan
+ * live reload it PRESERVES the in-progress draft and re-anchors it to the fresh DOM. Safe to call on
+ * every wipe — the same-plan branch is what makes that non-destructive. No-op for a pane that was
+ * never initialized via initComments.
+ */
+export function invalidatePopover(paneEl: HTMLElement): void {
+  const fn = invalidateRegistry.get(paneEl);
+  if (fn) fn();
 }
 
 // ---- Small pure helpers (snippet clamp + occurrence-before counting) -----------------------

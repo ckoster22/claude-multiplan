@@ -25,7 +25,7 @@ export type { TocEntry } from "./toc";
 // Sub-Plan 02 — highlight/comment surface. main.ts talks only to this facade for the comment
 // feature; all popover/highlight/anchoring logic lives behind it in `./comments`. renderInto
 // stays a pure transform (NO highlight logic added here).
-export { applyComments, initComments, onCommentCountChanged, loadCommentsFor, clearAllComments } from "./comments";
+export { applyComments, initComments, onCommentCountChanged, loadCommentsFor, clearAllComments, invalidatePopover } from "./comments";
 export type { CommentsIO } from "./comments";
 
 // The plan dir is captured at renderInto time and consumed by settle(), so the
@@ -71,9 +71,13 @@ export function renderInto(
 export async function settle(
   paneEl: HTMLElement,
   imageTimeoutMs?: number,
+  // Bug #12-core: cooperative-cancellation predicate threaded down to renderDiagrams. A TRAILING
+  // optional (NOT an options object) so the positional callers — settle(pane, 30) and the five
+  // settle(readingPaneEl) sites in main.ts — keep compiling untouched. Omitted ⇒ always-current.
+  isCurrent?: () => boolean,
 ): Promise<void> {
   const planDir = planDirs.get(paneEl) ?? "";
   await resolveLocalImages(paneEl, planDir);
-  await renderDiagrams(paneEl);
+  await renderDiagrams(paneEl, isCurrent);
   await awaitImages(paneEl, imageTimeoutMs);
 }

@@ -1262,6 +1262,44 @@ figcaption { font-size: 11px; color: var(--text-dim); text-align: center; margin
 .conv-tool[data-status="error"] .conv-tool-chevron { opacity: 1; }
 .conv-tool[data-status="error"] .conv-tool-body { padding: 0 9px 8px; }
 
+/* INTERRUPTED — a tool still running when its turn ended (its tool_result never landed). It mirrors
+   the muted, slim DONE treatment (borderless, dimmed, hover-reveal chevron, indented body) so an
+   abandoned call de-emphasizes rather than lingering — but it is NON-pulsing (no .conv-tool-pulse is
+   emitted for it) and uses a NEUTRAL faint dot, deliberately NOT the green --live done-dot. Unlike
+   done it KEEPS the status label visible (a faint italic "interrupted") so the abandonment reads as
+   ended, not spinning. It must carry the same slim head padding + badge sizing as its siblings;
+   without this rule the row would fall back to the bare skeleton (no padding / unsized badge) and
+   render broken. */
+.conv-tool[data-status="interrupted"] {
+  border: 0; background: transparent; border-radius: 6px;
+}
+.conv-tool[data-status="interrupted"] .conv-tool-head {
+  padding: 1px 7px; min-height: 20px; font-size: 11.5px; color: var(--text-faint);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.conv-tool[data-status="interrupted"] .conv-tool-head:hover { background: var(--code-bg); color: var(--text-dim); }
+.conv-tool[data-status="interrupted"] .conv-tool-badge {
+  width: 13px; height: 13px; border-radius: 0; background: transparent;
+  color: var(--text-dim); font-size: 10px;
+}
+.conv-tool[data-status="interrupted"] .conv-tool-name { font-family: var(--mono); color: var(--text-dim); }
+/* Neutral (faint) status dot — deliberately NOT the green --live done-dot — precedes the label. */
+.conv-tool[data-status="interrupted"] .conv-tool-status { color: var(--text-faint); }
+.conv-tool[data-status="interrupted"] .conv-tool-status::before {
+  content: ""; flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%;
+  background: var(--text-faint); opacity: 0.7;
+}
+.conv-tool[data-status="interrupted"] .conv-tool-status-text { font-style: italic; opacity: 0.85; }
+/* Chevron hidden by default, revealed on hover + while expanded (mirrors done). */
+.conv-tool[data-status="interrupted"] .conv-tool-chevron { font-size: 10px; opacity: 0; }
+.conv-tool[data-status="interrupted"] .conv-tool-head:hover .conv-tool-chevron,
+.conv-tool[data-status="interrupted"].expanded .conv-tool-chevron { opacity: 1; }
+.conv-tool[data-status="interrupted"] .conv-tool-body { padding: 0 7px 3px 25px; }
+.conv-tool[data-status="interrupted"] .conv-tool-input,
+.conv-tool[data-status="interrupted"] .conv-tool-result {
+  margin: 1px 0; font-size: 11px; color: var(--text-dim);
+}
+
 /* ---- best-effort Skill chip (observed-name only) ---- */
 .conv-chip {
   flex: 0 0 auto; padding: 1px 7px; border-radius: 10px;

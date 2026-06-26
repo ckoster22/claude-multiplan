@@ -151,6 +151,28 @@ describe("render — collapsible tool row exposes args/result via textContent", 
     expect(row.getAttribute("data-status")).toBe("done");
     expect(row.querySelector(".conv-tool-pulse")).toBeNull();
   });
+
+  it("an INTERRUPTED tool row (running at turn end, never resulted) is non-pulsing with a distinct label", () => {
+    // Bug #3: a tool_use whose result never lands before the turn completes derives "interrupted"
+    // (stream.ts), so its row must NOT pulse and must carry a label distinct from "running…".
+    const m = new ConversationModel();
+    m.appendStream({ seq: 1, kind: "tool_use", id: "t1", tool: "Bash",
+                     input: "sleep 99", parent_tool_use_id: null });
+    // The turn completes with NO tool_result for t1 → derive() demotes it to "interrupted".
+    m.appendStream({ seq: 2, kind: "result", subtype: "success", is_error: false,
+                     result: "ok", num_turns: 1, duration_ms: 5, total_cost_usd: 0, session_id: "s" });
+    renderModel(m);
+
+    const row = host.querySelector(".conv-tool")!;
+    expect(row.getAttribute("data-status")).toBe("interrupted");
+    // FALSIFY: if the pulse guard matched anything other than "running" → a pulse dot appears → RED.
+    expect(row.querySelector(".conv-tool-pulse")).toBeNull();
+    // The status label is distinct from the running label (so the row reads as ended, not spinning).
+    const label = row.querySelector(".conv-tool-status-text")?.textContent;
+    // FALSIFY: omit the "interrupted" arm in statusLabel → it falls through to "done" → RED.
+    expect(label).toBe("interrupted");
+    expect(label).not.toBe("running…");
+  });
 });
 
 describe("render — subagent group gets the accent border container", () => {
