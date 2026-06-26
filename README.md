@@ -83,6 +83,8 @@ bash scripts/install.sh
 | `npm run tauri build`                | Build a distributable `.app` / `.dmg`.         |
 | `npm run build:sidecar`              | Build the `agent-driver` sidecar binary (run automatically by `tauri dev`/`build`). |
 | `npm run mock`                       | Token-free visual harness in a browser (`http://localhost:1421`). |
+| `npm run mock-animate`               | Mock harness with the scrubbable, time-driven "Trailhead" walkthrough of the multiplan flow (`MOCK_ANIMATE=1`). |
+| `npm run mock-annotate`              | Mock-animate in author mode for marking up the demo with pen/arrow/box annotations (`MOCK_ANNOTATE=1`); see the annotation section below. |
 
 The DOM selector contract and the Tauri command/event surface (including the nested-hierarchy `PlanRecord` fields and the `set_tree_collapsed` command) are documented in [`CONTRACT.md`](CONTRACT.md).
 
