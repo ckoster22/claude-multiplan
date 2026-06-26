@@ -1,4 +1,4 @@
-# Hand-off Contract — Claude Code Plan Renderer
+# Hand-off Contract — Claude Multiplan
 
 Frozen by **Sub-Plan 01**. Sub-Plans 02 (rendering) and 03 (cwd resolver + read/unread)
 build against this surface and MUST NOT renegotiate it. Three sections:

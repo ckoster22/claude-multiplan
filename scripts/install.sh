@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds Claude Plan Renderer and installs it into /Applications,
+# Builds Claude Multiplan and installs it into /Applications,
 # replacing any existing copy. No sudo required.
 
 # Resolve this script's directory so it works from any cwd, then cd to repo root.
@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-APP_NAME="Claude Plan Renderer.app"
+APP_NAME="Claude Multiplan.app"
 BUILT_APP="${REPO_ROOT}/src-tauri/target/release/bundle/macos/${APP_NAME}"
 DEST_APP="/Applications/${APP_NAME}"
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Claude Plan Renderer",
+  "productName": "Claude Multiplan",
   "version": "0.1.0",
-  "identifier": "com.planreader.app",
+  "identifier": "com.claudemultiplan.app",
   "build": {
     "beforeDevCommand": "npm run build:sidecar && npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Claude Plan Renderer",
+        "title": "Claude Multiplan",
         "width": 1180,
         "height": 760,
         "minWidth": 720,

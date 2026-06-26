@@ -1,4 +1,4 @@
-# Claude Plan Renderer
+# Claude Multiplan
 
 macOS desktop app (Tauri v2) that browses and live-renders Claude Code plan markdown files from `~/.claude/plans/`. The sidebar lists plans newest-first with each plan's originating working directory and a bold title when it has unread edits; the reading pane renders full-fidelity markdown (mermaid, images, links, code) and auto-reloads in place when a plan changes on disk.
 
