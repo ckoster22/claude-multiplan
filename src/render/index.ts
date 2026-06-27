@@ -22,7 +22,7 @@ import "highlight.js/styles/github-dark.css";
 export { extractToc } from "./toc";
 export type { TocEntry } from "./toc";
 
-// Sub-Plan 02 — highlight/comment surface. main.ts talks only to this facade for the comment
+// highlight/comment surface. main.ts talks only to this facade for the comment
 // feature; all popover/highlight/anchoring logic lives behind it in `./comments`. renderInto
 // stays a pure transform (NO highlight logic added here).
 export { applyComments, initComments, onCommentCountChanged, loadCommentsFor, clearAllComments, invalidatePopover } from "./comments";
@@ -32,6 +32,8 @@ export type { CommentsIO } from "./comments";
 // caller doesn't have to thread it through both calls.
 const planDirs = new WeakMap<HTMLElement, string>();
 
+// INVARIANT[renderinto-is-pure-sync-transform] (convention): renderInto does only the synchronous markdown→HTML transform; it starts no async asset/highlight work.
+//   prevents: scroll-restore running against a layout still shifting from in-flight async assets.
 /**
  * Synchronously render markdown into the pane. NO async work is started here —
  * local image resolution happens in settle() — so the caller's first applyDelta()
@@ -71,13 +73,17 @@ export function renderInto(
 export async function settle(
   paneEl: HTMLElement,
   imageTimeoutMs?: number,
-  // Bug #12-core: cooperative-cancellation predicate threaded down to renderDiagrams. A TRAILING
+  // cooperative-cancellation predicate threaded down to renderDiagrams. A TRAILING
   // optional (NOT an options object) so the positional callers — settle(pane, 30) and the five
   // settle(readingPaneEl) sites in main.ts — keep compiling untouched. Omitted ⇒ always-current.
   isCurrent?: () => boolean,
 ): Promise<void> {
   const planDir = planDirs.get(paneEl) ?? "";
+  // INVARIANT[settle-resolves-images-before-awaiting-them] (runtime-guard): settle resolves local image data: URLs before renderDiagrams and before awaitImages, so no <img> is awaited holding an empty placeholder src.
+  //   prevents: awaitImages treating an unresolved placeholder as complete, drifting the restored scroll.
   await resolveLocalImages(paneEl, planDir);
+  // INVARIANT[settle-forwards-cancellation] (runtime-guard): settle threads its isCurrent predicate straight into renderDiagrams.
+  //   prevents: a cancellable settle that still runs a superseded mermaid pass.
   await renderDiagrams(paneEl, isCurrent);
   await awaitImages(paneEl, imageTimeoutMs);
 }

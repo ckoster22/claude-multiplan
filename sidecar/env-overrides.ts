@@ -27,6 +27,8 @@ export function isEffortLevel(v: unknown): v is OptionOverrides["effort"] {
 /** Map process env → session-option overrides. Pure: pass `process.env` in.
  *  - AGENT_EFFORT: must be a valid SDK effort level, else omitted entirely.
  *  - AGENT_MODEL: any non-empty string passes through, else omitted. */
+// INVARIANT[env-override-whitelist-or-no-op] (runtime-guard): AGENT_EFFORT overrides only for a valid SDK level and AGENT_MODEL only when non-empty; invalid values produce no override.
+//   prevents: a typo'd effort/empty model failing the whole session.
 export function optionOverridesFromEnv(
   env: Record<string, string | undefined>,
 ): OptionOverrides {

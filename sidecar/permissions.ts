@@ -98,6 +98,8 @@ export const PROTOTYPE_POLICY_WRITE_DENY =
 // with a real redirect (`cmd 2>>/dev/null > out.txt`) is still DENIED by the real `> out.txt`.
 const OUTPUT_REDIRECT = /(?:[0-9]*|&)>(?!&[0-9-])(?!>?\s*\/dev\/null(?:[\s|;&>]|$))>?\|?/;
 
+// INVARIANT[plan-bash-write-blocklist-preserves-tests] (runtime-guard): under plan, write-shaped Bash is denied while read-only test runs stay allowed (best-effort blocklist, NOT a sandbox).
+//   prevents: echo>file / rm / sed -i / git mutating the tree during planning.
 export const BASH_WRITE_DENY_PATTERNS: ReadonlyArray<RegExp> = [
   // File-write output redirection (shared with the prototype allowlist — one definition).
   OUTPUT_REDIRECT,
@@ -254,6 +256,8 @@ function isReadOnlyPrototypeSegment(rawSegment: string): boolean {
 //                     command → allow (the backstop never throws on shape — matches legacy).
 //   - "prototype"   → FAIL-CLOSED ALLOWLIST: allow only when every segment is provably read-only
 //                     and there is no command-substitution. Non-string / unrecognized → DENY.
+// INVARIANT[dual-tier-no-drift] (runtime-guard): the PreToolUse hook and the canUseTool gate apply the same prototype/plan decision via one shared bashDecisionFor.
+//   prevents: a Bash/path allowed at one tier but denied at the other.
 export function bashDecisionFor(policy: HostPolicy, command: unknown): string | null {
   if (policy === "acceptEdits") return null;
 
@@ -261,6 +265,8 @@ export function bashDecisionFor(policy: HostPolicy, command: unknown): string | 
     return isWriteShapedBashCommand(command) ? PLAN_POLICY_WRITE_DENY : null;
   }
 
+  // INVARIANT[prototype-bash-failclosed-allowlist] (runtime-guard): under prototype, Bash runs only when every segment is provably read-only and there's no command/process substitution; unrecognized denies.
+  //   prevents: an obfuscated Bash command writing during the prototype phase.
   // policy === "prototype": fail closed.
   if (typeof command !== "string" || command.trim().length === 0) {
     return PLAN_POLICY_WRITE_DENY;
@@ -296,6 +302,8 @@ export function bashDecisionFor(policy: HostPolicy, command: unknown): string | 
 // and "prototype" widen the policy (and "prototype" only narrowly — see HostPolicy); every
 // other value (including the SDK-only "default"/"bypassPermissions" and malformed input)
 // fails closed to "plan".
+// INVARIANT[hostpolicy-failclosed-mapping] (runtime-guard): only acceptEdits and prototype widen the host policy; every other value (incl. malformed) maps to plan — via the function's final default branch (`return "plan"`), not the type.
+//   prevents: an unknown/spoofed wire mode disabling write protection.
 export function hostPolicyForMode(mode: unknown): HostPolicy {
   if (mode === "acceptEdits") return "acceptEdits";
   if (mode === "prototype") return "prototype";
@@ -308,6 +316,8 @@ export function hostPolicyForMode(mode: unknown): HostPolicy {
 // the SDK in "default" mode and relies on the host-policy gate above for enforcement.
 // Unknown/malformed input maps to "default" (the SDK's own fail-safe baseline; the HOST
 // policy still fails closed to "plan" via hostPolicyForMode).
+// INVARIANT[sdk-never-receives-host-only-prototype] (type-level): the SDK is only ever handed plan|acceptEdits|default; host-only prototype maps to default.
+//   prevents: passing 'prototype' to the SDK (not in its union) or using SDK plan mode (which hard-blocks Write).
 export function sdkPermissionMode(mode: unknown): "plan" | "acceptEdits" | "default" {
   if (mode === "plan") return "plan";
   if (mode === "acceptEdits") return "acceptEdits";
@@ -331,8 +341,12 @@ function pathSegments(p: string): string[] {
 //   - relative paths resolve against `cwd`; the resolved path must extend the prototype root
 //     by at least one segment (the root directory itself is NOT a writable target) and match
 //     it segment-for-segment (so a `prototype-evil/` sibling cannot pass a string-prefix test).
+// INVARIANT[prototype-write-containment] (containment): under prototype policy a mutating tool is allowed only when its target resolves strictly under <cwd>/.plan-tree/prototype/.
+//   prevents: a prototype-phase agent writing outside the scratch dir.
 export function isPrototypeWritePath(cwd: string, filePath: unknown): boolean {
   if (typeof filePath !== "string" || filePath.length === 0) return false;
+  // INVARIANT[prototype-traversal-rejection] (containment): any `..` segment rejects the write — checked on raw input and resolved segments; `..` is never collapsed.
+  //   prevents: path-traversal laundering escaping containment.
   // Reject traversal BEFORE resolution: a ".." segment anywhere in the raw path is an
   // escape attempt regardless of what it would collapse to.
   if (filePath.split("/").includes("..")) return false;
@@ -342,6 +356,8 @@ export function isPrototypeWritePath(cwd: string, filePath: unknown): boolean {
   // And AFTER resolution (the cwd side could smuggle one in).
   if (resolved.includes("..")) return false;
   const root = [...pathSegments(cwd), ".plan-tree", "prototype"];
+  // INVARIANT[prototype-strict-subpath-no-prefix-sibling] (containment): the resolved path must be strictly longer than the prototype root and match segment-for-segment.
+  //   prevents: a .plan-tree/prototype-evil/ sibling passing a string-prefix check.
   // STRICTLY under the root: longer than it, and matching it segment-for-segment.
   if (resolved.length <= root.length) return false;
   return root.every((seg, i) => resolved[i] === seg);
@@ -395,6 +411,8 @@ export function prototypeHookDecision(
 // policy flip takes effect immediately — same injection contract as the gate above.
 // Returns `{}` (no-op SyncHookJSONOutput) to pass through; a deny is returned as the
 // SDK's PreToolUseHookSpecificOutput deny shape.
+// INVARIANT[pretooluse-precedes-allow-rules] (containment): prototype containment is enforced at the PreToolUse hook tier, which precedes SDK allow-rules.
+//   prevents: a user permissions.allow rule bypassing containment in default mode.
 export function createPrototypePreToolUseHook(
   getHostPolicy: () => HostPolicy,
   getCwd: () => string | null,
@@ -439,6 +457,8 @@ export const SEQUENTIAL_INTERACTIVE_DENY =
 // Whether an arriving interactive request must be denied-as-busy. True iff the tool is
 // interactive AND there is already a live interactive hold. Pure: the caller passes the
 // current live-hold flag. Non-interactive tools always return false (never serialized).
+// INVARIANT[interactive-hold-serialization] (runtime-guard): at most one interactive hold (ExitPlanMode/AskUserQuestion) is live; a second is denied immediately.
+//   prevents: two concurrent approval cards colliding so a hold resolves against the wrong tool-use id.
 export function shouldDenyConcurrentInteractive(
   toolName: string,
   hasLiveInteractiveHold: boolean,
@@ -451,6 +471,8 @@ export function shouldDenyConcurrentInteractive(
 // `.d.ts` marks it optional — a bare `{ behavior: "allow" }` fails with a ZodError, which the
 // SDK then turns into an `is_error` tool result. Echoing the original input is a no-op semantically
 // (the tool runs with its original args) while satisfying the validator.
+// INVARIANT[allow-result-carries-updatedinput] (convention): allowResult is the sole 'allow' constructor and always sets updatedInput.
+//   prevents: a bare {behavior:'allow'} failing the SDK's runtime validator.
 export function allowResult(input: Record<string, unknown>): PermissionResult {
   return { behavior: "allow", updatedInput: input };
 }
@@ -536,9 +558,10 @@ export function createInteractivePermissionGate(
     input: Record<string, unknown>,
     options: CanUseToolOptions,
   ): Promise<PermissionResult> => {
-    // BACKSTOP: while the host asserts "plan", the mutating tools are denied in-process —
-    // regardless of what mode the SDK believes it is in. Mutating tools are never interactive,
-    // so this fires before (and never interferes with) the hold logic below.
+    // INVARIANT[plan-policy-mutating-deny] (runtime-guard): while host policy is plan, the four mutating tools are denied in-process regardless of the SDK's believed mode.
+    //   prevents: writes sailing through after the SDK self-flips out of plan on ExitPlanMode approval.
+    // Mutating tools are never interactive, so this fires before (and never interferes with) the
+    // hold logic below.
     if (MUTATING_TOOLS.has(toolName) && getHostPolicy() === "plan") {
       return Promise.resolve(denyResult(PLAN_POLICY_WRITE_DENY));
     }
@@ -550,6 +573,8 @@ export function createInteractivePermissionGate(
     if (MUTATING_TOOLS.has(toolName) && getHostPolicy() === "prototype") {
       const cwd = getCwd();
       const target = input.file_path ?? input.notebook_path;
+      // INVARIANT[null-cwd-fails-closed] (runtime-guard): a null/empty session cwd denies all mutating tools under prototype policy.
+      //   prevents: an unset cwd silently widening writes to the whole filesystem.
       if (cwd === null || !isPrototypeWritePath(cwd, target)) {
         return Promise.resolve(denyResult(PROTOTYPE_POLICY_WRITE_DENY));
       }

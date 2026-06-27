@@ -187,6 +187,8 @@ export function createImageAttachments(opts: CreateImageAttachmentsOptions): Ima
       chipStrip.replaceChildren();
       clearError();
     },
+    // INVARIANT[setimages-owns-its-copies] (convention): setImages replaces the set wholesale and copies each entry, so the controller never aliases the caller's snapshot.
+    //   prevents: shared-reference mutation between controller and the captured sending-state images
     setImages: (imgs) => {
       // RESTORE seam (failed-send recovery): replace the set wholesale + re-render. Copy each entry so
       // the controller owns its own objects (never aliases the caller's snapshot). Renumbering + chip

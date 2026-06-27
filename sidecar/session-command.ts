@@ -1,10 +1,10 @@
-// Agent SDK sidecar — pure `set-permission-mode` decision (bug #11).
+// Agent SDK sidecar — pure `set-permission-mode` decision.
 //
 // Extracted from index.ts (like session-start.ts's decideStart) so the live/ended gating is
 // UNIT-TESTABLE without importing index.ts's top-level side effects. The session lifecycle is
 // modeled as a discriminated union so the SDK Query (`q`) is reachable ONLY in the `live` variant:
 // calling `q.setPermissionMode(...)` on a dead/closing query — which throws and crashes the
-// process (#11) — becomes structurally unrepresentable. index.ts is a thin switch over the result.
+// process — becomes structurally unrepresentable. index.ts is a thin switch over the result.
 
 import { hostPolicyForMode, type HostPolicy } from "./permissions";
 
@@ -23,6 +23,8 @@ export interface SettablePermissionQuery {
 //   live     — a usable SDK query is in flight; `q` is reachable.
 //   draining — graceful shutdown began; the query is being interrupted/closed (drain race window).
 //   dead     — the session ended (turn(s) done + iterator end); `q` is a stale/closed handle.
+// INVARIANT[setpermissionmode-gated-to-live] (type-level): `q` exists only on the live Session variant, so setPermissionMode is unreachable on idle/dead/draining at compile time.
+//   prevents: a setPermissionMode dereferencing `q` on a statically non-live session.
 export type Session =
   | { kind: "idle" }
   | { kind: "starting" }
@@ -33,7 +35,7 @@ export type Session =
 // What index.ts must do with a `set-permission-mode` command:
 //   apply           — a live query exists; index.ts calls q.setPermissionMode.
 //   drop-no-session — no live session yet (idle/starting); no SDK call.
-//   drop-ended      — the session ended / is ending (draining/dead); calling q would throw (#11).
+//   drop-ended      — the session ended / is ending (draining/dead); calling q would throw.
 //
 // `hostPolicy` is present on EVERY variant. The host-policy backstop is HOST state, not SDK session
 // state, so set-permission-mode rewrites it UNCONDITIONALLY — even on the drop paths, exactly as the
@@ -46,6 +48,8 @@ export interface SessionCommandDecision {
 
 // Decide how index.ts handles a `set-permission-mode` command against the current session. Pure: the
 // caller owns the hostPolicy assignment and (only on `apply`) the q.setPermissionMode SDK call.
+// INVARIANT[decidesessioncommand-purity] (convention): decideSessionCommand never calls q.setPermissionMode; index.ts owns the sole SDK call site.
+//   prevents: a hidden SDK side-effect double-firing the mode flip.
 export function decideSessionCommand(
   session: Session,
   cmd: { mode?: unknown },

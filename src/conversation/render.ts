@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — DOM renderer.
+// Conversation domain — DOM renderer.
 //
 // Renders a RenderTree (stream.ts) into a container. ALL element classes are namespaced
 // `.conv-*` (styled tokens-only in styles.css). Security rules (explicit, not assumed):
@@ -124,6 +124,8 @@ function fullText(value: unknown): string {
   }
 }
 
+// INVARIANT[statuslabel-total-over-toolstatus] (runtime-guard): statusLabel returns a distinct label for every ToolStatus incl. interrupted.
+//   prevents: an interrupted tool mislabeled 'done'/rendered pulsing
 function statusLabel(status: ToolStatus): string {
   return status === "running"
     ? "running…"
@@ -711,7 +713,7 @@ function renderNodeInner(node: RenderNode, handlers?: RenderHandlers): HTMLEleme
       return chip;
     }
     case "permission_request": {
-      // Sub-Plan 03: an ExitPlanMode request is held by main.ts and surfaced on the Plan tab (it owns
+      // an ExitPlanMode request is held by main.ts and surfaced on the Plan tab (it owns
       // the tab + the review affordances). This stream marker is a neutral pointer to that, not a hang.
       const notice = document.createElement("div");
       notice.className = "conv-perm-request";

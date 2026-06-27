@@ -19,10 +19,12 @@
  *                only a count label + Resume are shown; Submit is hidden (the pending review stays
  *                resumable but does not trap navigation).
  *   - "submitting": a submit is already in flight (refinement of "viewing") → Submit DISABLED and
- *                Approve HIDDEN so a fast double-click cannot fire a second submit. Bug #10.
+ *                Approve HIDDEN so a fast double-click cannot fire a second submit.
  */
 export interface ReviewBarState {
   barVisible: boolean;
+  // INVARIANT[review-bar-mode-union] (type-level): the bar's mode is exactly one of hidden | viewing | summary | submitting (a single union field).
+  //   prevents: incoherent combos like "submitting while not viewing" being representable (submitting is nested under viewing in the derivation below)
   mode: "viewing" | "summary" | "hidden" | "submitting";
   label: string;
   submitVisible: boolean;
@@ -32,7 +34,7 @@ export interface ReviewBarState {
   // comment, so a reviewer always has a discoverable way to wipe their comments mid-review. Hidden
   // in summary/hidden modes and when there are 0 comments (nothing to clear).
   clearVisible: boolean;
-  // ---- Sub-Plan 03: source-aware affordances (additive) -------------------------------------
+  // ---- source-aware affordances (additive) -------------------------------------
   // The dedicated "Approve & Build" button (#review-approve). It exists ONLY for in-process reviews
   // (a plan held at the in-process canUseTool seam): one click allows the plan and begins execution.
   // External reviews carry a blocking PreToolUse hook that cannot be auto-approved in-app, so this
@@ -59,17 +61,19 @@ export function applyReviewBarState(input: {
   pendingCount: number;
   viewing: boolean;
   viewedCommentCount: number;
-  // Sub-Plan 03: which review surface the VIEWED review came from. Defaults to "external" so every
+  // which review surface the VIEWED review came from. Defaults to "external" so every
   // existing caller (and the existing snapshot) is byte-identical. Only affects approveVisible +
   // submitLabel in VIEWING mode; all other fields are unchanged for both sources.
   source?: "external" | "in-process";
-  // Bug #10: true while a submit is already in flight. Defaults to false so every existing caller
+  // true while a submit is already in flight. Defaults to false so every existing caller
   // (and the existing snapshot) is byte-identical. Only meaningful while VIEWING — a submit can only
   // be in flight after clicking Submit on the viewed review — where it produces the "submitting"
   // mode (Submit disabled, Approve hidden) so a fast double-click cannot double-submit.
   submitInFlight?: boolean;
 }): ReviewBarState {
   const source = input.source ?? "external";
+  // INVARIANT[pendingcount-zero-fully-hidden] (runtime-guard): pendingCount === 0 returns the fully-hidden state regardless of viewing / submitInFlight.
+  //   prevents: a bar showing with nothing pending
   if (input.pendingCount === 0) {
     return {
       barVisible: false,
@@ -83,10 +87,12 @@ export function applyReviewBarState(input: {
       submitLabel: "Submit",
     };
   }
+  // INVARIANT[submitInFlight-meaningful-only-while-viewing] (runtime-guard): the submitInFlight → "submitting" refinement is checked only inside this VIEWING branch.
+  //   prevents: a leaked in-flight flag forcing "submitting" while the bar should be hidden / summary
   if (input.viewing) {
     const n = input.viewedCommentCount;
     const inProcess = source === "in-process";
-    // Bug #10: a submit is already in flight. Lock the bar — Submit disabled, Approve hidden — so a
+    // a submit is already in flight. Lock the bar — Submit disabled, Approve hidden — so a
     // fast double-click cannot fire a second submit before the first round-trip completes. This is a
     // refinement of "viewing" (submit only exists while viewing), so it lives inside this branch.
     if (input.submitInFlight) {
@@ -107,11 +113,15 @@ export function applyReviewBarState(input: {
       mode: "viewing",
       label: `Reviewing plan — ${n} comment${n === 1 ? "" : "s"}`,
       submitVisible: true,
+      // INVARIANT[submit-disabled-at-zero-comments] (runtime-guard): in VIEWING, Submit is visible but disabled until there is >=1 comment.
+      //   prevents: an empty-feedback deny
       submitDisabled: n === 0,
       resumeVisible: false,
       // Manual clear is offered only when there is something to clear.
       clearVisible: n > 0,
       // Approve & Build exists ONLY while viewing an in-process review.
+      // INVARIANT[approve-is-a-viewing-only-in-process-affordance] (runtime-guard): Approve & Build is visible only while VIEWING an in-process review/gate (approveVisible === inProcess inside the viewing branch).
+      //   prevents: an Approve & Build button where there is no held in-process seam
       approveVisible: inProcess,
       submitLabel: inProcess ? "Request changes" : "Submit",
     };

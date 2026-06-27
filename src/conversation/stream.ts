@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — PURE in-memory stream model.
+// Conversation domain — PURE in-memory stream model.
 //
 // Consumes the committed agent-stream vocabulary (types.ts) and produces a normalized,
 // renderable tree. NO DOM. Responsibilities:
@@ -27,6 +27,8 @@ import type {
 // A tool-call row's lifecycle status. "running" until its tool_result correlates (→ "done"/"error");
 // "interrupted" when the turn ended (result/exit) while it was still running and no result ever landed
 // — so its row stops pulsing instead of spinning forever (see the turn-end demotion in derive()).
+// INVARIANT[tool-status-four-state] (type-level): a tool-call row's status is exactly running|done|error|interrupted.
+//   prevents: a tool abandoned at turn-end stuck visibly 'running' forever
 export type ToolStatus = "running" | "done" | "error" | "interrupted";
 
 // A rendered tool-call row (a tool_use, possibly correlated with its tool_result).
@@ -81,7 +83,7 @@ export interface ModeNode {
   mode: string;
 }
 
-// The "awaiting review (wired in Sub-Plan 03)" marker for a tool-permission-requested event.
+// The "awaiting review" marker for a tool-permission-requested event.
 export interface PermissionRequestNode {
   type: "permission_request";
   seq: number;
@@ -491,6 +493,8 @@ export class ConversationModel {
     // next segment. Synthetic frames (exit/error/notice at synthSeq) inherit the segment current at
     // their arrival point, so a session-end exit stays in the segment it ended. Keyed on the stable
     // event object reference so the `ordered` loop below can look each event's segment back up.
+    // INVARIANT[segment-arrival-monotonic] (runtime-guard): each event gets a session-segment number in arrival order; each subsequent system_init opens the next segment.
+    //   prevents: seq-order scrambling across a resume (which resets the wire seq)
     const segmentOf = new Map<ModelEvent, number>();
     {
       let segment = 0;
@@ -824,6 +828,8 @@ export class ConversationModel {
     // a genuinely-abandoned tool (a terminal frame after it in its own segment) still interrupts. Only
     // RUNNING tools are touched; done/error tools already correlated. Mutates by reference (the same
     // node objects sit in `placed`/the groups), so the change is visible everywhere.
+    // INVARIANT[turn-end-demotion-segment-and-seq-scoped] (reducer-total): a still-running tool is demoted to interrupted iff a turn-terminal frame is causally after it, compared (segment,seq) lexicographically.
+    //   prevents: a running turn-N tool flipped by an earlier turn's terminal, or a resumed-session tool flipped by the prior session's synthetic exit
     for (const tool of toolById.values()) {
       if (tool.status !== "running") continue;
       const seg = toolSegment.get(tool) ?? 0;

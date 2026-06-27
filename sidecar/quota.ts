@@ -21,6 +21,8 @@
 const SECONDS_MS_BOUNDARY = 1e12;
 
 /** Normalize a positive epoch number (seconds OR ms) to epoch-ms. Non-finite/<=0 → null. */
+// INVARIANT[quota-epoch-ms-canonical] (runtime-guard): every reset time is epoch-ms (seconds-vs-ms disambiguated at the 1e12 boundary).
+//   prevents: a seconds-epoch treated as ms (a pause ending ~1000x too early/late).
 function toEpochMs(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
   return value < SECONDS_MS_BOUNDARY ? Math.round(value * 1000) : Math.round(value);
@@ -44,6 +46,8 @@ interface RateLimitInfoLike {
 export function extractResetAt(info: unknown): number | null {
   if (info == null || typeof info !== "object") return null;
   const r = info as RateLimitInfoLike;
+  // INVARIANT[rate-limit-pause-only-on-rejected] (runtime-guard): a rate_limit_event pauses the session only when status==='rejected'.
+  //   prevents: a non-blocking warning limit pausing a live session.
   if (r.status !== "rejected") return null;
   const primary = toEpochMs(r.resetsAt);
   if (primary !== null) return primary;
@@ -83,6 +87,8 @@ const EPOCH_RE = /\b(\d{10,16})\b/;
 export function parseResetFromError(text: string, nowMs: number = Date.now()): number | null {
   if (typeof text !== "string" || text.length === 0) return null;
   // Auth guard FIRST: an auth error may also contain digits that look like an epoch.
+  // INVARIANT[quota-auth-never-classified-as-quota] (runtime-guard): auth/credential errors are never parsed as a quota reset (the auth guard returns null first).
+  //   prevents: an expired token paused-and-retried forever instead of surfacing as fatal auth.
   if (AUTH_RE.test(text)) return null;
 
   const retry = RETRY_AFTER_RE.exec(text);
@@ -192,6 +198,8 @@ function wallClockOf(ms: number, tz: string): number {
  * named tz. Machine-tz-independent (Intl offset inversion, two-pass DST-correct). Returns null on ANY
  * uncertainty (no match / unknown tz / Intl throw) — the fail-safe that degrades to exhausted.
  */
+// INVARIANT[quota-uncertainty-degrades-exhausted-never-early] (runtime-guard): any uncertainty returns null/sentinel-0 and the resolver biases later, never earlier.
+//   prevents: a wrong-early resume time that resumes straight back into the wall.
 export function parseClockTimeInTz(text: unknown, nowMs: number = Date.now()): number | null {
   if (typeof text !== "string" || text.length === 0) return null;
   const m = RESET_CLOCK_RE.exec(text);

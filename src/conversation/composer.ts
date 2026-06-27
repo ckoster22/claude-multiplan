@@ -1,7 +1,7 @@
-// Conversation domain (Sub-Plan 02) — New-plan composer modal.
+// Conversation domain — New-plan composer modal.
 //
 // Collects: a request (<textarea>) and a working directory (native folder picker). The starting
-// mode is fixed to "plan" (Build removed). On Start it drives the frozen Sub-Plan 01 surface:
+// mode is fixed to "plan" (Build removed). On Start it drives the frozen surface:
 //   start_agent_session({ cwd, permissionMode: "plan" }) THEN send_agent_message({ text }).
 // Remembers the last chosen directory in localStorage so the next New-plan run pre-fills it.
 
@@ -70,7 +70,7 @@ export interface ComposerElements {
 
 // Injection seam for the Start action (tests stub it).
 //
-// Sub-Plan 03: the composer no longer fires start_agent_session + send_agent_message itself — it
+// the composer no longer fires start_agent_session + send_agent_message itself — it
 // delegates to a SINGLE `start({cwd, request})` thunk that the orchestrator owns (index.ts binds it
 // to getOrchestrator().start(...)). The thunk returns TRUE when a run was really started and FALSE
 // on the idempotent no-op (a run is already active). The composer runs onStarted()/close() ONLY on
@@ -231,11 +231,15 @@ export class Composer {
     // DISPATCH GATE: a Start is already in flight ⇒ drop this re-entrant call (a rapid double-click /
     // double-Enter). This synchronous early-return — NOT the orchestrator's idempotent start() boolean —
     // is what makes a double-fire dispatch exactly one run.
+    // INVARIANT[composer-single-start] (runtime-guard): a rapid double-click/double-Enter on Start dispatches exactly one run.
+    //   prevents: double session-start
     if (this.starting) return;
     this.clearError();
     const text = this.els.request?.value.trim() ?? "";
     // Validate inputs with visible feedback (was a silent early-return). These run BEFORE arming the
     // in-flight flag so a validation failure never leaves Start latched-disabled for the retry.
+    // INVARIANT[validate-before-arm] (convention): input validation runs before arming `this.starting`, so a validation failure never latches Start disabled.
+    //   prevents: a latched-disabled Start after a recoverable validation error
     if (!text) {
       this.showError("Enter a request before starting.");
       return;
@@ -247,7 +251,7 @@ export class Composer {
 
     this.starting = true;
     try {
-      // Fix B — honor a typed-but-unsaved token: persist it via the SAME path "Save token" uses
+      // honor a typed-but-unsaved token: persist it via the SAME path "Save token" uses
       // before attempting the session. If none typed AND none stored, fail visibly (the backend
       // would otherwise reject with "no OAuth token stored").
       if (this.tokens) {
@@ -271,7 +275,7 @@ export class Composer {
       // with images (a planning session needs a textual request; images-only is in-conversation only).
       const images = this.attachments?.getImages() ?? [];
 
-      // Sub-Plan 03: delegate to the orchestrator's start() thunk (mode is always "plan"). It returns
+      // delegate to the orchestrator's start() thunk (mode is always "plan"). It returns
       // TRUE on a real start, FALSE on the idempotent no-op (a planning run is already active).
       let started: boolean;
       try {

@@ -1,4 +1,4 @@
-// Sub-Plan 02 — highlight + comment with quoted-text anchoring + persistence.
+// highlight + comment with quoted-text anchoring + persistence.
 //
 // This module is the ENTIRE highlight/comment/popover domain. It lives BEHIND the render
 // facade (src/render/index.ts re-exports its public surface) so main.ts never reaches into
@@ -89,6 +89,8 @@ export function nearestBlockEndLine(node: Node, root: HTMLElement): number | nul
   return el === null ? null : intAttr(el, "data-source-end-line");
 }
 
+// INVARIANT[comment-anchor-excludes-mermaid-and-code] (runtime-guard): A selection starting/ending inside fenced-code, a mermaid box, or <svg> is rejected at capture and skipped by the normalized char-map walk.
+//   prevents: a comment anchored in a diagram/code re-anchoring wrong (or not at all) across reloads.
 /** True iff `node` (or an ancestor up to `root`) is a fenced code block or a mermaid/SVG node. */
 function isExcludedContainer(node: Node, root: HTMLElement): boolean {
   let el: Node | null = node.nodeType === Node.ELEMENT_NODE ? node : node.parentNode;
@@ -292,9 +294,8 @@ export function applyComments(paneEl: HTMLElement, records: CommentRecord[]): vo
 
 // ---- Popover state machine -----------------------------------------------------------------
 //
-// A discriminated union so "visible-but-no-subject" and "both-create-and-view" are
-// unrepresentable. The `create` arm carries its live Range + capture; `view` carries only an
-// existing record id. Visibility is `kind !== "hidden"` (no separate boolean to drift).
+// INVARIANT[popover-state-is-tagged-union] (type-level): The popover is a discriminated union hidden|create|view; visibility = kind!=='hidden', with no parallel boolean.
+//   prevents: visible-but-no-subject / simultaneously-create-and-view states.
 type PopoverState =
   | { kind: "hidden" }
   | {
@@ -304,10 +305,8 @@ type PopoverState =
       blockLine: number | null;
       blockEndLine: number | null;
       occurrence: number;
-      // Bug #7: the plan this draft was captured against (getPlanPath() at selection time). A save
-      // bails if the open plan has changed (saving would anchor the comment to the WRONG plan), and
-      // the invalidate seam discards the draft on a genuine plan-path change but preserves it on a
-      // same-plan live reload.
+      // INVARIANT[popover-owned-by-capturing-plan] (runtime-guard): A create/view popover records the plan path open at capture; the saveEl guard makes Save a no-op when the current plan differs (the Save guard, comparing the recorded planPath to the current plan, is the enforcer).
+      //   prevents: a draft captured on plan A being persisted/anchored onto plan B after a mid-draft switch.
       planPath: string | null;
     }
   | { kind: "view"; id: number; planPath: string | null };
@@ -374,8 +373,8 @@ export function initComments(
   let state: PopoverState = { kind: "hidden" };
 
   // ---- The SOLE writer of #sel-popover.hidden / #sp-quote / #sp-text ----
-  // Every transition sets `state` then calls this. "popover visible iff kind!=='hidden'" is
-  // structurally enforced because nothing else toggles `.hidden`.
+  // INVARIANT[renderpopover-is-sole-dom-writer] (convention): renderPopover is the only writer of #sel-popover.hidden / #sp-quote / #sp-text; every transition routes through it (grep-verified, not compiler-enforced).
+  //   prevents: the visibility class desyncing from state.kind (a visible popover with no subject, or a hidden one with live state).
   function renderPopover(next: PopoverState): void {
     state = next;
     if (!popEl) return;
@@ -463,7 +462,7 @@ export function initComments(
     }
   }
 
-  // ---- Clear ALL comments for a plan (Sub-Plan 03 feedback overlay's "Clear" action) ----
+  // ---- Clear ALL comments for a plan (feedback overlay's "Clear" action) ----
   // Remove EVERY highlight span by iterating the CACHED record ids and calling clearHighlight for
   // each — this MUST happen BEFORE clearing the cache, because io.clearAll returns [] (the ids are
   // only known from the cache). Then clearAll on the backend, adopt the returned [] into the cache,
@@ -534,7 +533,7 @@ export function initComments(
       blockLine: capture.blockLine,
       blockEndLine: capture.blockEndLine,
       occurrence: capture.occurrence,
-      planPath: getPlanPath(), // own this draft to the plan open at selection time (Bug #7)
+      planPath: getPlanPath(), // own this draft to the plan open at selection time
     });
   });
 
@@ -546,7 +545,7 @@ export function initComments(
     const id = Number(hl.dataset.c);
     if (!Number.isInteger(id)) return;
     e.stopPropagation();
-    renderPopover({ kind: "view", id, planPath: getPlanPath() }); // own to the open plan (Bug #7)
+    renderPopover({ kind: "view", id, planPath: getPlanPath() }); // own to the open plan
   });
 
   cancelEl?.addEventListener("click", () => renderPopover({ kind: "hidden" }));
@@ -557,7 +556,7 @@ export function initComments(
       renderPopover({ kind: "hidden" });
       return;
     }
-    // Bug #7a: the draft/view is OWNED by the plan it was captured against. If the open plan
+    // the draft/view is OWNED by the plan it was captured against. If the open plan
     // changed out from under it (path !== state.planPath), the stashed range belongs to the OLD
     // plan's DOM — saving would anchor the comment to the wrong plan. Discard, never save.
     if ((state.kind === "create" || state.kind === "view") && state.planPath !== path) {
@@ -596,18 +595,11 @@ export function initComments(
     renderPopover({ kind: "hidden" });
   });
 
-  // ---- Bug #7b: plan-owned popover invalidation (to be called by the facade at a renderInto wipe;
+  // ---- plan-owned popover invalidation (to be called by the facade at a renderInto wipe;
   //       the caller wiring lives in the main.ts reading-pane lane and is not in place yet) ----
   //
-  // The popover lives OUTSIDE #reading-pane (~line 362), so it SURVIVES the pane's innerHTML wipe.
-  // The app auto-reloads a plan WHILE it is being built, so on a same-plan reload we must PRESERVE
-  // the user's in-progress draft — hiding it on every wipe would destroy that draft each reload (a
-  // regression). We therefore invalidate ONLY on a genuine plan-path CHANGE; for a same-plan reload
-  // we keep the draft and re-anchor its stashed range against the freshly-rendered DOM (the old
-  // range points at detached nodes). renderPopover stays the SOLE writer of #sel-popover.hidden /
-  // #sp-quote / #sp-text: the hide path routes through it, while the same-plan re-anchor mutates
-  // ONLY state.range (and repositions), never those DOM elements — so the typed comment in #sp-text
-  // is left untouched.
+  // INVARIANT[popover-invalidate-discards-on-plan-change-preserves-on-reload] (runtime-guard): invalidatePopover discards the draft only on a genuine plan-path change; a same-plan live reload preserves the draft and re-anchors its Range to fresh DOM.
+  //   prevents: a draft pointing at detached old-plan DOM, or the draft destroyed on every same-plan reload.
   function invalidateOrReanchor(): void {
     if (state.kind === "hidden") return; // nothing to preserve or discard
     if (state.planPath !== getPlanPath()) {
@@ -670,7 +662,7 @@ export function clearAllComments(paneEl: HTMLElement, path: string): Promise<voi
   return clear(path);
 }
 
-// ---- Facade-level popover-invalidation registry (Bug #7b; mirrors clearAllRegistry) ----------
+// ---- Facade-level popover-invalidation registry (mirrors clearAllRegistry) ----------
 //
 // renderPopover is closure-private inside initComments, so we expose the invalidate seam through
 // the same module-level per-pane lookup pattern rather than letting the facade toggle `.hidden`
@@ -679,6 +671,8 @@ export function clearAllComments(paneEl: HTMLElement, path: string): Promise<voi
 // or preserve+re-anchor (same-plan reload).
 const invalidateRegistry = new WeakMap<HTMLElement, () => void>();
 
+// INVARIANT[invalidate-via-registry-preserves-sole-writer] (convention): The facade invalidates only via a per-pane WeakMap callback into the closure; it never toggles .hidden directly.
+//   prevents: the facade flipping popover DOM out-of-band, breaking the renderPopover sole-writer invariant.
 /**
  * Invalidate (or re-anchor) the popover for `paneEl` after a renderInto wipe. On a genuine
  * plan-path CHANGE it hides the popover (the draft belonged to the now-closed plan); on a same-plan

@@ -1,4 +1,4 @@
-// Multiplan orchestration domain (Sub-Plan 03) — the IMPURE driver.
+// Multiplan orchestration domain — the IMPURE driver.
 //
 // This file is the impure counterpart of plan-tree.ts (the PURE reducer). It mirrors the
 // stream.ts/index.ts and composer.ts split exactly: the reducer DECIDES side effects (returns an
@@ -1425,6 +1425,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // GEN-2 RE-KEY: every per-node variant carries the node's NodePath. `recon` UNIFIES the gen-1
   // root recon (path []) and sub-recon (path [nn]) variants — the consume branch routes on
   // path.length.
+  // INVARIANT[awaiting-exactly-one-armed-step] (type-level): at most one sequencer step is armed — `run.awaiting` is exactly one tagged variant; a result while idle is swallowed.
+  //   prevents: a boundary result consumed by the wrong step; two steps armed at once
   type Awaiting =
     | { tag: "idle" } // a `result` here is SWALLOWED by construction
     | { tag: "intent"; buffer: string }
@@ -1453,7 +1455,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // must not leak into the deferred step's capture).
     | { tag: "resuming"; nextPath: NodePath };
 
-  // ---- RunState: EVERY per-run transient in ONE freshly-allocated bundle (#2) ----------------
+  // ---- RunState: EVERY per-run transient in ONE freshly-allocated bundle ----------------
   //
   // The driver holds ONE handle across runs (the live app's singleton). A per-run transient left
   // populated bleeds run A's context into run B — a stale prior-sibling summary threaded into a
@@ -1484,6 +1486,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     backstopAttempts: number;
   }
 
+  // INVARIANT[runstate-all-or-nothing-reset] (type-level): every per-run transient lives in this one bundle; freshRunState's `: RunState` return forces every field initialized, and start()/resume() replace it wholesale, so all transients reset together.
+  //   prevents: run A's context (stale summary/mandate/held-permission) bleeding into run B
   interface RunState {
     // The cwd for all .plan-tree/ writes (captured at start) + the original request (threaded into
     // draft prompts).
@@ -1523,6 +1527,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     resumedGate: boolean;
     // PHASE 5 — the single pending adjustment note from the most recent parent review (parentKey scopes
     // it: only children of THAT parent ever see it). At most one can be pending by construction.
+    // INVARIANT[at-most-one-adjust-note] (type-level): at most one parent-review adjustment note is pending (single nullable field), scoped to its issuing parent's children via parentKey.
+    //   prevents: a second pending note coexisting / leaking into another level's prompts
     adjustNote: { parentKey: PathKey; note: string } | null;
     // DERIVED WRITE POLICY cache: the last permission mode the driver knows the session is in (null =
     // unknown, forcing a re-assert). Mode is a PURE function of the ledger; this only avoids redundant setMode.
@@ -1566,7 +1572,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   }
 
   // The current run's transient bundle. Allocated fresh at construction; REPLACED wholesale in
-  // start()/resume() so a fresh run can never inherit a prior run's transients (#2).
+  // start()/resume() so a fresh run can never inherit a prior run's transients.
   let run: RunState = freshRunState("", "");
   // The unsubscribe fn for the wake seam (document.visibilitychange), wired once at start/resume and
   // torn down with the run. Null when no wake subscription is live. NOT a RunState transient — a
@@ -1796,6 +1802,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // call a dead resolver. The allow-side policy invalidation is preserved (the SDK still leaves
         // plan mode on the equivalent continuation), as is the held-id clear. Real ids never carry
         // this prefix, so the NON-resumed path is untouched.
+        // INVARIANT[at-most-one-pending-gate] (runtime-guard): a re-presented disk gate carries a synthetic `resumed:` id (the live resolver died with the prior process); this short-circuit drops its resolvePermission rather than calling the dead sidecar resolver.
+        //   prevents: resolving a dead synthetic id against the sidecar
         if (eff.id.startsWith("resumed:")) {
           if (run.heldPermissionId === eff.id) run.heldPermissionId = null;
           if (eff.allow) run.assertedPolicy = null;
@@ -2003,6 +2011,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // sites, so a planning turn can never start in a stale writable mode (the post-decomposition-
     // approval incident). Skipped once terminal — the session is concluding/dead and must not be
     // poked.
+    // INVARIANT[asserted-policy-is-a-pure-ledger-cache] (runtime-guard): session permission mode is a pure function of the ledger (writePolicyFor2); run.assertedPolicy is only a cache, re-asserted when it differs (null after an ExitPlanMode allow makes the live mode unknown).
+    //   prevents: the session running in a stale write policy after an out-of-band plan-mode exit
     if (active) {
       const policy = writePolicyFor2(next.root);
       if (policy !== run.assertedPolicy) {
@@ -2075,6 +2085,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   const cancelTimer =
     deps.clearTimeout ?? ((h: unknown): void => clearTimeout(h as ReturnType<typeof setTimeout>));
 
+  // INVARIANT[one-turn-watchdog-slot] (runtime-guard): exactly one turn is in flight, so one shared watchdog handle (run.turnWatchdog); every arm site clears the prior first (clearTurnWatchdog).
+  //   prevents: two live watchdog timers firing competing FATALs
   const clearTurnWatchdog = (): void => {
     if (run.turnWatchdog !== null) {
       cancelTimer(run.turnWatchdog);
@@ -2317,7 +2329,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       pause.awaitingVariant.tag === "resuming" || pause.awaitingVariant.tag === "idle"
         ? { tag: "idle" }
         : { ...pause.awaitingVariant, buffer: "" };
-    // #8 — RE-ARM THE TURN WATCHDOG for the watched generation tags. The resumed turn is a REAL
+    // RE-ARM THE TURN WATCHDOG for the watched generation tags. The resumed turn is a REAL
     // generation turn again (the model re-emits its artifact under the quota-resume note), so a
     // silently-stuck resumed turn must drive to a loud terminal FATAL exactly as a never-paused turn
     // would — fireResume previously re-armed `awaiting` but NOT its watchdog, so a resumed summary /
@@ -2330,6 +2342,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // (recon/sizer/exec) are ALSO result-bounded, but they carry NO turn watchdog at their live
     // (never-paused) arming sites — they were never watchdog-guarded by design — so the resume
     // re-arms none for them either, matching that live posture.
+    // INVARIANT[watchdog-rearmed-per-tag-on-resume] (runtime-guard): on quota resume the watchdog is re-armed per awaited tag (summary→path, parent-review→parentPath, intent→[]).
+    //   prevents: a silently-stuck resumed turn hanging the run with no terminal
     const rearmed = pause.awaitingVariant;
     if (rearmed.tag === "summary") armTurnWatchdog("summary", rearmed.path);
     else if (rearmed.tag === "parent-review") armTurnWatchdog("parent-review", rearmed.parentPath);
@@ -2624,6 +2638,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         await deps.sendMessage(sizerPrompt());
         return;
       }
+      // INVARIANT[sizer-two-outcome] (runtime-guard): the sizer decision is exactly single|split; an unparseable decision is coerced to split (loud) and the trailing assertNever(sizer.decision) guards totality.
+      //   prevents: an ambiguous/garbled sizer output advancing into an undefined branch
       case "sizer": {
         // Scan buffered lines; take the LAST SIZER match (avoid a stray top-level echo).
         const path = run.awaiting.path;
@@ -3532,6 +3548,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // the tail is rebuilt with `.catch` so a throw in one frame is logged and the tail stays RESOLVED,
   // letting the next frame still run (a poisoned chain would silently drop every later frame).
   let ingestQueue: Promise<void> = Promise.resolve();
+  // INVARIANT[ingest-queue-serialized-and-poison-proof] (runtime-guard): frames process one-at-a-time through this promise chain; a throw drives a loud FATAL but the `.catch` leaves the tail resolved so later frames still run.
+  //   prevents: a single throwing frame stalling the run silently / poisoning the chain
   const enqueueIngest = (work: () => Promise<void>): Promise<void> => {
     // `chained` is the queue-tail promise for THIS frame's work (named to avoid shadowing the
     // module-level `run: RunState` bundle — a future edit in this scope must touch the bundle, not
@@ -3574,8 +3592,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     start: async ({ cwd: startCwd, request: startRequest, images: startImages }) => {
       // Idempotent-guarded: a second start while active is a no-op (the seam is single-owner). Return
       // false so the composer does not treat a dead start as a real one (and close its modal).
+      // INVARIANT[start-is-idempotent] (runtime-guard): a second start() while active is a no-op returning false.
+      //   prevents: a dead start closing the composer modal / running the onStarted chain
       if (active) return false;
-      // #2 — ALLOCATE A FRESH PER-RUN BUNDLE. A run shares ONE orchestrator handle with the next (the
+      // ALLOCATE A FRESH PER-RUN BUNDLE. A run shares ONE orchestrator handle with the next (the
       // app holds a singleton), so any per-run map/flag left populated would bleed run A's context into
       // run B's prompts (a stale prior-sibling summary threaded into a brand-new plan; a stale mandate
       // titling a new node; a held-permission id from a torn run). Replacing the WHOLE bundle resets
@@ -3631,6 +3651,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // `result` frame can reach ingestStream before/at the same flush as this await settling. If we
         // armed after the await, that result would land while awaiting is idle and be swallowed —
         // the run would halt at the opening phase (the minecraft-clone bug, now at the intent arm).
+        // INVARIANT[arm-before-send] (convention): the next awaiting variant is armed before deps.sendMessage, because the turn's result can reach ingest before the send resolves.
+        //   prevents: a result landing while awaiting is idle and being swallowed (the run halting at the opening phase)
         run.awaiting = { tag: "intent", buffer: "" };
         armTurnWatchdog("intent", []);
         diag("start(): armed intent, sending intentPrompt");
@@ -3665,7 +3687,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // nulls all transient gates). A torn ledger throws here — let it propagate to the caller (the
       // frontend wraps the click), nothing is registered yet.
       state = rehydrateState2(ledger);
-      // #2 — allocate a fresh per-run bundle for the resumed run (every transient reset together). The
+      // allocate a fresh per-run bundle for the resumed run (every transient reset together). The
       // re-presented gate / re-sent step below re-arms exactly what the resumed phase needs; the
       // non-serialized summaries/mandates are reloaded from disk by reloadDriverStateFromDisk, and the
       // sdk_session_id is re-seeded from the ledger after the resumable check.
@@ -4004,6 +4026,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // DRIVER-OWNED round increment (see the prototypeRound discipline note): count the refine
       // request itself, so the NEXT gate is minted round prototypeRound+1 regardless of clarifier
       // output.
+      // INVARIANT[prototype-round-driver-owned-monotonic] (runtime-guard): prototypeRound counts completed refine requests, incremented ONLY here, reset ONLY via freshRunState; the gate mints round+1.
+      //   prevents: a clarifier-supplied round count gaming the loop-escape threshold
       run.prototypeRound++;
       await dispatch({ type: "PROTOTYPE_REFINED", feedback });
       // COMBINED apply-and-approve: arm the auto-approve latch LAST, only after the dispatch above
@@ -4149,6 +4173,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
 
     resuming: () => run.awaiting.tag === "resuming",
 
+    // INVARIANT[quota-paused-single-probe] (runtime-guard): 'are we quota-paused?' has one answer — quotaPause!==null || quotaPausePending; both agent-exit listeners read it.
+    //   prevents: a same-tick agent-exit classified as end-of-run instead of a pause
     quotaPaused: () => run.quotaPause !== null || run.quotaPausePending,
 
     markQuotaPausePending: () => {
@@ -4179,7 +4205,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // observe how many ingest thunks the queue actually invoked. Off the frozen interface (a side table).
   ingestSeenAccessors.set(handle, () => ingestSeen);
 
-  // TEST-ONLY (#2 cross-run-leak guard): expose the per-run transient sizes so a test can prove a
+  // TEST-ONLY (cross-run-leak guard): expose the per-run transient sizes so a test can prove a
   // FRESH run resets every per-run map/flag (no run-A summary/mandate/clarify/adjust bleeding into
   // run B). These read the per-run transients directly; the leak class is closed by allocating a
   // fresh bundle in start()/resume(), and this accessor is the falsifiable witness. Off the frozen
@@ -4205,7 +4231,7 @@ export function __ingestSeenForTest(handle: OrchestratorHandle): number {
   return ingestSeenAccessors.get(handle)?.() ?? 0;
 }
 
-// TEST-ONLY (#2) — the per-run transient sizes snapshot shape + side table.
+// TEST-ONLY — the per-run transient sizes snapshot shape + side table.
 interface RunTransientSizes {
   summaries: number;
   mandates: number;
@@ -4214,7 +4240,7 @@ interface RunTransientSizes {
 }
 const runTransientAccessors = new WeakMap<OrchestratorHandle, () => RunTransientSizes>();
 
-// TEST-ONLY (#2): read `handle`'s per-run transient sizes (summaries/mandates/clarifyQuestions map
+// TEST-ONLY: read `handle`'s per-run transient sizes (summaries/mandates/clarifyQuestions map
 // sizes + whether an adjust note is pending). A fresh run MUST reset all of these — this is the
 // witness for the cross-run-leak guard. Returns the empty shape for an unknown handle. NOT part of
 // the frozen UI contract.
@@ -4231,8 +4257,8 @@ export function __runTransientSizesForTest(handle: OrchestratorHandle): RunTrans
 
 // ---- shared singleton + test hooks ----------------------------------------------------------
 //
-// The live app shares ONE orchestrator instance between this gate controller (Sub-Plan 02) and
-// 03's composer-entry, so both drive the SAME handle. Constructed lazily on first access bound to
+// The live app shares ONE orchestrator instance between this gate controller and
+// the composer-entry, so both drive the SAME handle. Constructed lazily on first access bound to
 // the real Tauri deps. Tests install a fake via __setOrchestratorForTest and reset module state in
 // beforeEach via __resetOrchestratorForTest.
 

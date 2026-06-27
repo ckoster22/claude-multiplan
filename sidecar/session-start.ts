@@ -22,6 +22,8 @@ export const SECOND_START_MESSAGE =
 //            shape; the host normalizes error_kind → the public `kind`) and EXIT non-zero: the
 //            old SDK Query / conversation context / module state MUST NOT absorb a new run. The
 //            host's Terminated handling releases the session slot, so a retry starts clean.
+// INVARIANT[one-session-per-process] (type-level): a second start in the same process is a fatal protocol rejection that exits non-zero.
+//   prevents: a dropped second start leaving the old Query/conversation alive so new messages get absorbed.
 export type StartDecision =
   | { kind: "fresh"; hostPolicy: HostPolicy }
   | {
@@ -31,6 +33,8 @@ export type StartDecision =
 
 // Decide how to handle a `start` command. Pure; the caller owns the `started` flag and the
 // hostPolicy assignment.
+// INVARIANT[fresh-start-reasserts-hostpolicy] (runtime-guard): a fresh start re-derives hostPolicy from that command's own permissionMode (fail-closed plan).
+//   prevents: a stale widened policy leaking into a new session.
 export function decideStart(alreadyStarted: boolean, permissionMode: unknown): StartDecision {
   if (alreadyStarted) {
     return {

@@ -31,6 +31,14 @@ macOS desktop app (Tauri v2) that browses and live-renders Claude Code plan mark
 - **Prototype permission seam**: the host-side `"prototype"` write policy (writes allowed only under `<cwd>/.plan-tree/prototype/`) maps to SDK permissionMode `"default"`, because SDK `"plan"` mode hard-blocks `Write` at the CLI tier regardless of `canUseTool`. But in `"default"` mode the user's `~/.claude/settings.json` `permissions.allow` rules evaluate BEFORE `canUseTool` (SDK precedence: PreToolUse hooks → deny rules → mode → allow rules → `canUseTool`) — so containment is enforced at the PreToolUse hook tier (`sidecar/permissions.ts` `prototypeHookDecision` / `createPrototypePreToolUseHook`). Never rely on `canUseTool` alone for `"default"`-mode sessions.
 - The app reads two **read-only** trees under `~/.claude/`: `plans/` (rendered + watched) and `projects/` (used only for cwd resolution). It also writes to a self-owned control directory `~/.claude/plan-reader/**` (review IPC: requests/responses + an `app.alive` heartbeat, all atomic + containment-guarded) and performs a single idempotent additive merge into `~/.claude/settings.json` to install/remove the ExitPlanMode review hook. As the app becomes a standalone Claude Code replacement, it now also **writes its own agent-produced plans into `~/.claude/plans/`** via the `write_agent_plan` command (atomic temp+rename, containment-guarded to the plans dir, frontmatter-tagged with `tree_id`/`flavor`/`nn` for sidebar nesting) — `plans/` is now its canonical, single-rooted plan store, not a read-only tree. It still NEVER writes into `~/.claude/projects/`.
 
+## Invariants
+- **Invariants must be grounded in code, not comments.** When documenting, cataloging, or asserting that an invariant holds, its evidence MUST be an actual enforcing construct:
+  - a **type / discriminated union** that makes the invalid state unconstructable, or
+  - a **runtime guard / ordering / idempotent operation** in executable code, or
+  - a **test** that asserts it (ideally falsifiable — inverting the production code makes it fail).
+- A code comment is **not** evidence — including comments that say `// INVARIANT:`, "single source of truth", "always", or "never". Comments drift and can lie; verify the enforcing code before claiming the invariant holds, and cite the construct (the union/guard/test), never the comment.
+- When cataloging invariants, label each with the tier where the **named behavioral guarantee actually lives**, not merely where a related type exists. A tagged union that only supplies a value (e.g. a status enum) while a runtime reducer enforces the guarantee is a **runtime** invariant, not a type-level one.
+
 ## Notes
 - The app is unsigned; first launch needs right-click → Open (Gatekeeper). Signing/notarization is not configured.
 - `.plan-tree/` holds the multiplan planning state (master plan + per-sub-plan plans and summaries) used to build this project.
