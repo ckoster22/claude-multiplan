@@ -1,6 +1,6 @@
 // Conversation domain — controller (initConversation) tests.
 //
-// Covers Fix 3 (auth refresh on composer open) and Fix 4 (session-liveness guard). The real
+// Covers auth refresh on composer open and session-liveness guard. The real
 // StatusController + Composer are constructed inside initConversation; we mock only the Tauri seams
 // (invoke/listen/path) and the dialog plugin (so wd-picker is inert). Events are driven through the
 // captured listen handlers; commands are recorded for command-level assertions.
@@ -224,9 +224,9 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// Fix 3 — auth refresh on composer open.
+// auth refresh on composer open.
 // ---------------------------------------------------------------------------------------------
-describe("controller — Fix 3: openComposer refreshes auth BEFORE showing", () => {
+describe("controller — openComposer refreshes auth BEFORE showing", () => {
   it("openComposer re-reads agent_auth_status; with a token present the banner is hidden", async () => {
     const els = makeEls();
     H.hasToken = false; // startup read sees NO token (banner would be shown)
@@ -249,9 +249,9 @@ describe("controller — Fix 3: openComposer refreshes auth BEFORE showing", () 
 });
 
 // ---------------------------------------------------------------------------------------------
-// Fix 4 — session-liveness guard. Test #5 (falsifiable).
+// session-liveness guard. Test #5 (falsifiable).
 // ---------------------------------------------------------------------------------------------
-describe("controller — Fix 4: session-liveness gates New-plan + Cancel", () => {
+describe("controller — session-liveness gates New-plan + Cancel", () => {
   it("idle: New-plan enabled, Cancel disabled; a live session inverts both and blocks openComposer", async () => {
     const els = makeEls();
     const handle = await initConversation(els, () => {});
@@ -629,7 +629,7 @@ describe("controller — working indicator: immediate on start, label from statu
     expect(workingLabel(els.stream)).toBe("running subagent");
   });
 
-  it("FIX 3: shows the indicator the INSTANT Start succeeds (onStarted), before ANY agent-stream event", async () => {
+  it("shows the indicator the INSTANT Start succeeds (onStarted), before ANY agent-stream event", async () => {
     const els = makeEls();
     const handle = await initConversation(els, () => {});
     await flush();
@@ -912,7 +912,7 @@ describe("controller — free-text composer sends a user turn and clears; disabl
 
 // ---------------------------------------------------------------------------------------------
 // Phase B — DispatchState dimension: "a send is already in flight" is now representable, killing
-// the double-send (#1) and the text-wiped-mid-round-trip (#1) and the phantom stuck-active Resume (#6).
+// the double-send and the text-wiped-mid-round-trip and the phantom stuck-active Resume.
 // ---------------------------------------------------------------------------------------------
 describe("controller — dispatch dimension: single dispatch under double-fire (#1)", () => {
   it("a second Enter before the first send resolves dispatches exactly once AND preserves round-trip text", async () => {
@@ -959,7 +959,7 @@ describe("controller — dispatch dimension: single dispatch under double-fire (
     expect(els.messageInput.value).toBe("typed during round-trip");
 
     // The first send resolves: it must NOT re-clear the field (re-clearing on resolve is exactly the
-    // text-wiped-mid-round-trip bug #1).
+    // text-wiped-mid-round-trip).
     // FALSIFY: clear the field on resolve (`field.value = ""` in the .then) → the round-trip text is
     // wiped here → RED.
     resolveSend();
@@ -1418,7 +1418,7 @@ describe("controller — AskUserQuestion card resolves resolve_tool_permission w
     expect(calls("write_agent_plan")).toHaveLength(0);
   });
 
-  // Sub-Plan 02 — the clarify card must resolve with the CORRECT { questions, answers } shape even
+  // the clarify card must resolve with the CORRECT { questions, answers } shape even
   // while a multiplan orchestration is active. The earlier bug skipped the pendingQuestions capture
   // when isOrchestrationActive(), so submitQuestion resolved with an EMPTY questions echo. With the
   // capture always running, an active orchestration must still echo the original questions populated.
@@ -1460,7 +1460,7 @@ describe("controller — AskUserQuestion card resolves resolve_tool_permission w
     expect(updatedInput.answers).toEqual({ "Pick one": "A", "Pick many": ["Y"] });
   });
 
-  // Fix #7 — the card Submit must ROUTE THROUGH the orchestrator when an orchestration is active
+  // The card Submit must ROUTE THROUGH the orchestrator when an orchestration is active
   // (answerClarify dispatches CLARIFY_ANSWERED → re-arms the paused intent watchdog → resolves the
   // held permission once), NOT bypass it with a direct resolve_tool_permission (which leaves the
   // watchdog permanently disarmed — a silent-hang backstop gap). The legacy (no-orchestration) path
@@ -1541,7 +1541,7 @@ describe("controller — AskUserQuestion card resolves resolve_tool_permission w
 });
 
 // ---------------------------------------------------------------------------------------------
-// Sub-Plan 03 — §1 composer entry: Start delegates to getOrchestrator().start() and runs
+// §1 composer entry: Start delegates to getOrchestrator().start() and runs
 // onStarted()/close() ONLY when start() resolves TRUE; on FALSE (idempotent no-op) it shows an
 // error and the modal stays open (a dead start must not masquerade as success).
 // ---------------------------------------------------------------------------------------------
@@ -1591,7 +1591,7 @@ describe("controller — §1 composer Start delegates to orchestrator.start() (t
 });
 
 // ---------------------------------------------------------------------------------------------
-// Sub-Plan 03 — §2 live bridge: agent-stream / tool-permission-requested forward to
+// §2 live bridge: agent-stream / tool-permission-requested forward to
 // ingestStream / ingestPermission ONLY while an orchestration is active; and Stop routes to
 // getOrchestrator().cancel() when active (not the raw cancel_agent_run/end_agent_session).
 // ---------------------------------------------------------------------------------------------

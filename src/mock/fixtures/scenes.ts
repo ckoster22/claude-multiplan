@@ -134,8 +134,8 @@ export const toolRunning: SceneBuilder = () => [
 
 // A completed tool row (.conv-tool[data-status="done"]). The tool_result with is_error:false
 // correlates onto the tool_use by id → status "done". Dropping the tool_result leaves the tool with
-// no result when the terminal result(4) ends the turn, so it is demoted to "interrupted" (Bug #3
-// turn-end demotion) — the [data-status="done"] selector fails either way (falsifiability target).
+// no result when the terminal result(4) ends the turn, so it is demoted to "interrupted"
+// (turn-end demotion) — the [data-status="done"] selector fails either way (falsifiability target).
 export const toolDone: SceneBuilder = () => [
   stream(systemInit(1)),
   stream({

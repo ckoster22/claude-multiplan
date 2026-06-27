@@ -1,4 +1,4 @@
-// Multiplan orchestration domain (Sub-Plan 03) — orchestrator driver tests.
+// Multiplan orchestration domain — orchestrator driver tests.
 //
 // The orchestrator is the IMPURE driver over the PURE plan-tree reducer. These tests inject a FAKE
 // OrchestratorDeps (mirroring composer.test.ts's injected-invoker pattern) so the driver is exercised
@@ -2058,7 +2058,7 @@ describe("orchestrator — cancel purges a held approval", () => {
 });
 
 // ============================================================================================
-// Sub-Plan 03 DRIVER CORE — live bridge / sequencer tests (drive ingest* entry points).
+// DRIVER CORE — live bridge / sequencer tests (drive ingest* entry points).
 // ============================================================================================
 
 describe("orchestrator — bootstrap + idempotent no-op", () => {
@@ -3080,7 +3080,7 @@ describe("orchestrator — summary threading", () => {
 });
 
 // ============================================================================================
-// #2 — NO CROSS-RUN TRANSIENT BLEED (HIGH). Two runs share ONE orchestrator handle (the live app
+// NO CROSS-RUN TRANSIENT BLEED (HIGH). Two runs share ONE orchestrator handle (the live app
 // uses a singleton). Every PER-RUN transient — the prior-sibling `summaries`, the per-child
 // `mandates`, the in-flight `clarifyQuestions`, the pending parent-review `adjustNote` — MUST be
 // reset when a fresh run starts, or run A's context bleeds into run B's prompts (a stale summary

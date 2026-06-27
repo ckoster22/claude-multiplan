@@ -190,7 +190,7 @@ Text after the image, so the pane shows the image is inlined mid-document.
 // is byte-identical to composePreviewMarkdown's output for the ROUND-1 override (same plain ``` fence
 // around the same ASCII card). So round-1 ticks settle to the same card no matter the race; round-2 ticks
 // (only renderPrototypePreview re-fires — the open-plan key is unchanged, so the reconciler memoizes)
-// morph the card to the difficulty-badge variant. Mermaid-free throughout (review item #6).
+// morph the card to the difficulty-badge variant. Mermaid-free throughout.
 export const PROTO_PREVIEW_PATH = `${PLANS}/trailhead-prototype-preview.md`;
 
 // The monospace trail-card ASCII the inline prototype shows. Round 1 = the clean card (name, photo
@@ -222,7 +222,7 @@ const TRAIL_CARD_R2_ASCII = [
 // (kind:"ascii", non-mermaid). The Trailhead player passes the result to emitGate so main.ts's
 // renderPrototypePreview composes the SAME ASCII trail card the open-plan backdrop shows. Round >= 2
 // swaps in the difficulty-badge variant. The default MOCK_PROTOTYPE_GATE is kind:"mermaid" (a stray
-// `flowchart LR`), so this override is what keeps the prototype chapter mermaid-free (review item #6).
+// `flowchart LR`), so this override is what keeps the prototype chapter mermaid-free.
 export function trailheadProtoPreviewOverride(round: number): {
   kind: "ascii";
   inlinePreview: string;

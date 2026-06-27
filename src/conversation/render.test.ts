@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — DOM renderer tests (jsdom, falsifiable).
+// Conversation domain — DOM renderer tests (jsdom, falsifiable).
 //
 // One assertion per frozen kind. We feed a model, derive its tree, render, and assert the DOM.
 // The sanitization test feeds an XSS payload and asserts it is neutralized; removing the
@@ -153,7 +153,7 @@ describe("render — collapsible tool row exposes args/result via textContent", 
   });
 
   it("an INTERRUPTED tool row (running at turn end, never resulted) is non-pulsing with a distinct label", () => {
-    // Bug #3: a tool_use whose result never lands before the turn completes derives "interrupted"
+    // a tool_use whose result never lands before the turn completes derives "interrupted"
     // (stream.ts), so its row must NOT pulse and must carry a label distinct from "running…".
     const m = new ConversationModel();
     m.appendStream({ seq: 1, kind: "tool_use", id: "t1", tool: "Bash",
@@ -353,7 +353,7 @@ describe("render — Task/Agent tool row is legible (description, not raw JSON)"
   });
 
   it("nests assistant TEXT carrying parent_tool_use_id inside the subagent group (not only tool rows)", () => {
-    // FIX 2(c): grouping must hold assistant-text children, not just Bash/tool rows.
+    // grouping must hold assistant-text children, not just Bash/tool rows.
     const m = new ConversationModel();
     m.appendStream({
       seq: 1,
@@ -421,14 +421,14 @@ describe("render — mode chips", () => {
 });
 
 describe("render — permission request / denied / result / error / exit rows", () => {
-  it("renders the 'reviewing in the Plan tab' notice for tool-permission-requested (Sub-Plan 03)", () => {
+  it("renders the 'reviewing in the Plan tab' notice for tool-permission-requested", () => {
     const m = new ConversationModel();
     const ev: ToolPermissionRequested = { seq: 1, kind: "tool_permission_requested", id: "tp1", tool: "ExitPlanMode", input: {}, agent_id: null };
     m.appendPermissionRequest(ev);
     renderModel(m);
     const notice = host.querySelector(".conv-perm-request")!;
     expect(notice).toBeTruthy();
-    // Sub-Plan 03: the marker now points to the Plan tab (main.ts owns the review there).
+    // the marker now points to the Plan tab (main.ts owns the review there).
     expect(notice.textContent?.toLowerCase()).toContain("reviewing in the plan tab");
   });
 

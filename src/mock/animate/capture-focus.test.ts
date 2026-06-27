@@ -1,4 +1,4 @@
-// Mock-ANIMATE capture-focus isolation tests (Fix 1) — booting the REAL player (index.ts) in jsdom and
+// Mock-ANIMATE capture-focus isolation tests — booting the REAL player (index.ts) in jsdom and
 // driving its `window.__mockAnim` control surface, asserting that the capture-frame-local focus set by
 // focusComment() NEVER survives a doc load or a user scrub. Stale focus would otherwise hide all-but-one
 // comment in a later replay session.
@@ -59,7 +59,7 @@ function panelTexts(): string[] {
   return Array.from(panel.querySelectorAll(".mockanim-cmt-item")).map((n) => n.textContent ?? "");
 }
 
-describe("Fix 1 — capture focus must not leak past a doc load or a scrub", () => {
+describe("capture focus must not leak past a doc load or a scrub", () => {
   beforeEach(() => {
     // jsdom has no real layout; pin a deterministic viewport so denorm/window math is stable.
     Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true });

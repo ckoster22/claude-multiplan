@@ -1,6 +1,6 @@
 // Falsifiable unit tests for the sidecar's PURE session-command decision (session-command.ts).
 //
-// THE BUG UNDER TEST (#11 — a late `set-permission-mode` crashes the sidecar): when the
+// THE BUG UNDER TEST (a late `set-permission-mode` crashes the sidecar): when the
 // command arrived AFTER the SDK query session had ended (graceful-shutdown drain in flight, or a
 // turn-end iterator close), index.ts still called `await q.setPermissionMode(...)` on a stale/closed
 // `q`, which throws and kills the process. `decideSessionCommand` models the session lifecycle as a
@@ -27,7 +27,7 @@ function spyQuery() {
   return q;
 }
 
-describe("decideSessionCommand — q.setPermissionMode is gated to a LIVE session (bug #11)", () => {
+describe("decideSessionCommand — q.setPermissionMode is gated to a LIVE session", () => {
   it("dead session → drop-ended (a late set-permission-mode must NOT reach a stale q)", () => {
     // FALSIFY: gate `dead` → "apply" (the pre-fix unconditional behavior) → index.ts would call
     // q.setPermissionMode on a closed query and crash the sidecar → this assertion goes RED.

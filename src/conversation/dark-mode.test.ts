@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — dark-mode guard.
+// Conversation domain — dark-mode guard.
 //
 // Asserts that NO `.conv-*` style RULE (and the composer modal) hardcodes a literal color
 // (hex / rgb( / rgba( / hsl( / hsla( ). Every color in a .conv-* rule must resolve through a

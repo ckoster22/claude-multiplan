@@ -13,7 +13,7 @@ vi.mock("mermaid", () => ({
   },
 }));
 
-// Spy harness for FIX A: wrap the REAL attachPanZoom so every controller it
+// Spy harness: wrap the REAL attachPanZoom so every controller it
 // returns has its `destroy` replaced by a spy that still calls through. This lets
 // us assert teardown is invoked WITHOUT changing any pan/zoom behavior — the real
 // controller is fully wired; we only observe `destroy`.
@@ -33,7 +33,7 @@ vi.mock("./panzoom", async () => {
   };
 });
 
-// Fix 2 proof: mermaid runs under securityLevel:"loose", which SKIPS mermaid's
+// proof: mermaid runs under securityLevel:"loose", which SKIPS mermaid's
 // internal DOMPurify. We sanitize the SVG ourselves before innerHTML injection.
 // These tests assert that our sanitize config (svg + html profile) closes the XSS
 // hole (strips <script> + on* handlers) WITHOUT breaking multi-line labels
@@ -245,20 +245,20 @@ describe("renderDiagrams — wraps the sanitized SVG in a pan/zoom viewport", ()
   });
 });
 
-// ---- FIX A: controller teardown is tied to the DOM wipe in renderInto --------
+// ---- controller teardown is tied to the DOM wipe in renderInto --------
 //
 // renderInto wipes the pane (`paneEl.innerHTML = …`), which DETACHES the previous
 // render's `.mermaid-viewport` elements. The pan/zoom controllers bound to those
 // viewports register `window` drag listeners that would otherwise outlive the
-// detached DOM. FIX A calls destroyControllers() at the EXACT innerHTML wipe so
+// detached DOM. renderInto calls destroyControllers() at the EXACT innerHTML wipe so
 // teardown happens on every wipe path independent of whether the async settle()/
 // renderDiagrams() that follows ever runs. This drives the REAL renderInto so the
-// test covers FIX A specifically.
+// test covers this teardown specifically.
 //
 // Falsifiability (verified): removing the destroyControllers() call added inside
 // renderInto AND the one at the top of renderDiagrams makes the destroy spy never
 // fire → `toHaveBeenCalledTimes(1)` goes RED. Restored → green.
-describe("renderInto — tears down the previous render's pan/zoom controller (FIX A)", () => {
+describe("renderInto — tears down the previous render's pan/zoom controller", () => {
   beforeEach(() => {
     renderMock.mockReset();
     destroySpies.length = 0;
@@ -293,7 +293,7 @@ describe("renderInto — tears down the previous render's pan/zoom controller (F
   });
 });
 
-// ---- Bug #12-core: renderDiagrams is generation-aware (cooperative cancellation) -------------
+// ---- renderDiagrams is generation-aware (cooperative cancellation) -------------
 //
 // renderDiagrams awaits the heavy, async `mermaid.render` per diagram. A newer open/reload/plan-
 // switch can supersede the pass mid-flight. The new TRAILING optional `isCurrent: () => boolean`
@@ -304,7 +304,7 @@ describe("renderInto — tears down the previous render's pan/zoom controller (F
 // the `finally` still removes mermaid's transient container); (3) BEFORE `_controllers.set` (a
 // superseded pass never wins the controller-registration race). Best-effort cooperative guards,
 // NOT compile-time invariants.
-describe("renderDiagrams — generation-aware cooperative cancellation (Bug #12-core)", () => {
+describe("renderDiagrams — generation-aware cooperative cancellation", () => {
   beforeEach(() => {
     renderMock.mockReset();
     destroySpies.length = 0;

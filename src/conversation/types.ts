@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — wire types.
+// Conversation domain — wire types.
 //
 // SINGLE SOURCE OF TRUTH for the Agent SDK driver surface this domain consumes. Every field
 // here is lifted VERBATIM (snake_case) from CONTRACT.md §"Agent SDK driver (Sub-Plan 01)" —
@@ -156,12 +156,12 @@ export type AgentStream =
 
 // ---- the other four Tauri events (not agent-stream) ---------------------------------------
 
-// `tool-permission-requested` — the canUseTool seam. Sub-Plan 02 RENDERS this as a marker but
-// never resolves it (resolution is Sub-Plan 03's policy).
+// `tool-permission-requested` — the canUseTool seam, RENDERED as a marker but
+// never resolved here (resolution is a later policy).
 export interface ToolPermissionRequested {
   seq: number;
   kind: "tool_permission_requested";
-  // The SDK toolUseID — the id Sub-Plan 03 round-trips via resolve_tool_permission.
+  // The SDK toolUseID — the id round-tripped via resolve_tool_permission.
   id: string;
   tool: string;
   input: unknown;

@@ -1189,12 +1189,12 @@ describe("Phase 4b — synthetic resume sentinel rows", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
-// Phase D #9 — the Affordance model: ONE refreshAffordances() re-derives BOTH surfaces on every run
+// the Affordance model: ONE refreshAffordances() re-derives BOTH surfaces on every run
 // transition. A plan open DURING an active run shows NO resume banner (detectResumable yields nothing
 // while an orchestration owns the seam). When the run ENDS (onDone), refreshAffordances re-evaluates
 // the STILL-open plan's resumability and the #resume-plan-btn appears — WITHOUT reopening the plan.
 // ---------------------------------------------------------------------------------------------
-describe("Phase D #9 — resume banner re-derives when the run ends (refreshAffordances on onDone)", () => {
+describe("resume banner re-derives when the run ends (refreshAffordances on onDone)", () => {
   beforeEach(() => {
     H.invokeCalls = [];
     H.listeners = {};
@@ -1260,14 +1260,14 @@ describe("Phase D #9 — resume banner re-derives when the run ends (refreshAffo
 });
 
 // ---------------------------------------------------------------------------------------------
-// Phase D #9 FIX 3 — removing a SUPPRESSING review surface re-derives the (now-unsuppressed) banner.
-// The #9 precedence suppresses the resume banner while the review bar shows a pending review. When the
+// removing a SUPPRESSING review surface re-derives the (now-unsuppressed) banner.
+// The precedence suppresses the resume banner while the review bar shows a pending review. When the
 // LAST such review is removed out-of-band (plan-review-cancelled → handleReviewCancelled), the surface
 // removal must re-derive BOTH affordances — else a resumable open plan's Resume button stays stuck
 // hidden until re-open. The fix switched handleReviewCancelled (+ resolveReview / refuseUnopenableReview)
 // from refreshReviewBar() to refreshAffordances().
 // ---------------------------------------------------------------------------------------------
-describe("Phase D #9 FIX 3 — cancelling the last pending review re-derives the suppressed resume banner", () => {
+describe("cancelling the last pending review re-derives the suppressed resume banner", () => {
   beforeEach(() => {
     H.invokeCalls = [];
     H.listeners = {};
@@ -1301,7 +1301,7 @@ describe("Phase D #9 FIX 3 — cancelling the last pending review re-derives the
       h({ payload: { review_id: "rev-R", plan_file_path: REVIEW_PLAN, plan_text: "# r\n" } });
     await flush();
 
-    // Browse to the resumable plan P: SUMMARY mode (a review pending elsewhere) → the #9 precedence
+    // Browse to the resumable plan P: SUMMARY mode (a review pending elsewhere) → the precedence
     // SUPPRESSES the resume banner even though P is resumable.
     document.querySelector<HTMLElement>(`[data-path="${PLAN}"]`)!.click();
     await flush();
@@ -1326,13 +1326,13 @@ describe("Phase D #9 FIX 3 — cancelling the last pending review re-derives the
 });
 
 // ---------------------------------------------------------------------------------------------
-// Phase D #9 FIX 4 — purgeInprocReviews must re-derive the (un-suppressed) banner too. The agent-exit
+// purgeInprocReviews must re-derive the (un-suppressed) banner too. The agent-exit
 // and agent-error-fatal callers rely on purge's OWN refresh (unlike #conversation-cancel, they don't
 // call refreshAffordances themselves). When purge removes the LAST in-process review, a resumable open
 // plan's Resume affordance must reappear. Fix: purgeInprocReviews calls refreshAffordances (not just
 // refreshReviewBar).
 // ---------------------------------------------------------------------------------------------
-describe("Phase D #9 FIX 4 — purging the last in-process review (agent-exit) re-derives the suppressed banner", () => {
+describe("purging the last in-process review (agent-exit) re-derives the suppressed banner", () => {
   beforeEach(() => {
     H.invokeCalls = [];
     H.listeners = {};

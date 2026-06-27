@@ -1,4 +1,4 @@
-// ---- Sidebar filter (Fix 1) — pure, testable core -----------------------------------------
+// ---- Sidebar filter — pure, testable core -----------------------------------------
 //
 // The sidebar filter narrows the Plans list by a free-text query that ORs across each plan's
 // TITLE (filename_stem), its working DIR (cwd), and its H1 HEADINGS (h1s, sourced from the

@@ -40,7 +40,7 @@ describe("tickRate (pure autoplay-rate helper)", () => {
     expect(tickRate(TERMINAL_MS, 1)).toBe(1);
   });
 
-  it("(P2) the quota-wall scene is a 1× ISLAND inside the 4× warp window (FIX B guard)", () => {
+  it("(P2) the quota-wall scene is a 1× ISLAND inside the 4× warp window (guard)", () => {
     // The scene sits INSIDE [WARP_POINT_MS, TERMINAL_LAND_MS) but must be legible → 1× (plain UI speed).
     const inQuota = (QUOTA_START_MS + QUOTA_END_MS) / 2;
     expect(inQuota).toBeGreaterThan(WARP_POINT_MS);

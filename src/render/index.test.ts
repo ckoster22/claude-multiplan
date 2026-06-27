@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Fix 1 proof: settle() must AWAIT resolveLocalImages (which sets real srcs on
+// proof: settle() must AWAIT resolveLocalImages (which sets real srcs on
 // local <img> placeholders) BEFORE awaitImages observes them. We use a DEFERRED
 // mock invoke: the data: URL only resolves when we manually release it, so we can
 // prove the image's src is already set by the time awaitImages runs.
@@ -89,7 +89,7 @@ describe("settle — resolves local images before awaiting them", () => {
   });
 });
 
-// Bug #12-core (facade half): settle() threads its TRAILING optional isCurrent predicate down to
+// (facade half): settle() threads its TRAILING optional isCurrent predicate down to
 // renderDiagrams. A superseded settle (isCurrent → false) must render NO mermaid diagram — the
 // guard bails before mermaid.render. (The omitted-default = always-current path keeps the five
 // existing main.ts settle(...) callers compiling and behaving unchanged.)

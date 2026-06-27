@@ -16,7 +16,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //     it from pending.
 //   • Un-openable: an empty plan_file_path (or an open that throws) is REFUSED — the review is dropped
 //     from pending (so it is not counted) and the failure is surfaced on #hook-status; it is NEVER
-//     rendered as an unactionable detached phantom (bug #1).
+//     rendered as an unactionable detached phantom.
 //
 // This test uses the REAL ./render facade (NOT mocked) so the genuine save→IO→fireCountChanged path
 // runs end-to-end. The backend is a shared in-memory comment store keyed by REAL plan path; every
@@ -476,14 +476,14 @@ describe("review cancellation — removes from pending, plan stays open", () => 
 
 // ---------------------------------------------------------------------------------------------
 // Un-openable plan (empty plan_file_path) — REFUSE-and-surface, NOT a detached phantom.
-// (Bug #1 fix: the old "degraded detached render" left openPath null, so currentReviewId() stayed
+// (The old "degraded detached render" left openPath null, so currentReviewId() stayed
 // null → the bar fell to SUMMARY mode (Submit hidden, handlers bail on the null guards)
 // while the dead review was STILL counted ("1 plan awaiting review"). It was un-actionable yet
 // trapping. An un-openable review must be REFUSED — dropped from pending so it is not counted, with
 // the failure surfaced on #hook-status — never rendered.)
 // ---------------------------------------------------------------------------------------------
 // ---------------------------------------------------------------------------------------------
-// Bug #10 — a fast double-click on Submit must dispatch the deny EXACTLY once.
+// a fast double-click on Submit must dispatch the deny EXACTLY once.
 //
 // The first click sets the bar to "submitting" (Submit visually disabled). But a disabled button is
 // not a guarantee: a programmatically dispatched click still reaches the handler in jsdom (and a real
@@ -493,7 +493,7 @@ describe("review cancellation — removes from pending, plan stays open", () => 
 // the first round-trip's awaited promise resolves, and asserts the underlying respond_to_review deny
 // landed once. Exercises the EXTERNAL review submit path (the same path the "Submit (deny)" test uses).
 // ---------------------------------------------------------------------------------------------
-describe("review Submit — no double-submit on a fast double-click (Bug #10)", () => {
+describe("review Submit — no double-submit on a fast double-click", () => {
   it("two synchronous #review-submit clicks dispatch the deny (respond_to_review) EXACTLY once", async () => {
     const path = "/home/u/.claude/plans/Double-Submit.md";
     H.rows = [planRow(path, "Double-Submit")];

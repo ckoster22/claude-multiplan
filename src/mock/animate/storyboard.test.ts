@@ -66,7 +66,7 @@ import {
   PROTO_CLOSE_MS,
   PROTO_FEEDBACK_MS,
   PROTO_ACK_MS,
-  // (P5 #1/#3/#10) pacing/cursor-travel constants — the field→button moves + dwell pulses.
+  // pacing/cursor-travel constants — the field→button moves + dwell pulses.
   B1_REQUEST_DWELL_MS,
   B1_REQUEST_DWELL_PULSE_FROM,
   B1_REQUEST_DWELL_PULSE_TO,
@@ -219,7 +219,7 @@ describe("storyboard — applyUpToTime invariants", () => {
     expect(container.querySelector(".conv-tool")).not.toBeNull();
   });
 
-  // 6. FINISHED THOUGHT (FIX 1) — the beat must END as a completed turn, not a perpetual "Working…"
+  // 6. FINISHED THOUGHT — the beat must END as a completed turn, not a perpetual "Working…"
   //    spinner. During playback (a mid-run T) `working` is non-null (live feel); at T = duration the
   //    terminal `result` frame has landed so derive() cleared `active` and `working` is null. This
   //    asserts the INVARIANT (a finished beat has no working indicator), independent of frame counts.
@@ -630,7 +630,7 @@ describe("storyboard — P3 front (opening / clarify / scope×20 / plan-sizer)",
 //   • projectSurfaceState makes prototypeGate.on AND activeTab="plan" true exactly inside the window;
 //   • the terminal result is still STRICTLY the last frame (highest seq AND tMs).
 
-// ---- (P4 #2) TRAILHEAD_BEAT — intent-clarifier RUNNING beat (before the question card) ----------
+// ---- TRAILHEAD_BEAT — intent-clarifier RUNNING beat (before the question card) ----------
 //
 // Before the clarify question card lands (B2_QUESTION_MS) the intent-clarifier agent is shown RUNNING:
 // a top-level `intent-clarifier` Task + a `subagent_started` label + >=3 atomic leaf tool pairs + an
@@ -924,7 +924,7 @@ describe("storyboard — TRAILHEAD_BEAT nested-plan reveal chapter", () => {
   });
 
   // Nested-plan + comment chapters shift by + PROTO_ACT_SHIFT (the P4 prototype act lengthened the
-  // upstream chapter) + CLARIFIER_SHIFT (the P4#2 intent-clarifier beat slid the whole back half later);
+  // upstream chapter) + CLARIFIER_SHIFT (the intent-clarifier beat slid the whole back half later);
   // the literals are unchanged, the shift is added.
   const NESTED_SHIFT = EXEC_SHIFT + PROTO_ACT_SHIFT + CLARIFIER_SHIFT + SIZER_SHIFT;
   const PLAN_CHANGED_MS = 19800 + NESTED_SHIFT;
@@ -2319,7 +2319,7 @@ describe("storyboard — projectCursorState (symbolic lerp)", () => {
   });
 });
 
-// (P5 #1/#3/#10) PACING & CURSOR TRAVEL on the REAL TRAILHEAD_BEAT. For each of the three submit
+// PACING & CURSOR TRAVEL on the REAL TRAILHEAD_BEAT. For each of the three submit
 // moments the cursor must TRAVEL — a real field→button move (t01 strictly in (0,1) at the move's
 // midpoint, with fromTarget = the input field and toTarget = the button), NOT an instant jump — and a
 // DWELL pulse must mark the button before the cosmetic click. Every assertion is pinned to the named
@@ -2531,7 +2531,7 @@ describe("storyboard — projectModalState (last-≤-T per kind, backward scrub)
 // A "Usage limit reached" WAITING banner whose countdown STARTS at 3h 04m and races to 0:00:00 as a PURE
 // fn of scrub-time T (held readable, then compressed over ~8s), then a tombstone + a visible "resuming"
 // notice — before subplan 04.01 begins. Falsifiable, invariant-first; uses the SAME projection the demo
-// uses (applyUpToTime → derive). The countdown second is folded into modelSignature (FIX A) so the pane
+// uses (applyUpToTime → derive). The countdown second is folded into modelSignature so the pane
 // re-renders each second; without it the value is written once and freezes.
 describe("(P2) quota-wall scene — countdown 3h04m→resume between subplan 03 and 04", () => {
   let model: ConversationModel;
@@ -2557,7 +2557,7 @@ describe("(P2) quota-wall scene — countdown 3h04m→resume between subplan 03 
     expect(formatCountdown(frozen!)).toBe("03:04:00");
   });
 
-  it("COUNTDOWN RACES + SIGNATURE CHANGES — value strictly decreases and modelSignature differs across 1s (FIX A guard)", () => {
+  it("COUNTDOWN RACES + SIGNATURE CHANGES — value strictly decreases and modelSignature differs across 1s (guard)", () => {
     // Two T's 1000ms apart INSIDE the race window (after the 2s read-hold, before the resume).
     const T1 = QUOTA_START_MS + 4000;
     const T2 = T1 + 1000;

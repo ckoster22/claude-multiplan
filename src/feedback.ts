@@ -1,4 +1,4 @@
-// Sub-Plan 03 — pure prompt-generation for the "Prompt Feedback" overlay.
+// pure prompt-generation for the "Prompt Feedback" overlay.
 //
 // Standalone & pure (imports only the CommentRecord type) so it is unit-testable with no DOM /
 // Tauri. main.ts (title-bar domain) consumes it; the render facade does NOT — the feedback

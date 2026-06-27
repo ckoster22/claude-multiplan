@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------------------------
-// Phase D #4 — the Selection union + resolveSelection (the sidebar selection model).
+// the Selection union + resolveSelection (the sidebar selection model).
 //
 // `openPath` is now a DERIVED GETTER over a single `selection` source of truth
 // (none | plan | sentinel | placeholder). After EVERY refreshList, `resolveSelection` runs:
@@ -161,7 +161,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("Phase D #4 — selection collapse closes the ghost pane", () => {
+describe("selection collapse closes the ghost pane", () => {
   // Open a plan, then make it vanish from list_plans → resolveSelection collapses to `none` and
   // the reading pane resets to the empty state. RED before the union/resolveSelection exists:
   // today refreshList leaves the dangling pane painted.
@@ -188,7 +188,7 @@ describe("Phase D #4 — selection collapse closes the ghost pane", () => {
     expect(document.querySelector("#reading-pane .empty-state")).not.toBeNull();
   });
 
-  // FIX 1 (regression guard) — a TRANSIENT list_plans FAILURE must NOT collapse the open plan. The
+  // (regression guard) — a TRANSIENT list_plans FAILURE must NOT collapse the open plan. The
   // catch path used to substitute `records = []`, which flowed into the SAME collapse (prevRecords has
   // P, records=[] ⇒ "vanished") and blanked the pane the user is reading. A fetch error must be a
   // NO-OP for selection + pane. RED before the fix (pane blanked); GREEN after.
@@ -241,7 +241,7 @@ describe("Phase D #4 — selection collapse closes the ghost pane", () => {
     expect(ph!.classList.contains("active"), "placeholder stays the active selection").toBe(true);
   });
 
-  // REGRESSION GUARD (FIX 2 — load-bearing) — the held orchestrator gate's plan must NOT collapse
+  // REGRESSION GUARD (load-bearing) — the held orchestrator gate's plan must NOT collapse
   // even after it was LISTED and then DROPPED from list_plans while the gate is held (its row can lag /
   // churn mid-hold; the placeholder stands in). This exercises the heldGatePlan exemption GENUINELY:
   // the gate plan is in prevRecords (so wasListed=true) and absent from the new list (stillListed=

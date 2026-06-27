@@ -614,16 +614,16 @@ describe("sidecar permissions — bashDecisionFor under 'prototype' is fail-clos
 });
 
 // ---------------------------------------------------------------------------
-// BUG FIXES — /dev/null discard is NOT a write (BUG 1) + `cd` is read-only (BUG 2).
+// /dev/null discard is NOT a write + `cd` is read-only.
 //
-// BUG 1: a redirect whose TARGET is the bit-bucket `/dev/null` is a DISCARD, not a tree write
+// a redirect whose TARGET is the bit-bucket `/dev/null` is a DISCARD, not a tree write
 //   (`rg … 2>/dev/null`, `cmd >/dev/null`, `&>/dev/null`). The old OUTPUT_REDIRECT regex matched
 //   it and denied the (read-only) command. The fix excludes a `/dev/null` target. A REAL file
 //   target (`> out.txt`, `2> err.log`, `>> log`) still matches and stays DENIED.
-// BUG 2: `cd <dir> && rg …` was denied under PROTOTYPE because `cd` was absent from the read-only
+// `cd <dir> && rg …` was denied under PROTOTYPE because `cd` was absent from the read-only
 //   verb set; the per-segment write check still runs, so adding `cd` opens no write hole.
 // ---------------------------------------------------------------------------
-describe("sidecar permissions — /dev/null discard is NOT a write (BUG 1)", () => {
+describe("sidecar permissions — /dev/null discard is NOT a write", () => {
   it("isWriteShapedBashCommand: a /dev/null target is a DISCARD, not a write (plan ALLOWS)", () => {
     // FALSIFY: revert OUTPUT_REDIRECT to `/(?:[0-9]*|&)>{1,2}\|?(?!&[0-9-])/` → the `/dev/null`
     // target matches the redirect → these flip to true → RED.
@@ -699,7 +699,7 @@ describe("sidecar permissions — /dev/null discard is NOT a write (BUG 1)", () 
   });
 });
 
-describe("sidecar permissions — `cd` is a read-only prototype verb (BUG 2)", () => {
+describe("sidecar permissions — `cd` is a read-only prototype verb", () => {
   it("prototype: `cd <dir> && rg …` is ALLOWED (cd is read-only, every segment provably read-only)", () => {
     // FALSIFY: remove "cd" from PROTOTYPE_READONLY_VERBS → the `cd ~/x` segment is unrecognized →
     // fails closed → these flip to a deny reason → RED.

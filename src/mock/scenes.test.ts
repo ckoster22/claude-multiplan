@@ -101,7 +101,7 @@ describe("scenes — each scene yields its signature node through the real pipel
     const container = renderScene(withoutResult);
     expect(container.querySelector('.conv-tool[data-status="done"]')).toBeNull();
     // It is still a tool row — but the scene's terminal result(4) ends the turn while this tool's
-    // tool_result never landed, so the turn-end demotion moves it to "interrupted" (Bug #3), away from
+    // tool_result never landed, so the turn-end demotion moves it to "interrupted", away from
     // "done". Asserting the row is present (not vanished) AND now "interrupted" keeps the canary's
     // intent: dropping tool_result is DETECTED (status changed) — it does not pass regardless.
     expect(container.querySelector('.conv-tool[data-status="interrupted"]')).not.toBeNull();

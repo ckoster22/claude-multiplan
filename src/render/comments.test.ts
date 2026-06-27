@@ -46,9 +46,9 @@ beforeEach(() => {
 });
 
 // ============================================================================================
-// Verification item 1 — duplicate-text 2nd-occurrence anchoring
+// duplicate-text 2nd-occurrence anchoring
 // ============================================================================================
-describe("applyComments — duplicate-text anchoring (Verification 1)", () => {
+describe("applyComments — duplicate-text anchoring", () => {
   it("anchors the 2nd occurrence (occurrence:1) leaving the 1st un-highlighted", () => {
     // A block with the phrase "foo bar" repeated twice (block data-source-line=5).
     const p = pane('<p data-source-line="5">alpha foo bar beta foo bar gamma</p>');
@@ -142,9 +142,9 @@ describe("applyComments — duplicate-text anchoring (Verification 1)", () => {
 });
 
 // ============================================================================================
-// Verification item 2 — cross-inline-element wrap (no surroundContents throw)
+// cross-inline-element wrap (no surroundContents throw)
 // ============================================================================================
-describe("wrapRange — cross-inline-element selection (Verification 2)", () => {
+describe("wrapRange — cross-inline-element selection", () => {
   it("wraps a quote spanning <code>…</code> … <strong>…</strong> as multiple sibling spans, tags intact", () => {
     const p = pane('<p data-source-line="0">use <code>foo()</code> then <strong>bar</strong> done</p>');
     // Quote spans from inside <code> through inside <strong>: "foo() then bar".
@@ -171,9 +171,9 @@ describe("wrapRange — cross-inline-element selection (Verification 2)", () => 
 });
 
 // ============================================================================================
-// Verification item 3 — clear round-trip (multi-span unwrap invariant)
+// clear round-trip (multi-span unwrap invariant)
 // ============================================================================================
-describe("clearHighlight — total + idempotent unwrap (Verification 3)", () => {
+describe("clearHighlight — total + idempotent unwrap", () => {
   it("restores textContent and leaves zero [data-c] after clearing a multi-element wrap", () => {
     const html = '<p data-source-line="0">use <code>foo()</code> then <strong>bar</strong> done</p>';
     const p = pane(html);
@@ -203,9 +203,9 @@ describe("clearHighlight — total + idempotent unwrap (Verification 3)", () => 
 });
 
 // ============================================================================================
-// Verification item 4 — block_line: null whole-pane re-find
+// block_line: null whole-pane re-find
 // ============================================================================================
-describe("applyComments — block_line null scans the whole pane (Verification 4)", () => {
+describe("applyComments — block_line null scans the whole pane", () => {
   it("a null-block record finds its match by occurrence across the whole pane", () => {
     // Two separate blocks; the quote lives in the SECOND block. A whole-pane scan (block_line:null)
     // must still find it. occurrence counts across the whole pane.
@@ -228,9 +228,9 @@ describe("applyComments — block_line null scans the whole pane (Verification 4
 });
 
 // ============================================================================================
-// Verification item 5 — id uniqueness after K appends (minting invariant guard)
+// id uniqueness after K appends (minting invariant guard)
 // ============================================================================================
-describe("addComment minting — ids are pairwise distinct after K appends (Verification 5)", () => {
+describe("addComment minting — ids are pairwise distinct after K appends", () => {
   it("K sequential saves mint pairwise-distinct ids", async () => {
     const p = pane('<p data-source-line="0">repeated word repeated word repeated word repeated word</p>');
 
@@ -267,9 +267,9 @@ describe("addComment minting — ids are pairwise distinct after K appends (Veri
 });
 
 // ============================================================================================
-// Verification item 6 (frontend half) — persistence round-trip via mocked CommentsIO
+// (frontend half) — persistence round-trip via mocked CommentsIO
 // ============================================================================================
-describe("addComment / clear — adopt returned array + fire onChange (Verification 6)", () => {
+describe("addComment / clear — adopt returned array + fire onChange", () => {
   it("addComment calls io.save with the new array, adopts the returned array, and fires onChange", async () => {
     const p = pane('<p data-source-line="0">hello world here</p>');
     const returned: CommentRecord[] = [];
@@ -342,9 +342,9 @@ describe("addComment / clear — adopt returned array + fire onChange (Verificat
 });
 
 // ============================================================================================
-// Verification item 7 — popover state machine via the single renderPopover applier
+// popover state machine via the single renderPopover applier
 // ============================================================================================
-describe("popover state machine (Verification 7)", () => {
+describe("popover state machine", () => {
   it("mouseup over a selection → create (un-hidden, #sp-quote set); cancel → hidden (no io.save)", async () => {
     const p = pane('<p data-source-line="0">select me please</p>');
     const io: CommentsIO = {
@@ -419,12 +419,12 @@ describe("popover state machine (Verification 7)", () => {
 });
 
 // ============================================================================================
-// Bug #7 — the popover is OWNED by the plan it was drafted against. A save must never anchor to
+// the popover is OWNED by the plan it was drafted against. A save must never anchor to
 // a DIFFERENT plan than the draft was captured on, and a genuine plan-path CHANGE invalidates the
 // popover — but a same-plan LIVE RELOAD (the pane auto-reloads while a plan is built) must PRESERVE
 // the user's in-progress draft (hiding it on every innerHTML wipe would destroy the draft).
 // ============================================================================================
-describe("popover plan-ownership (Bug #7)", () => {
+describe("popover plan-ownership", () => {
   function io(): CommentsIO {
     return {
       load: vi.fn(async () => []),
@@ -447,7 +447,7 @@ describe("popover plan-ownership (Bug #7)", () => {
     setTextarea("a note meant for A");
 
     // The open plan switches to B BEFORE Save is clicked (NO invalidatePopover call — this proves
-    // the saveEl bail itself, independent of #7b's invalidation seam).
+    // the saveEl bail itself, independent of the invalidation seam).
     openPath = "/b.md";
     clickSave();
     await Promise.resolve();
@@ -630,9 +630,9 @@ describe("loadCommentsFor", () => {
 });
 
 // ============================================================================================
-// Sub-Plan 03 — facade clearAllComments (remove every highlight + wipe the cache, fire onChange)
+// facade clearAllComments (remove every highlight + wipe the cache, fire onChange)
 // ============================================================================================
-describe("clearAllComments — wipes all highlights + cache + fires onChange (Sub-Plan 03)", () => {
+describe("clearAllComments — wipes all highlights + cache + fires onChange", () => {
   it("after clearAllComments the pane has zero .cmt-hl spans, the cache is [], and onChange fired", async () => {
     // A pane with TWO committed comments in two separate blocks. The clear-all sweep must remove
     // EVERY highlight (iterating the cached record ids), not just one — so two distinct comments is

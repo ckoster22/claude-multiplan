@@ -1,4 +1,4 @@
-// Agent SDK driver (Sub-Plan 01) — additive, non-breaking.
+// Agent SDK driver — additive, non-breaking.
 //
 // All driver logic lives HERE; the only edits to the lib.rs monolith are
 // additive registration (plugin init, managed state, generate_handler!,
@@ -265,7 +265,7 @@ pub fn parse_stream_line(line: &str) -> Result<Option<AgentEvent>, String> {
         // The public `agent-error` wire shape (CONTRACT.md) is `{kind, message,
         // fatal}` where `kind` is the discriminator (auth/sdk/spawn/…). Normalize
         // at this seam: lift `error_kind` into `kind` (default "sdk" if absent) and
-        // drop the internal `error_kind` field, so Sub-Plan 02's `payload.kind ===
+        // drop the internal `error_kind` field, so the `payload.kind ===
         // "auth"` onboarding check matches. Rust-originated errors (cwd/io/
         // contamination) never take this path — they emit a conforming `kind`
         // directly in the read task.
@@ -758,7 +758,7 @@ pub fn shutdown_session(app: &AppHandle) {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests (Verification 9) — falsifiable parse_stream_line tests.
+// Unit tests — falsifiable parse_stream_line tests.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -787,7 +787,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // FIX 2: a FAILED start-command write must NOT phantom-lock the session slot.
+    // a FAILED start-command write must NOT phantom-lock the session slot.
     //
     // `start_agent_session` used to store the driver into the singleton slot and
     // only THEN send the `start` line; a send failure returned early (`?`) with the
@@ -822,7 +822,7 @@ mod tests {
 
     /// On send FAILURE the slot must be left `None` (NOT phantom-locked), and the
     /// driver must be handed back to the caller for teardown along with the error
-    /// message. This is the core regression test for FIX 2.
+    /// message. This is the core regression test.
     ///
     /// Falsifiable: revert `store_then_send` to the buggy shape (store the driver,
     /// run the send, and on failure leave the slot occupied — i.e. drop the
@@ -926,7 +926,7 @@ mod tests {
         // The sidecar emits `{kind:"error", error_kind:"auth", …}` — `kind:"error"`
         // is its INTERNAL routing token. The emitted `agent-error` payload MUST
         // conform to the contract's `{kind, message, fatal}` with `kind` = the
-        // discriminator, or Sub-Plan 02's `payload.kind === "auth"` onboarding
+        // discriminator, or the `payload.kind === "auth"` onboarding
         // never matches. Falsifiability: drop the normalize rewrite (re-emit the
         // payload verbatim) and `kind` stays "error" / "auth" leaks only on
         // `error_kind` -> this assertion goes RED.
@@ -1226,7 +1226,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Part D (Verification #8): the multimodal `user` wire line.
+    // Part D: the multimodal `user` wire line.
     //
     // `build_user_line` is the PURE builder for the `{type:"user", …}` stdin
     // line. Two load-bearing invariants:

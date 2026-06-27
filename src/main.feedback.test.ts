@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------------------------
-// Sub-Plan 03 — the latest-wins count-request guard in refreshCommentCount.
+// the latest-wins count-request guard in refreshCommentCount.
 //
 // refreshCommentCount is fired un-awaited from open/reload/onCommentCountChanged; concurrent or
 // bursty calls can resolve OUT OF ORDER. The module-level `countReqSeq` makes each call bail after
@@ -106,7 +106,7 @@ beforeEach(() => {
   H.commentsByPath = {};
 });
 
-describe("refreshCommentCount — latest-wins guard (Sub-Plan 03)", () => {
+describe("refreshCommentCount — latest-wins guard", () => {
   it("(a) cross-plan A→B: A's slow get_comment_count resolving AFTER B is open does NOT overwrite B's count", async () => {
     bootDom();
     // Drain any count requests the open-during-boot path enqueued so our two are deterministic.

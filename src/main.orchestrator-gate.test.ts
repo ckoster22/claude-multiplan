@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------------------------
-// Sub-Plan 02 — the approval-gate controller ↔ frozen OrchestratorHandle wiring (the live app's
+// the approval-gate controller ↔ frozen OrchestratorHandle wiring (the live app's
 // consumer side). main.ts subscribes to the SHARED orchestrator's observer; when a sub-plan reaches
 // SUB_DRAFTED (awaiting approval) the controller opens the pointed-at plan file, flips to the Plan tab,
 // and shows the approval bar in IN-PROCESS mode (Approve & Build + Submit relabeled "Request changes").
@@ -124,7 +124,7 @@ function planRow(absPath: string, stem: string): Record<string, unknown> {
   };
 }
 
-// A top-level (tree-less) sidebar row — the openable standalone shape the #5 test inlines for its
+// A top-level (tree-less) sidebar row — the openable standalone shape the test inlines for its
 // OTHER plan. Used for the external-review plan + the neutral third plan in the Resume tie-break test.
 function standaloneRow(absPath: string, stem: string): Record<string, unknown> {
   return {
@@ -323,14 +323,14 @@ describe("orchestrator gate — onAwaitingApproval opens the bar in in-process m
 });
 
 // ---------------------------------------------------------------------------------------------
-// FIX 2 — the placeholder stays the ACTIVE stand-in through the gate handler when the gate
+// the placeholder stays the ACTIVE stand-in through the gate handler when the gate
 // plan's row is missing. The old ordering cleared placeholderSelected BEFORE refreshList ran
 // (and openPath only updates inside openPlan afterwards), so the intermediate render — which is
 // also the FINAL sidebar render here, no later re-render occurs — had ZERO active rows.
 // Falsifiability (verified): restoring `placeholderSelected = false` to before refreshList makes
 // the .active assertions go RED.
 // ---------------------------------------------------------------------------------------------
-describe("orchestrator gate — placeholder stays the active stand-in when the gate row is missing (FIX 2)", () => {
+describe("orchestrator gate — placeholder stays the active stand-in when the gate row is missing", () => {
   it("gate arrives while list_plans has NO row for its plan → the placeholder is the single .active row", async () => {
     H.rows = []; // list_plans lags the plan write — no [data-path] row exists for the gate plan
     const { deps } = makeDeps();
@@ -607,11 +607,11 @@ describe("orchestrator gate — pendingPrototype drives the conversation idle-wa
 });
 
 // ---------------------------------------------------------------------------------------------
-// Phase D #5 — "Resume newest" resumes the ORCHESTRATOR GATE. pendingCount + resumeNewestReview both
+// "Resume newest" resumes the ORCHESTRATOR GATE. pendingCount + resumeNewestReview both
 // derive from pendingSurfaces() (pendingReviews + the orchestrator snapshot). With a held gate and the
 // open plan NOT the gate plan (SUMMARY mode), #review-resume re-opens gate.planPath via the SAME
 // open path onAwaitingApproval uses — NOT just the pendingReviews queue.
-// RED before #5: resumeNewestReview only consulted newestPendingReview() (empty here), so the click
+// RED before the fix: resumeNewestReview only consulted newestPendingReview() (empty here), so the click
 // was a no-op and the gate plan never re-opened.
 // ---------------------------------------------------------------------------------------------
 describe("orchestrator gate — #review-resume resumes the held gate from SUMMARY mode (#5)", () => {

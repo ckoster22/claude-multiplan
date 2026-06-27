@@ -49,7 +49,7 @@ describe("P4 smoke — inline proto card + popover via the REAL reconciler", () 
     expect(pane.textContent).toContain("Eagle Peak Loop");
     expect(pane.textContent).toContain("6.2 mi");
     expect(pane.textContent).toContain("+1,400 ft");
-    // Mermaid-free (review item #6): the inline preview is a plain ASCII fence, never a mermaid diagram.
+    // Mermaid-free: the inline preview is a plain ASCII fence, never a mermaid diagram.
     expect(pane.textContent).not.toContain("```mermaid");
     // REGRESSION GUARD (review2 c3): the deleted floating overlay element must NOT exist anywhere.
     expect(document.getElementById("demo-proto-card")).toBeNull();

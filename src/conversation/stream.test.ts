@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — pure stream-model tests (falsifiable).
+// Conversation domain — pure stream-model tests (falsifiable).
 //
 // These assert the model against ONLY the frozen vocabulary in CONTRACT.md. We do NOT assert
 // any Skill or subagent-NAME shape (unfrozen — deferred to live smoke). Each key behavior was
@@ -153,7 +153,7 @@ describe("ConversationModel — tool correlation", () => {
 
 describe("ConversationModel — a tool still running at turn end is interrupted, not running", () => {
   it("a tool_use with NO matching result, then a result frame, derives 'interrupted' (not 'running')", () => {
-    // Bug #3: a tool_use whose tool_result never lands before the turn completes would otherwise
+    // a tool_use whose tool_result never lands before the turn completes would otherwise
     // stay "running" forever (its UI row pulses indefinitely). At turn-complete it must demote.
     const m = new ConversationModel();
     m.appendStream(toolUse(1, "t1", "Bash"));

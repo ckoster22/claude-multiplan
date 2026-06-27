@@ -1196,7 +1196,7 @@ describe("orchestrator — Phase 7 buffer contract (the carry-forward fix)", () 
 });
 
 // ============================================================================================
-// #8 — THE TURN WATCHDOG IS RE-ARMED ON QUOTA RESUME. A captured summary / parent-review / intent
+// THE TURN WATCHDOG IS RE-ARMED ON QUOTA RESUME. A captured summary / parent-review / intent
 // turn is a REAL generation turn again after the wall refreshes (the model re-emits its artifact),
 // so a silently-stuck RESUMED turn must drive to a loud terminal FATAL exactly as a never-paused
 // turn would. fireResume re-arms `awaiting` but used to NOT re-arm its watchdog — a resumed turn
@@ -1279,7 +1279,7 @@ describe("orchestrator — #8 turn watchdog re-armed on quota resume", () => {
     await advanceExecToSummary(h); // the summary turn for [01] is in flight (its watchdog armed)
 
     // Wall + resume. The pause clears the in-flight summary watchdog; the resume re-arms the captured
-    // summary turn AND (the #8 fix) its watchdog.
+    // summary turn AND its watchdog.
     await quotaWallAndResume(h, rec, clock);
 
     // A FIREABLE turn watchdog is live again. FALSIFY (RED before the fix): fireResume re-arms

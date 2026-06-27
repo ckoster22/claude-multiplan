@@ -411,7 +411,7 @@ describe("buildToc — does NOT change the active tab (tab-state preservation)",
   });
 });
 
-// ---- Sidebar filter (Fix 1) — wired through the real DOMContentLoaded setup ---------------
+// ---- Sidebar filter — wired through the real DOMContentLoaded setup ---------------
 
 // Boot the full sidebar DOM INCLUDING the filter control + count, with `list_plans` returning
 // `records`. Fires DOMContentLoaded so main.ts binds the module handles + filter listeners and
@@ -519,7 +519,7 @@ describe("filter wiring — empty-state + clear", () => {
   });
 });
 
-// ---- FIX B Test 2: a late-arriving cwd re-runs the filter (match + highlight) -------------
+// ---- a late-arriving cwd re-runs the filter (match + highlight) -------------
 //
 // A plan's cwd resolves AFTER the initial list render (the backend cache misses; resolve_cwds
 // returns it on a follow-up round-trip). patchAllCwds() syncs the resolved DISPLAY cwd onto the
@@ -570,7 +570,7 @@ async function bootWithLateCwd(
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
-describe("filter wiring — late-arriving cwd re-filters + highlights (FIX B / Test 2)", () => {
+describe("filter wiring — late-arriving cwd re-filters + highlights", () => {
   it("a row that only matches via its LATE-resolved cwd appears AND highlights the match in .plan-src", async () => {
     // One standalone whose backend cwd is null (forces a resolve_cwds round-trip). The filter
     // query "acme" matches NOTHING in the title/headings — only the cwd that resolves later.
@@ -839,12 +839,12 @@ describe("renderSidebar — live-run placeholder row", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  // FIX 1 (double-.active at run start): the user is reading plan A when a run starts — the
+  // (double-.active at run start): the user is reading plan A when a run starts — the
   // placeholder mints selected, but openPath still points at A. The SELECTED placeholder must be
   // the SINGLE active row; A's row cedes `.active`.
   // Falsifiability (verified): removing the `ph.selected && phShown` suppression pass in
   // renderSidebar leaves A's row `.active` too → the count assertion goes RED (2 actives).
-  it("FIX 1: a SELECTED placeholder is the SINGLE .active row even when openPath matches a record", () => {
+  it("a SELECTED placeholder is the SINGLE .active row even when openPath matches a record", () => {
     render(listEl, masterTree(), makeCtx({ placeholder: ph, openPath: "/p/standalone-x.md" }));
     const actives = listEl.querySelectorAll(".active");
     expect(actives).toHaveLength(1);
@@ -854,7 +854,7 @@ describe("renderSidebar — live-run placeholder row", () => {
     expect(aRow.classList.contains("active")).toBe(false);
   });
 
-  it("FIX 1 scope guard: an UNSELECTED placeholder does NOT suppress the openPath row's .active", () => {
+  it("scope guard: an UNSELECTED placeholder does NOT suppress the openPath row's .active", () => {
     render(
       listEl,
       masterTree(),
@@ -865,7 +865,7 @@ describe("renderSidebar — live-run placeholder row", () => {
     expect(listEl.querySelectorAll(".active")).toHaveLength(1);
   });
 
-  it("FIX 1 scope guard: a selected-but-OMITTED placeholder (real row exists) does not suppress", () => {
+  it("scope guard: a selected-but-OMITTED placeholder (real row exists) does not suppress", () => {
     // treeId matches a rendered record → placeholder omitted → openPath drives .active normally.
     render(
       listEl,
@@ -878,7 +878,7 @@ describe("renderSidebar — live-run placeholder row", () => {
   });
 });
 
-// ---- FIX 3: ONE shared placeholder-visibility predicate for both render sites ------------------
+// ---- ONE shared placeholder-visibility predicate for both render sites ------------------
 
 describe("placeholderVisible — the single shared predicate", () => {
   it("true when set and NO record carries its tree_id; false when one does; false when null", () => {
@@ -890,7 +890,7 @@ describe("placeholderVisible — the single shared predicate", () => {
   });
 });
 
-describe("applyFilterAndRender — .filter-empty branch renders the placeholder through the SAME predicate (FIX 3)", () => {
+describe("applyFilterAndRender — .filter-empty branch renders the placeholder through the SAME predicate", () => {
   it("placeholder + non-empty no-match query → exactly one .plan.placeholder FIRST, above .filter-empty", async () => {
     await bootWithRecords(masterTree());
     __setRunPlaceholderForTest({ treeId: "tree-live", label: "New plan — drafting…" }, true);
@@ -911,7 +911,7 @@ describe("applyFilterAndRender — .filter-empty branch renders the placeholder 
   });
 });
 
-// ---- FIX 4: the agent-exit × placeholder treeId race — pure truth table ------------------------
+// ---- the agent-exit × placeholder treeId race — pure truth table ------------------------
 
 describe("shouldClearPlaceholderOnExit — clears ONLY a placeholder no ACTIVE orchestration claims", () => {
   // Falsifiability (verified): inverting the treeId comparison (=== instead of !==) flips (a)
@@ -936,7 +936,7 @@ describe("shouldClearPlaceholderOnExit — clears ONLY a placeholder no ACTIVE o
   });
 });
 
-// ---- Phase D #9: the Affordance precedence (prototype > acceptance > review > resume) -----------
+// ---- the Affordance precedence (prototype > acceptance > review > resume) -----------
 
 describe("computeAffordance — prototype > acceptance > review > resume (at most ONE active)", () => {
   // Falsifiability (verified): reordering any pair of branches in computeAffordance flips the matching
@@ -985,21 +985,21 @@ describe("suppressConversationFlip — keyed STRICTLY on pendingApproval", () =>
   });
 });
 
-// ---- Phase E #12 / #7b — reading-pane render wiring (cooperative cancellation + popover invalidate) -
+// ---- reading-pane render wiring (cooperative cancellation + popover invalidate) -
 //
 // These pin the PRODUCTION CALL SITES that activate two render-core fixes:
-//   #12  settle(pane, _, isCurrent) must receive a predicate tied to the LIVE renderGuard, so an
+//   settle(pane, _, isCurrent) must receive a predicate tied to the LIVE renderGuard, so an
 //        overlapping open/reload can cancel a superseded mermaid render mid-flight. (The cancellation
 //        SEMANTICS — renderDiagrams bailing on isCurrent()===false — are falsifiably covered in
 //        src/render/mermaid.test.ts; here we assert main.ts wires a real, generation-aware predicate
 //        rather than the always-current default, and that supersession flips it.)
-//   #7b  invalidatePopover(readingPaneEl) must be called at each reading-pane wipe+repopulate so a
+//   invalidatePopover(readingPaneEl) must be called at each reading-pane wipe+repopulate so a
 //        cross-plan draft is discarded (and a same-plan reload re-anchored). The DISCARD/PRESERVE
 //        semantics live in src/render/comments.test.ts; here we assert the main-level call happens.
 //
 // We boot the real main.ts against the mocked ./render facade (settle/invalidatePopover are vi.fn
 // spies) and drive the EXPORTED openPlan, so the assertions read the real call sites, not a re-impl.
-describe("Phase E #12/#7b — openPlan wires settle cancellation + popover invalidation", () => {
+describe("openPlan wires settle cancellation + popover invalidation", () => {
   function bootReaderDom(): void {
     vi.mocked(invoke).mockImplementation((cmd: string) => {
       switch (cmd) {

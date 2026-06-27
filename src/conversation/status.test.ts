@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — status pill + onboarding tests.
+// Conversation domain — status pill + onboarding tests.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { nextStatus, statusLabel, StatusController } from "./status";
@@ -66,7 +66,7 @@ describe("StatusController — onboarding behavior", () => {
     expect(els.authBlock.classList.contains("hidden")).toBe(false);
   });
 
-  // Fix 3 (falsifiable): refresh() re-reads the live backend auth status. Starting with NO token
+  // (falsifiable): refresh() re-reads the live backend auth status. Starting with NO token
   // (banner shown), a later refresh that sees a token must HIDE the banner + flip to ready — killing
   // the stale "No Claude subscription token found" banner. FALSIFY: make refresh() not re-read (return
   // early) and the post-refresh "ready / banner hidden" assertions go RED.

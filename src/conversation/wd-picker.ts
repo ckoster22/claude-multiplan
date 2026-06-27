@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — native working-directory picker.
+// Conversation domain — native working-directory picker.
 //
 // A brand-new input that flows 02 -> 01 (start_agent_session.cwd). It is DISJOINT from cwd
 // resolution (src/cwd.ts / src/resolve.ts) — those reverse-engineer a plan's ORIGIN cwd; this

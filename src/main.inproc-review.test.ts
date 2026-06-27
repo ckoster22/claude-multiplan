@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------------------------
-// Sub-Plan 03 — IN-PROCESS plan-review intercept (the Agent SDK canUseTool seam).
+// IN-PROCESS plan-review intercept (the Agent SDK canUseTool seam).
 //
 // When the in-app session emits ExitPlanMode, main.ts's tool-permission-requested handler:
 //   • writes the plan markdown to a REAL file (write_agent_plan → abs path),
@@ -578,7 +578,7 @@ describe("in-process intercept — LIFECYCLE PURGE on agent-exit", () => {
 
 // ---------------------------------------------------------------------------------------------
 // EXTERNAL — un-openable plan file: refuse-and-surface (mirror the in-process write-failure path).
-// (Regression guard for bug #1: the degraded detached render NEVER set openPath, so currentReviewId()
+// (Regression guard: the degraded detached render NEVER set openPath, so currentReviewId()
 // stayed null → the bar dropped to SUMMARY mode (Submit hidden, handlers bail on the null
 // guards) while the dead review was STILL counted ("1 plan awaiting review"). An un-openable external
 // review must be REFUSED — purged from pending so it is not counted, and the failure surfaced on

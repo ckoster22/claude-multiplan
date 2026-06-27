@@ -1,4 +1,4 @@
-// Sub-Plan 03 — pure display helper for the resolved cwd subtitle.
+// pure display helper for the resolved cwd subtitle.
 //
 // The resolved cwd comes back from the backend as an ABSOLUTE path. For display we collapse
 // a leading `$HOME` into `~` (the CSS `.plan-src` rule then left-truncates, keeping the tail

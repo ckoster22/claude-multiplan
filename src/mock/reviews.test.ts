@@ -119,7 +119,7 @@ describe("review bar — prototype/acceptance gates drive the real gate-active f
     expect(prototypeBarLabel(gate!.round)).toBe("Visual prototype — round 1 of 3");
   });
 
-  // Review item #6 + review2 c3: the mock-ANIMATE Trailhead prototype gate renders its prototype INLINE
+  // review2 c3: the mock-ANIMATE Trailhead prototype gate renders its prototype INLINE
   // in #reading-pane (no floating overlay — the deleted #demo-proto-card "wouldn't appear in the app").
   // main.ts's real renderPrototypePreview → composePreviewMarkdown paints the gate's inlinePreview. The
   // default fixture is kind:"mermaid"; the player passes trailheadProtoPreviewOverride(round) (kind:"ascii")
