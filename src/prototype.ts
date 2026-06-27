@@ -90,6 +90,8 @@ export function prototypeBarLabel(round: number): string {
  * "Proceed as-is" — the loop-escape affordance (the action is identical: approvePrototype()).
  */
 export function prototypeApproveLabel(round: number): string {
+  // INVARIANT[prototype-loop-always-has-an-escape] (runtime-guard): from round >= PROTOTYPE_MAX_ROUNDS the approve affordance relabels to "Proceed as-is", guaranteeing a loop exit.
+  //   prevents: an unbounded refine loop with no as-is exit
   return round >= PROTOTYPE_MAX_ROUNDS ? "Proceed as-is" : "Approve visual";
 }
 
@@ -101,11 +103,15 @@ export function prototypeApproveLabel(round: number): string {
  * beats the prototype gate; the prototype gate beats the pendingReviews surfaces (the caller falls
  * through to those only when this returns null).
  */
+// INVARIANT[gate-self-clears-from-snapshot] (convention): the prototype/acceptance bar modes derive strictly from the orchestrator snapshot (never module state), so nulling the gate in the reducer reverts the bar on the next onSnapshot.
+//   prevents: a stale held-gate flag keeping the bar in PROTOTYPE/ACCEPTANCE after the gate resolved
 export function prototypeGateActive(
   snap: { pendingApproval: unknown; pendingPrototype: PrototypeGate | null } | null,
   orchestrationActive: boolean,
 ): PrototypeGate | null {
   if (!orchestrationActive || snap === null) return null;
+  // INVARIANT[approval-gate-beats-prototype-gate] (precedence): a held pendingApproval short-circuits to null, suppressing the prototype-mode bar.
+  //   prevents: a prototype gate and an approval gate both driving the bar
   if (snap.pendingApproval != null) return null; // approval gate takes precedence
   return snap.pendingPrototype;
 }
@@ -140,6 +146,8 @@ export function acceptanceGateActive(
   orchestrationActive: boolean,
 ): AcceptanceGate | null {
   if (!orchestrationActive || snap === null) return null;
+  // INVARIANT[approval-and-prototype-beat-acceptance] (precedence): both a held pendingApproval and a held pendingPrototype short-circuit to null, outranking the forced-acceptance gate.
+  //   prevents: the post-completion acceptance bar co-existing with a mid-run hold
   if (snap.pendingApproval != null) return null; // approval gate takes precedence
   if (snap.pendingPrototype != null) return null; // prototype gate takes precedence
   return snap.pendingAcceptance;
@@ -176,6 +184,8 @@ export function acceptanceRefineLabel(): string {
  * refine). DERIVES from the tree alone so the picker self-updates with the snapshot.
  */
 export function acceptanceRefineTargets(root: TreeNode): Array<{ pathKey: string; title: string }> {
+  // INVARIANT[acceptance-refine-targets-from-root-children] (runtime-guard): refine targets are the root's direct children only, and [] unless the root is split — empty for a single-leaf run.
+  //   prevents: offering refine targets that don't exist on a leaf-only tree
   if (root.state.stage !== "split") return [];
   return root.state.children.map((c) => ({ pathKey: pathKey([c.nn]), title: c.title }));
 }

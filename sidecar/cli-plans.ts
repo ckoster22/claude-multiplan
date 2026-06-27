@@ -17,6 +17,8 @@
 // `~/.claude/plans`). The CLI validates that `plansDirectory` resolves INSIDE the
 // project root, so the value MUST stay a relative path with no `..` segments.
 
+// INVARIANT[cli-plan-redirect-relative-contained] (convention): plansDirectory is always a non-empty relative path under .plan-tree/cli-plans with no `..`.
+//   prevents: an empty value resurrecting duplicate top-level rows, or an absolute path the CLI rejects.
 export const CLI_PLANS_SUBDIR = ".plan-tree/cli-plans";
 
 // The flag-settings object for every sidecar session. A function (not a bare

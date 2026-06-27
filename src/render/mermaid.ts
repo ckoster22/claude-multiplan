@@ -36,12 +36,18 @@ type MermaidModule = typeof import("mermaid");
 //    integration point — collapsing multi-line labels to empty. Marking
 //    foreignobject as an integration point preserves the <br> labels while STILL
 //    stripping <script> and on* event-handler attributes.
+// INVARIANT[foreignobject-html-integration-survives-sanitization] (sanitization): The sanitize config preserves <foreignObject> + HTML-namespaced children (multi-line labels) while stripping <script>/on* handlers.
+//   prevents: both failure modes — labels collapsing (config too strict) and on*/script handlers surviving (config too loose).
+// INVARIANT[single-sanitize-config-source] (convention): One exported sanitize-config; production and tests exercise the same profile (tests via sanitizeSvg).
+//   prevents: test/prod sanitizer drift — a test passing against a profile production never actually uses.
 export const MERMAID_SANITIZE_CONFIG = {
   USE_PROFILES: { svg: true, svgFilters: true, html: true },
   ADD_TAGS: ["foreignObject"],
   HTML_INTEGRATION_POINTS: { foreignobject: true },
 };
 
+// INVARIANT[loose-security-mandates-own-sanitizer] (sanitization): Mermaid runs at securityLevel:'loose' (which disables its internal sanitizer), so the pane runs its own DOMPurify pass.
+//   prevents: relying on a sanitizer loose-mode turned off → raw active content reaching the DOM.
 /** Sanitize a mermaid-produced SVG string before it is injected via innerHTML. */
 export function sanitizeSvg(svg: string): string {
   return DOMPurify.sanitize(svg, MERMAID_SANITIZE_CONFIG);
@@ -98,12 +104,20 @@ async function getMermaid(): Promise<MermaidModule["default"]> {
   return mermaid;
 }
 
+// INVARIANT[iscurrent-default-keeps-callers-current] (convention): renderDiagrams' isCurrent param defaults to always-current, so existing positional callers compile and behave unchanged.
+//   prevents: a required-param break of existing callers / accidental cancellation of normal (non-superseded) renders.
 /**
  * Render every `.mermaid-src` placeholder in the pane. Resolves after all
  * diagrams have been attempted. A render failure shows the raw source plus a dim
  * error note (reusing the .mermaid-box / .mermaid-cap chrome) instead of throwing.
  */
-export async function renderDiagrams(paneEl: HTMLElement): Promise<void> {
+export async function renderDiagrams(
+  paneEl: HTMLElement,
+  // cooperative-cancellation predicate. A newer open/reload/plan-switch can supersede
+  // this pass while it awaits the async `mermaid.render`. Omitted ⇒ always-current, so existing
+  // callers compile + behave unchanged; this is a best-effort guard, NOT a compile-time invariant.
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
   // Tear down any pan/zoom controllers from this pane's PREVIOUS render so their
   // listeners never leak across renders (structural reset — see _controllers).
   destroyControllers(paneEl);
@@ -118,13 +132,29 @@ export async function renderDiagrams(paneEl: HTMLElement): Promise<void> {
 
   // Render sequentially: mermaid mutates document.body with transient nodes and
   // is not reentrancy-friendly across concurrent render() calls.
+  // INVARIANT[superseded-render-injects-nothing] (runtime-guard): A superseded render pass (isCurrent()===false) injects no diagram and registers no controller — checked before render, before DOM replace, and before controller registration.
+  //   prevents: a stale generation's diagram landing in a live pane; an orphan pan/zoom controller leaking a window listener.
   for (const el of sources) {
+    // Bail if a newer pass superseded us (e.g. while awaiting getMermaid() or the previous
+    // diagram) so a stale generation stops injecting diagrams into the (now re-wiped) pane.
+    if (!isCurrent()) return;
     const src = el.textContent ?? "";
     const id = `mermaid-${_idCounter++}`;
+    // INVARIANT[mermaid-bad-diagram-never-blanks-pane] (runtime-guard): A diagram that fails to parse/render is replaced with its raw source + a dim error note; rendering never throws or blanks the pane.
+    //   prevents: one malformed diagram crashing/blanking the whole reading pane.
     try {
+      // INVARIANT[mermaid-bindfunctions-never-called] (convention): bindFunctions is never invoked on a rendered diagram, so any embedded click/script wiring stays inert.
+      //   prevents: re-activating click/script handlers that sanitization stripped.
       const { svg } = await mermaid.render(id, src);
+      // A newer pass may have superseded us WHILE awaiting mermaid.render. Bail BEFORE touching the
+      // live DOM (el.replaceWith) or building an orphan pan/zoom controller. Returning from inside
+      // the try still runs the `finally` below, which removes mermaid's transient measuring
+      // container — so the stale pass leaves no DOM mutation and no leaked controller behind. (Today
+      // supersession coincides with a renderInto wipe — `el` is detached, replaceWith a no-op — but
+      // this guards a future caller that bumps the generation WITHOUT a wipe: a stale diagram
+      // landing in the live pane plus a window-listener controller leak.)
+      if (!isCurrent()) return;
       const { box, controller } = buildPanZoomBox(svg);
-      // DO NOT call bindFunctions — keeps any embedded click/script inert.
       el.replaceWith(box);
       if (controller) fresh.push(controller);
     } catch (e) {
@@ -139,9 +169,14 @@ export async function renderDiagrams(paneEl: HTMLElement): Promise<void> {
     }
   }
 
+  // Final bail: if a newer pass superseded us during the loop, do NOT register this stale pass's
+  // controllers — that would overwrite the current generation's entry and win the teardown race.
+  if (!isCurrent()) return;
   _controllers.set(paneEl, fresh);
 }
 
+// INVARIANT[pan-zoom-controller-no-listener-leak-across-renders] (runtime-guard): A pane's previous pan/zoom controllers are destroyed before a new render builds new ones (at the innerHTML wipe and at renderDiagrams top).
+//   prevents: window drag/wheel listeners accumulating across live-reloads.
 /**
  * Destroy + forget the controllers from this pane's previous render pass.
  *
@@ -185,7 +220,8 @@ function buildPanZoomBox(svg: string): {
 
   const stage = document.createElement("div");
   stage.className = "mermaid-stage";
-  // Sanitize: loose mode does NOT auto-sanitize (see file header), so we must.
+  // INVARIANT[mermaid-svg-always-dompurified-before-innerhtml] (sanitization): Every mermaid-produced SVG is DOMPurify-sanitized before it is assigned to innerHTML.
+  //   prevents: stored XSS — an injected <script>/on* handler in a plan's node label executing on render.
   stage.innerHTML = sanitizeSvg(svg);
   // Pin the SVG to its INTRINSIC pixel size from the viewBox.
   //

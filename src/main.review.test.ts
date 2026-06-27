@@ -16,7 +16,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //     it from pending.
 //   • Un-openable: an empty plan_file_path (or an open that throws) is REFUSED — the review is dropped
 //     from pending (so it is not counted) and the failure is surfaced on #hook-status; it is NEVER
-//     rendered as an unactionable detached phantom (bug #1).
+//     rendered as an unactionable detached phantom.
 //
 // This test uses the REAL ./render facade (NOT mocked) so the genuine save→IO→fireCountChanged path
 // runs end-to-end. The backend is a shared in-memory comment store keyed by REAL plan path; every
@@ -83,6 +83,57 @@ vi.mock("./titlebar", () => ({ initTitlebar: vi.fn(), initThemeToggle: vi.fn(), 
 
 import { openPlan, reviewCommentCount, __resetReviewStateForTest } from "./main";
 import { asAbsPath, asStem } from "./types";
+import {
+  createOrchestrator,
+  __setOrchestratorForTest,
+  __resetOrchestratorForTest,
+  type OrchestratorDeps,
+  type OrchestratorHandle,
+} from "./conversation/orchestrator";
+import type { PrototypeGate } from "./conversation/plan-tree";
+
+// Recording fake OrchestratorDeps (mirrors main.orchestrator-gate.test.ts) — every effect is a
+// benign async no-op; the prototype double-submit test only needs the handle's state machine to
+// reach a held pendingPrototype gate, then spies on the handle's refinePrototype method directly.
+function makeOrchDeps(): OrchestratorDeps {
+  return {
+    startSession: vi.fn(async () => {}),
+    sendMessage: vi.fn(async () => {}),
+    setMode: vi.fn(async () => {}),
+    resolvePermission: vi.fn(async () => {}),
+    cancelRun: vi.fn(async () => {}),
+    interrupt: vi.fn(async () => {}),
+    endSession: vi.fn(async () => {}),
+    writePlanTreeFile: vi.fn(async (_cwd, name) => `/abs/.plan-tree/${name}`),
+    writeAgentPlan: vi.fn(async (_plan, _treeId, nn) => `/p/${nn}.md`),
+    resetPlanTreeDir: vi.fn(async () => {}),
+  };
+}
+
+// Install a fresh orchestrator handle, boot, and drive it to a held visual-prototype gate (root
+// open/clarifying-intent → prototype-review, holding pendingPrototype). main.ts's onSnapshot puts the
+// review bar into PROTOTYPE mode, where Approve ("Approve visual") is ALWAYS enabled and Submit
+// ("Request changes") enables on non-empty feedback. Returns the handle so the test can spy on it.
+async function bootToPrototypeGate(): Promise<OrchestratorHandle> {
+  const h = createOrchestrator(makeOrchDeps());
+  __setOrchestratorForTest(h); // main.ts's getOrchestrator() subscribes to OUR handle at boot
+  bootDom();
+  await flush();
+  await h.start({ cwd: "/work", request: "build a widget" });
+  await flush();
+  const gate: PrototypeGate = {
+    kind: "ascii",
+    paths: [],
+    screenshot: null,
+    inlinePreview: "preview body",
+    variants: [],
+    round: 1,
+    cwd: "/work",
+  };
+  await h.dispatch({ type: "PROTOTYPE_READY", gate });
+  await flush();
+  return h;
+}
 
 // Build a minimal standalone PlanRecord row for list_plans so renderSidebar emits a [data-path] row.
 function planRow(absPath: string, stem: string): Record<string, unknown> {
@@ -117,7 +168,10 @@ function bootDom(): void {
     </div>
     <div class="review-bar hidden" id="review-bar">
       <span id="review-bar-label"></span>
+      <textarea id="prototype-feedback" class="hidden"></textarea>
       <button id="review-submit" disabled></button>
+      <button id="review-approve" class="hidden">Approve &amp; Build</button>
+      <button id="prototype-open" class="hidden">Open in browser</button>
       <button id="review-clear">Clear comments</button>
       <button id="review-resume"></button>
     </div>
@@ -196,6 +250,9 @@ beforeEach(() => {
   // Module state (pendingReviews) persists across tests in a vitest file and re-booting the DOM does
   // not reset it. Clear it so each test starts clean.
   __resetReviewStateForTest();
+  // Reset the shared orchestrator singleton to a fresh inactive default so a prior test's installed
+  // handle (the prototype double-submit test installs one) cannot leak into the next test.
+  __resetOrchestratorForTest();
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -419,12 +476,199 @@ describe("review cancellation — removes from pending, plan stays open", () => 
 
 // ---------------------------------------------------------------------------------------------
 // Un-openable plan (empty plan_file_path) — REFUSE-and-surface, NOT a detached phantom.
-// (Bug #1 fix: the old "degraded detached render" left openPath null, so currentReviewId() stayed
+// (The old "degraded detached render" left openPath null, so currentReviewId() stayed
 // null → the bar fell to SUMMARY mode (Submit hidden, handlers bail on the null guards)
 // while the dead review was STILL counted ("1 plan awaiting review"). It was un-actionable yet
 // trapping. An un-openable review must be REFUSED — dropped from pending so it is not counted, with
 // the failure surfaced on #hook-status — never rendered.)
 // ---------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+// a fast double-click on Submit must dispatch the deny EXACTLY once.
+//
+// The first click sets the bar to "submitting" (Submit visually disabled). But a disabled button is
+// not a guarantee: a programmatically dispatched click still reaches the handler in jsdom (and a real
+// fast double-click can land before the re-render). So the real invariant is an early-return guard in
+// the handler keyed on an in-flight flag — NOT the disabled attribute. This test fires TWO synchronous
+// clicks via dispatchEvent (which, unlike .click(), fires listeners even on a disabled button) BEFORE
+// the first round-trip's awaited promise resolves, and asserts the underlying respond_to_review deny
+// landed once. Exercises the EXTERNAL review submit path (the same path the "Submit (deny)" test uses).
+// ---------------------------------------------------------------------------------------------
+describe("review Submit — no double-submit on a fast double-click", () => {
+  it("two synchronous #review-submit clicks dispatch the deny (respond_to_review) EXACTLY once", async () => {
+    const path = "/home/u/.claude/plans/Double-Submit.md";
+    H.rows = [planRow(path, "Double-Submit")];
+    bootDom();
+    await flush();
+    await fireReviewRequested("rev-double", path);
+
+    addCommentViaPopover("a single comment");
+    await flush();
+    expect(reviewCommentCount()).toBe(1);
+
+    const submit = document.querySelector<HTMLButtonElement>("#review-submit")!;
+    expect(submit.disabled).toBe(false);
+
+    // Two synchronous clicks BEFORE any awaited promise resolves. dispatchEvent (NOT .click()) is
+    // deliberate: in jsdom .click() no-ops once the first click flips the button disabled, but
+    // dispatchEvent still invokes listeners — isolating the submitInFlight early-return as the sole
+    // defense (the visual disable cannot be what saves us).
+    submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    // EXACTLY ONE deny landed; the second click was swallowed by the in-flight guard.
+    expect(H.responses).toHaveLength(1);
+    expect(H.responses[0].reviewId).toBe("rev-double");
+    expect(H.responses[0].decision).toBe("deny");
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // FALSIFIABILITY-CLEAN PATH: the PROTOTYPE submit ("Request changes" → refinePrototype). Unlike
+  // the external/viewing paths, PROTOTYPE mode is rendered by applyPrototypeBar, which derives the
+  // Submit button's `disabled` SOLELY from the feedback textarea — it IGNORES submitInFlight, so the
+  // button stays ENABLED while the first refine round-trips. That makes the top-of-handler early
+  // return the ONLY thing preventing a second dispatch (the per-branch `reviewSubmitEl?.disabled`
+  // guard cannot help here). Removing the early return makes this test fail with two dispatches —
+  // i.e. it is a clean falsification target for the guard itself.
+  it("two synchronous #review-submit clicks in PROTOTYPE mode call refinePrototype EXACTLY once", async () => {
+    const h = createOrchestrator(makeOrchDeps());
+    __setOrchestratorForTest(h); // main.ts's getOrchestrator() subscribes to OUR handle at boot
+    bootDom();
+    await flush();
+
+    // Drive the handle to a held visual-prototype gate (root open/clarifying-intent → prototype-
+    // review, holding pendingPrototype). main.ts's onSnapshot puts the bar into PROTOTYPE mode.
+    await h.start({ cwd: "/work", request: "build a widget" });
+    await flush();
+    const gate: PrototypeGate = {
+      kind: "ascii",
+      paths: [],
+      screenshot: null,
+      inlinePreview: "preview body",
+      variants: [],
+      round: 1,
+      cwd: "/work",
+    };
+    await h.dispatch({ type: "PROTOTYPE_READY", gate });
+    await flush();
+
+    // Spy on the handle's refinePrototype — the underlying action the prototype Submit dispatches.
+    // Mock it to a no-op resolve so it does NOT advance the state machine (pendingPrototype stays
+    // held, the textarea/button stay live), isolating the handler's exactly-once behavior.
+    const refineSpy = vi.spyOn(h, "refinePrototype").mockResolvedValue(undefined);
+
+    // Type non-empty feedback and re-derive so applyPrototypeBar enables Submit ("Request changes").
+    const feedbackEl = document.querySelector<HTMLTextAreaElement>("#prototype-feedback")!;
+    feedbackEl.value = "make it blue";
+    feedbackEl.dispatchEvent(new Event("input", { bubbles: true }));
+    const submit = document.querySelector<HTMLButtonElement>("#review-submit")!;
+    expect(submit.disabled).toBe(false);
+
+    // Two synchronous clicks BEFORE the first refine round-trip resolves (dispatchEvent fires the
+    // listener even on a disabled button — and here the button is not even disabled).
+    submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    // EXACTLY ONE refinePrototype dispatched; the second click hit the in-flight early return.
+    expect(refineSpy).toHaveBeenCalledTimes(1);
+    expect(refineSpy).toHaveBeenCalledWith("make it blue");
+
+    await h.cancel();
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // A guard-REJECTED click must NOT leave submit stuck disabled. The in-flight flag is set only
+  // AFTER each branch's validation guard, and reset in a finally on every exit — so a click that
+  // bails on a guard (here: 0 comments → Submit disabled → the per-branch guard returns BEFORE the
+  // flag is set) leaves submitInFlight false. We prove it by then submitting for real: if the
+  // rejected click had stuck the flag true, the top-of-handler early return would swallow this
+  // valid submit and zero denies would land.
+  it("a guard-rejected (0-comment) click does NOT stick the in-flight lock — a later valid submit still fires", async () => {
+    const path = "/home/u/.claude/plans/Not-Stuck.md";
+    H.rows = [planRow(path, "Not-Stuck")];
+    bootDom();
+    await flush();
+    await fireReviewRequested("rev-stuck", path);
+
+    const submit = document.querySelector<HTMLButtonElement>("#review-submit")!;
+    // 0 comments → Submit disabled. A click here is rejected by the per-branch guard.
+    expect(submit.disabled).toBe(true);
+    submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    expect(H.responses).toHaveLength(0); // nothing dispatched (rejected) …
+
+    // … and the lock did not stick: a real submit (after a comment enables it) lands exactly one deny.
+    addCommentViaPopover("now there is a comment");
+    await flush();
+    expect(submit.disabled).toBe(false);
+    submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    expect(H.responses).toHaveLength(1);
+    expect(H.responses[0].reviewId).toBe("rev-stuck");
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // SIBLING DEFECT (DA finding): the same fast-double-click defect class applies to #review-approve.
+  // Empirically the unguarded handler double-DISPATCHES approvePrototype (the second call reaches the
+  // handle and only throws "no pending gate" AFTER its first await — the gate/acceptance approve paths
+  // have no such internal backstop, so a real second allow could land). We mock approvePrototype to a
+  // no-op resolve so the gate stays held (isolating the HANDLER's exactly-once behavior), fire two
+  // synchronous Approve clicks, and assert the action fired once. Removing the approve early-return
+  // makes this RED with two calls — a clean falsification target for the approve guard.
+  it("two synchronous #review-approve clicks in PROTOTYPE mode call approvePrototype EXACTLY once", async () => {
+    const h = await bootToPrototypeGate();
+    // Mock approvePrototype so it does NOT advance the state machine (pendingPrototype stays held, the
+    // bar stays in PROTOTYPE mode with Approve enabled), isolating the handler's exactly-once guard.
+    const approveSpy = vi.spyOn(h, "approvePrototype").mockResolvedValue(undefined);
+
+    const approve = document.querySelector<HTMLButtonElement>("#review-approve")!;
+    // PROTOTYPE-mode Approve ("Approve visual") is ALWAYS enabled and visible — no per-branch guard.
+    expect(approve.classList.contains("hidden")).toBe(false);
+
+    // Two synchronous clicks BEFORE the first approve round-trip resolves.
+    approve.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    approve.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    // EXACTLY ONE approvePrototype dispatched; the second click hit the in-flight early return.
+    expect(approveSpy).toHaveBeenCalledTimes(1);
+
+    await h.cancel();
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // CROSS-BUTTON: Submit and Approve act on the SAME gate with OPPOSITE decisions. A fast Approve
+  // (sets the lock) followed by a Submit must NOT both dispatch — the shared in-flight guard blocks
+  // the second action regardless of which sibling button fired first.
+  it("an Approve already in flight blocks a following #review-submit dispatch (no cross-button double-action)", async () => {
+    const h = await bootToPrototypeGate();
+    // With feedback present, BOTH the prototype Approve (combined apply-and-approve) and Submit
+    // ("Request changes") route into refinePrototype. Make it never resolve so the lock the Approve
+    // click sets is still held when the Submit click fires. The shared in-flight guard must swallow
+    // the Submit so only ONE dispatch (the Approve's) lands.
+    const refineSpy = vi
+      .spyOn(h, "refinePrototype")
+      .mockImplementation(() => new Promise<void>(() => {}));
+
+    // Type feedback so Submit is enabled and Approve takes the apply-and-approve (refinePrototype) arc.
+    const feedbackEl = document.querySelector<HTMLTextAreaElement>("#prototype-feedback")!;
+    feedbackEl.value = "make it blue";
+    feedbackEl.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const approve = document.querySelector<HTMLButtonElement>("#review-approve")!;
+    const submit = document.querySelector<HTMLButtonElement>("#review-submit")!;
+    approve.dispatchEvent(new MouseEvent("click", { bubbles: true })); // starts approve (lock held)
+    submit.dispatchEvent(new MouseEvent("click", { bubbles: true })); // must be swallowed by the lock
+    await flush();
+
+    // Only the Approve click's refinePrototype dispatched; the Submit was blocked by the shared lock.
+    expect(refineSpy).toHaveBeenCalledTimes(1);
+
+    await h.cancel();
+  });
+});
+
 describe("un-openable review — empty plan_file_path refuses and surfaces (no unactionable phantom)", () => {
   it("with an empty plan_file_path the review is NOT rendered, NOT counted, and shows a #hook-status error", async () => {
     bootDom();

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Fix 1 proof: settle() must AWAIT resolveLocalImages (which sets real srcs on
+// proof: settle() must AWAIT resolveLocalImages (which sets real srcs on
 // local <img> placeholders) BEFORE awaitImages observes them. We use a DEFERRED
 // mock invoke: the data: URL only resolves when we manually release it, so we can
 // prove the image's src is already set by the time awaitImages runs.
@@ -20,11 +20,22 @@ vi.mock("@tauri-apps/api/core", () => ({
 // links.ts (pulled in by index.ts) imports openUrl at load.
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 
+// Mock the lazily-imported mermaid so the settle→renderDiagrams forwarding test runs under jsdom
+// without the heavy real bundle. The render spy lets us assert a superseded settle never reaches it.
+const mermaidRenderMock = vi.fn();
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: (...args: unknown[]) => mermaidRenderMock(...args),
+  },
+}));
+
 import { renderInto, settle } from "./index";
 
 beforeEach(() => {
   invokeMock.mockClear();
   releaseInvoke = null;
+  mermaidRenderMock.mockReset();
 });
 
 describe("settle — resolves local images before awaiting them", () => {
@@ -75,5 +86,27 @@ describe("settle — resolves local images before awaiting them", () => {
     // ran to completion before awaitImages).
     expect(imgAfter.getAttribute("src")).toBe("data:image/png;base64,RESOLVED");
     expect(imgAfter.hasAttribute("data-resolve")).toBe(false);
+  });
+});
+
+// (facade half): settle() threads its TRAILING optional isCurrent predicate down to
+// renderDiagrams. A superseded settle (isCurrent → false) must render NO mermaid diagram — the
+// guard bails before mermaid.render. (The omitted-default = always-current path keeps the five
+// existing main.ts settle(...) callers compiling and behaving unchanged.)
+describe("settle — forwards isCurrent to renderDiagrams (cooperative cancellation)", () => {
+  it("a superseded settle (isCurrent → false) injects no diagram and leaves the placeholder raw", async () => {
+    const pane = document.createElement("div");
+    document.body.appendChild(pane);
+    renderInto(pane, "```mermaid\ngraph TD; A-->B\n```\n", "/plans");
+    expect(pane.querySelector("pre.mermaid-src")).not.toBeNull(); // raw placeholder present
+
+    // isCurrent=false ⇒ renderDiagrams must bail BEFORE mermaid.render.
+    await settle(pane, 30, () => false);
+
+    // INVERSION CHECK: have settle pass nothing (default always-current) and mermaid.render IS
+    // called → this goes RED.
+    expect(mermaidRenderMock).not.toHaveBeenCalled();
+    expect(pane.querySelector(".mermaid-rendered")).toBeNull(); // nothing injected
+    expect(pane.querySelector("pre.mermaid-src")).not.toBeNull(); // still raw
   });
 });

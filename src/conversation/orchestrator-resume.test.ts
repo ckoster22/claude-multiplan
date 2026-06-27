@@ -1,4 +1,4 @@
-// Multiplan orchestration domain (Sub-Plan 03) — RESUME driver tests (Phase 3, falsifiable).
+// Multiplan orchestration domain — RESUME driver tests (Phase 3, falsifiable).
 //
 // These tests exercise the orchestrator's resume() entry with a FAKE OrchestratorDeps (no Tauri, no
 // listen, no DOM). For every RESUMABLE active phase we build a coherent ledger in that phase, call

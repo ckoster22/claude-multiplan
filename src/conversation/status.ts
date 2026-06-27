@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — SDK status pill + auth onboarding.
+// Conversation domain — SDK status pill + auth onboarding.
 //
 // Owns the #sdk-status pill state machine and the composer's auth-onboarding block. The pill
 // reflects: ready (token present, idle) / building (a run is streaming) / auth required (no

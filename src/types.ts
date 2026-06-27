@@ -21,7 +21,7 @@ export interface PlanRecord {
   mtime_ms: number;
   cwd: string | null;
   unread: boolean;
-  // ---- Nested-hierarchy fields (Sub-Plan 01). Records arrive PRE-ORDERED. ----
+  // ---- Nested-hierarchy fields. Records arrive PRE-ORDERED. ----
   flavor: "master" | "sub" | "standalone";
   tree_id: string | null;
   nn: number | null;
@@ -37,7 +37,7 @@ export interface PlanRecord {
   h1s: string[];
 }
 
-// ---- Sub-Plan 02 comment record (mirrors Rust CommentRecord in CONTRACT.md) ---------------
+// ---- comment record (mirrors Rust CommentRecord in CONTRACT.md) ---------------
 //
 // A single persisted comment for a plan. FROZEN 6-key wire shape (see CONTRACT.md §"Sub-Plan
 // 02 additions" / §"Highlight + comment with quoted-text anchoring"). `block_line` is

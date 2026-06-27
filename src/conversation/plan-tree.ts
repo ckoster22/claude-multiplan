@@ -1,4 +1,4 @@
-// Multiplan orchestration domain (Sub-Plan 02) — PURE core of the plan-tree state machine.
+// Multiplan orchestration domain — PURE core of the plan-tree state machine.
 //
 // This file is the pure heart of the multiplan orchestrator: the frozen serializable ledger
 // (state.json schema 2) types, an in-memory transient-gate overlay, a PURE reducer over a
@@ -212,6 +212,8 @@ export function nonEmpty<T>(arr: readonly T[]): NonEmptyArray<T> {
 // Artifact paths (planPath/summaryPath/plansDirPath) live on leaf AND split states (a split node
 // writes its decomposition plan and, post-children, a roll-up summary) but NOT on open (an
 // un-sized node has produced no artifacts — unrepresentable rather than null-at-rest).
+// INVARIANT[node-state-stage-phase-coupling] (type-level): a node's state is a tagged union on stage (open|leaf|split), each stage permitting only its own phases and co-locating only its own fields (children only on split, artifact paths only on leaf/split).
+//   prevents: impossible stage/phase combos and reading a field that doesn't exist for the current stage
 export type NodeState =
   | {
       stage: "open";
@@ -486,6 +488,8 @@ function activeWithin(node: TreeNode, prefix: NodePath): NodePath | null {
 //     leaf in `executing` — at ANY depth — else "plan". Defined INDEPENDENTLY of activePathOf
 //     (which serves dispatch): the policy must hold even if dispatch derivation drifted. Note the
 //     type system already guarantees the witness is a LEAF: `executing` is not a split phase.
+// INVARIANT[write-policy-is-derived-not-stored] (convention): write policy is one of plan|acceptEdits|prototype, computed purely from the tree by this projection and never persisted as a mutable ledger flag (RunState.assertedPolicy is only a re-derivable cache).
+//   prevents: a write policy disagreeing with the tree's actual phase
 export function writePolicyFor2(root: TreeNode): WritePolicy {
   if (
     root.state.stage === "open" &&

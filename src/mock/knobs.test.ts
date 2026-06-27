@@ -1,12 +1,12 @@
 // Mock-mode KNOB-APPLY tests — the deck's knobs drive their surface through the REAL knob.apply path.
 //
-// Review finding (Fix 1): the deck's reset() (called first by every composite driver) wiped the knob
+// Review finding: the deck's reset() (called first by every composite driver) wiped the knob
 // store BEFORE the driver read it, so six knobs silently no-op'd (review.comments, review.protoRound,
 // and the four question.* knobs). The fix threads each knob's value EXPLICITLY into its driver. These
 // tests exercise the REAL `KNOBS.find(k => k.id === …).apply(value)` path (NOT a hand-rolled driver
 // call) and assert the RENDERED surface reflects `value`, not the default.
 //
-// FALSIFIABILITY: each assertion was confirmed RED by temporarily reverting Fix 1 (making the driver
+// FALSIFIABILITY: each assertion was confirmed RED by temporarily reverting the fix (making the driver
 // read the wiped store → the default). With the fix restored every assertion is GREEN. The asserts pin
 // the NON-default value, so a regression that re-introduces the cold-read-after-reset bug fails here.
 //
@@ -302,7 +302,7 @@ describe("knob.apply — review bar knobs reflect their value (not the default)"
 });
 
 // ---------------------------------------------------------------------------------------------
-// FIX 3 — conv.session="none" routes the "__none" sentinel through the reload seam → a genuinely empty
+// conv.session="none" routes the "__none" sentinel through the reload seam → a genuinely empty
 // LIVE conversation pane. Asserted via the fresh-subscriber (= post-reload model) pattern, the same way
 // reset.test.ts proves scene-jump cleanliness: after the jump the agent buffers are empty, so the model
 // a real reload would build renders NOTHING.
@@ -365,7 +365,7 @@ describe("conv.session=none — clears the live conversation to a genuinely empt
 });
 
 // ---------------------------------------------------------------------------------------------
-// FIX 4 — the knob store (+ commentCount) round-trips through sessionStorage across a conversation-jump
+// the knob store (+ commentCount) round-trips through sessionStorage across a conversation-jump
 // reload: persistKnobsToSession() before location.replace, restoreKnobsFromSession() on boot. Tested at
 // the state-module seam (jsdom has window.sessionStorage but cannot actually reload).
 // ---------------------------------------------------------------------------------------------

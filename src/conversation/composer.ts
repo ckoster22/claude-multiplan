@@ -1,7 +1,7 @@
-// Conversation domain (Sub-Plan 02) — New-plan composer modal.
+// Conversation domain — New-plan composer modal.
 //
 // Collects: a request (<textarea>) and a working directory (native folder picker). The starting
-// mode is fixed to "plan" (Build removed). On Start it drives the frozen Sub-Plan 01 surface:
+// mode is fixed to "plan" (Build removed). On Start it drives the frozen surface:
 //   start_agent_session({ cwd, permissionMode: "plan" }) THEN send_agent_message({ text }).
 // Remembers the last chosen directory in localStorage so the next New-plan run pre-fills it.
 
@@ -70,7 +70,7 @@ export interface ComposerElements {
 
 // Injection seam for the Start action (tests stub it).
 //
-// Sub-Plan 03: the composer no longer fires start_agent_session + send_agent_message itself — it
+// the composer no longer fires start_agent_session + send_agent_message itself — it
 // delegates to a SINGLE `start({cwd, request})` thunk that the orchestrator owns (index.ts binds it
 // to getOrchestrator().start(...)). The thunk returns TRUE when a run was really started and FALSE
 // on the idempotent no-op (a run is already active). The composer runs onStarted()/close() ONLY on
@@ -107,6 +107,11 @@ export class Composer {
   private cwd = "";
   // The image-attachment controller (null when the surface has no attach elements / no factory).
   private attachments: ImageAttachments | null = null;
+  // DISPATCH GATE (Phase B): a Start is in flight. This is the composer's slice of the dispatch
+  // dimension — set the instant validation passes and cleared in start()'s finally, so a rapid
+  // double-click / double-Enter on Start dispatches EXACTLY ONE run. The synchronous early-return on
+  // this flag — not the orchestrator's idempotent start() boolean — is what makes the double-fire safe.
+  private starting = false;
   // Build mode removed (user decision: plan-only for now). The composer ALWAYS starts sessions in
   // "plan" mode; the only path to acceptEdits is the post-review #review-approve handler in main.ts
   // (set_agent_permission_mode). This is a fixed constant, not user-selectable.
@@ -223,9 +228,18 @@ export class Composer {
   // surface as a VISIBLE inline error (the modal stays open) — never a silent no-op. EXPORTED
   // behavior is unit-tested via the injected invoker + token seam (no real Tauri).
   async start(): Promise<void> {
+    // DISPATCH GATE: a Start is already in flight ⇒ drop this re-entrant call (a rapid double-click /
+    // double-Enter). This synchronous early-return — NOT the orchestrator's idempotent start() boolean —
+    // is what makes a double-fire dispatch exactly one run.
+    // INVARIANT[composer-single-start] (runtime-guard): a rapid double-click/double-Enter on Start dispatches exactly one run.
+    //   prevents: double session-start
+    if (this.starting) return;
     this.clearError();
     const text = this.els.request?.value.trim() ?? "";
-    // Validate inputs with visible feedback (was a silent early-return).
+    // Validate inputs with visible feedback (was a silent early-return). These run BEFORE arming the
+    // in-flight flag so a validation failure never leaves Start latched-disabled for the retry.
+    // INVARIANT[validate-before-arm] (convention): input validation runs before arming `this.starting`, so a validation failure never latches Start disabled.
+    //   prevents: a latched-disabled Start after a recoverable validation error
     if (!text) {
       this.showError("Enter a request before starting.");
       return;
@@ -235,54 +249,59 @@ export class Composer {
       return;
     }
 
-    // Fix B — honor a typed-but-unsaved token: persist it via the SAME path "Save token" uses
-    // before attempting the session. If none typed AND none stored, fail visibly (the backend
-    // would otherwise reject with "no OAuth token stored").
-    if (this.tokens) {
-      const typed = this.els.tokenInput?.value.trim() ?? "";
-      if (typed) {
-        try {
-          await this.tokens.saveToken(typed);
-        } catch (e) {
-          this.showError(`Could not save token: ${errMsg(e)}`);
+    this.starting = true;
+    try {
+      // honor a typed-but-unsaved token: persist it via the SAME path "Save token" uses
+      // before attempting the session. If none typed AND none stored, fail visibly (the backend
+      // would otherwise reject with "no OAuth token stored").
+      if (this.tokens) {
+        const typed = this.els.tokenInput?.value.trim() ?? "";
+        if (typed) {
+          try {
+            await this.tokens.saveToken(typed);
+          } catch (e) {
+            this.showError(`Could not save token: ${errMsg(e)}`);
+            return;
+          }
+        } else if (!this.tokens.tokenPresent()) {
+          this.showError("No Claude subscription token found — paste your token and try again.");
           return;
         }
-      } else if (!this.tokens.tokenPresent()) {
-        this.showError("No Claude subscription token found — paste your token and try again.");
+      }
+
+      // Multimodal: collect any attached images. OMIT-WHEN-EMPTY — pass NO `images` key when there are
+      // none so a text-only start is byte-identical to today (preserves exact-match assertions + the
+      // cached wire shape). The empty-text guard above still stands: the composer requires text even
+      // with images (a planning session needs a textual request; images-only is in-conversation only).
+      const images = this.attachments?.getImages() ?? [];
+
+      // delegate to the orchestrator's start() thunk (mode is always "plan"). It returns
+      // TRUE on a real start, FALSE on the idempotent no-op (a planning run is already active).
+      let started: boolean;
+      try {
+        started = await this.invoker.start(
+          images.length > 0
+            ? { cwd: this.cwd, request: text, images }
+            : { cwd: this.cwd, request: text },
+        );
+      } catch (e) {
+        // Keep the modal open and show the rejection so the user knows what happened.
+        this.showError(errMsg(e));
         return;
       }
+      if (!started) {
+        // Idempotent no-op: a run is already active. A dead start must NOT close the modal or run the
+        // onStarted liveness chain — surface a visible error and keep the modal open.
+        this.showError("A planning run is already active.");
+        return;
+      }
+      this.saveLastDir(this.cwd);
+      this.clearError();
+      this.close();
+      this.onStarted();
+    } finally {
+      this.starting = false;
     }
-
-    // Multimodal: collect any attached images. OMIT-WHEN-EMPTY — pass NO `images` key when there are
-    // none so a text-only start is byte-identical to today (preserves exact-match assertions + the
-    // cached wire shape). The empty-text guard above still stands: the composer requires text even
-    // with images (a planning session needs a textual request; images-only is in-conversation only).
-    const images = this.attachments?.getImages() ?? [];
-
-    // Sub-Plan 03: delegate to the orchestrator's start() thunk (mode is always "plan"). It returns
-    // TRUE on a real start, FALSE on the idempotent no-op (a planning run is already active).
-    let started: boolean;
-    try {
-      started = await this.invoker.start(
-        images.length > 0
-          ? { cwd: this.cwd, request: text, images }
-          : { cwd: this.cwd, request: text },
-      );
-    } catch (e) {
-      // Keep the modal open and show the rejection so the user knows what happened.
-      this.showError(errMsg(e));
-      return;
-    }
-    if (!started) {
-      // Idempotent no-op: a run is already active. A dead start must NOT close the modal or run the
-      // onStarted liveness chain — surface a visible error and keep the modal open.
-      this.showError("A planning run is already active.");
-      return;
-    }
-    this.saveLastDir(this.cwd);
-    this.clearError();
-    this.close();
-    this.onStarted();
   }
 }
 

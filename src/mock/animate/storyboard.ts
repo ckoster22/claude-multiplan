@@ -598,7 +598,7 @@ export function projectSidebarTab(story: ReadonlyArray<StoryFrame>, T: number): 
 export function modelSignature(story: ReadonlyArray<StoryFrame>, T: number): string {
   let countModelFramesLeqT = 0;
   let revealPrefixLen = 0;
-  // (P2 / FIX A) The quota-banner countdown ticks WITHOUT any new frame entering the ≤T set, so the
+  // The quota-banner countdown ticks WITHOUT any new frame entering the ≤T set, so the
   // count|reveal key alone is static during the race and the countdown would render once and freeze.
   // Fold in the currently-displayed countdown SECOND whenever a quota_banner frame is active (its tMs ≤
   // T and it has NOT yet been cleared by a quota_resumed frame ≤ T) so the pane re-renders each second.
@@ -764,7 +764,7 @@ export const B1_COMPOSER_PULSE_TO = 3700; //   … for ~2s (a real dwell: the vi
 export const B1_REQUEST_MOVE_MS = 3700; // cursor travels to #composer-request
 export const B1_REQUEST_TYPE_FROM = 4300; // field_type #composer-request begins …
 export const B1_REQUEST_TYPE_TO = 6800; //   … typed over ~2.5s
-// (P5 #1 / review2 c1) PACING: the reviewer at tMs≈8508 could not SEE the textbox→Start move — it
+// (review2 c1) PACING: the reviewer at tMs≈8508 could not SEE the textbox→Start move — it
 // completed ~600ms earlier and there was no textbox dwell to establish the origin, so the cursor read as
 // "already rested on the button". The beat is now re-centered ON the commented frame:
 //   1. right after typing ends the cursor RE-ANCHORS at the request field (fresh origin waypoint) and a
@@ -788,7 +788,7 @@ export const B1_USER_PULSE_FROM = 9350; // pulse the user bubble …
 export const B1_USER_PULSE_TO = 9900; //   … for ~0.55s
 export const B1_REPLY_MS = 10000; // seq 2 assistant reply begins streaming (reveal 900 → ends 10900 < B1B_LEAD_MS)
 
-// Beat 1.5 — Intent-clarifier running beat (P4, #2): BEFORE the clarify question card appears, the
+// Beat 1.5 — Intent-clarifier running beat: BEFORE the clarify question card appears, the
 // intent-clarifier agent is shown RUNNING with realistic streaming tool calls (a small mirror of the
 // scope-recon group). It launches a top-level `intent-clarifier` Task, runs 4 atomic leaf tool pairs
 // (Glob/Read/Grep), notes a brief summary, then its OWN deferred Task tool_result flips it done — so the
@@ -803,7 +803,7 @@ export const B1B_LEAF_STEP_MS = 450; // the inter-leaf gap (atomic pair shares o
 export const B1B_SUMMARY_MS = 14800; // the clarifier's closing in-group summary
 export const B1B_TASK_RESULT_MS = 15300; // the clarifier Task's OWN deferred tool_result (flips it done)
 
-// CLARIFIER_SHIFT (load-bearing, P4 #2): the intent-clarifier running beat (B1B_*, above) is INSERTED
+// CLARIFIER_SHIFT (load-bearing): the intent-clarifier running beat (B1B_*, above) is INSERTED
 // between the seq-2 reply (B1_REPLY_MS) and the (formerly tMs-11000) clarify question. It adds TIME only
 // (its model frames carry FRACTIONAL 2.x seqs, so no seq renumbering). EVERYTHING downstream of the reply
 // — the question (B2_*), scope-recon (B3_*), plan-sizer (B4_*), prototype review (PROTO_*), and the
@@ -820,7 +820,7 @@ export const B2_QUESTION_PULSE_FROM = 11200 + CLARIFIER_SHIFT; // pulse .conv-qu
 export const B2_QUESTION_PULSE_TO = 13200 + CLARIFIER_SHIFT; //   … for ~2s (pause+pulse on the card)
 export const B2_ANSWER_TYPE_FROM = 13400 + CLARIFIER_SHIFT; // field_type [data-other="text"] begins (reconciler auto-checks Other)
 export const B2_ANSWER_TYPE_TO = 15600 + CLARIFIER_SHIFT; //   … typed over ~2.2s
-// (P5 #3) PACING: right after the answer is typed the cursor re-anchors AT the Other input (a fresh
+// PACING: right after the answer is typed the cursor re-anchors AT the Other input (a fresh
 // origin waypoint — the cursor's prior waypoint is the far-away #composer-start from Beat 1), THEN
 // travels SLOWLY to the submit button so the field→button move is legible. A dwell + pulse on the submit
 // button lets the moment read. The whole tail still completes before B3_ACK_MS (17600 + SHIFT), so NO
@@ -1013,7 +1013,7 @@ export const PROTO_SUBMIT_CLICK_MS = 48200 + PROTO_BASE_SHIFT; // cosmetic click
 export const PROTO_ROUND2_MS = 48400 + PROTO_BASE_SHIFT; // prototype_gate{on,round:2} → the inline card MORPHS with a difficulty badge
 export const PROTO_CARD2_PULSE_FROM = 48600 + PROTO_BASE_SHIFT; // pulse #reading-pane (inline round-2 card) …
 export const PROTO_CARD2_PULSE_TO = 50600 + PROTO_BASE_SHIFT; //   … ~2s pause
-// (P5 #10) PACING: before approving, make the review-bar buttons read clearly — pulse #review-approve,
+// PACING: before approving, make the review-bar buttons read clearly — pulse #review-approve,
 // re-anchor the cursor at the feedback field (a fresh origin — its prior waypoint is #review-submit from
 // the round-1 cosmetic click), then travel SLOWLY across the review bar to Approve so the move is
 // legible. The whole approve sequence still completes by the ORIGINAL PROTO_ACK_MS (52400 + SHIFT), so
@@ -1154,7 +1154,7 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     },
   },
   {
-    // OVERLAY (P5 #1) — the cursor RE-ANCHORS at the request field right after typing ends. This is the
+    // OVERLAY — the cursor RE-ANCHORS at the request field right after typing ends. This is the
     // fresh ORIGIN waypoint for the slow travel below: it guarantees projectCursorState's `from` is
     // #composer-request at the start-move (a real field→button TRAVEL, not a jump). Eases in place.
     tMs: B1_REQUEST_DWELL_MS,
@@ -1173,14 +1173,14 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     },
   },
   {
-    // OVERLAY (P5 #1 / review2 c1) — the cursor travels SLOWLY (B1_START_MOVE_DUR ~1.1s) from
+    // OVERLAY (review2 c1) — the cursor travels SLOWLY (B1_START_MOVE_DUR ~1.1s) from
     // #composer-request to the Start button. The move WINDOW (7900→9000) STRADDLES the commented frame
     // 8508, so a viewer scrubbing there sees the cursor mid-flight (t01 ≈ 0.55), not a rested cursor.
     tMs: B1_START_MOVE_MS,
     frame: { t: "cursor_move", target: "#composer-start", moveMs: B1_START_MOVE_DUR },
   },
   {
-    // OVERLAY (P5 #1) — pulse #composer-start while the cursor is still APPROACHING (from 8500, mid-travel)
+    // OVERLAY — pulse #composer-start while the cursor is still APPROACHING (from 8500, mid-travel)
     // so the button reads clearly the moment the cursor lands and through the cosmetic press.
     tMs: B1_START_PULSE_FROM,
     frame: { t: "pulse", target: "#composer-start", fromMs: B1_START_PULSE_FROM, toMs: B1_START_PULSE_TO },
@@ -1229,7 +1229,7 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
   },
 
   // ================================================================================================
-  // Chapter "Clarify" — Beat 1.5: intent-clarifier RUNNING beat (P4, #2)
+  // Chapter "Clarify" — Beat 1.5: intent-clarifier RUNNING beat
   // ================================================================================================
   //
   // BEFORE the question card lands, the intent-clarifier agent is shown RUNNING — a small mirror of the
@@ -1511,7 +1511,7 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     },
   },
   {
-    // OVERLAY (P5 #3) — the cursor RE-ANCHORS at the Other input right after the answer is typed. Without
+    // OVERLAY — the cursor RE-ANCHORS at the Other input right after the answer is typed. Without
     // this fresh origin the cursor's prior waypoint is the far-away #composer-start (Beat 1), so the
     // submit move would jump from across the screen. This pins `from` = [data-other="text"] for a real
     // field→button TRAVEL. Eases in place.
@@ -1519,13 +1519,13 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     frame: { t: "cursor_move", target: '[data-other="text"]', moveMs: 200 },
   },
   {
-    // OVERLAY (P5 #3) — the cursor travels SLOWLY (B2_SUBMIT_MOVE_DUR ~0.8s) from the Other input to the
+    // OVERLAY — the cursor travels SLOWLY (B2_SUBMIT_MOVE_DUR ~0.8s) from the Other input to the
     // question card's submit button, so the viewer can FOLLOW the move instead of seeing it jump.
     tMs: B2_SUBMIT_MOVE_MS,
     frame: { t: "cursor_move", target: ".conv-question-submit", moveMs: B2_SUBMIT_MOVE_DUR },
   },
   {
-    // OVERLAY (P5 #3) — pulse .conv-question-submit once the cursor arrives: a DWELL (the tMs gap to the
+    // OVERLAY — pulse .conv-question-submit once the cursor arrives: a DWELL (the tMs gap to the
     // click) so the viewer reads the submit button before the cosmetic press.
     tMs: B2_SUBMIT_PULSE_FROM,
     frame: { t: "pulse", target: ".conv-question-submit", fromMs: B2_SUBMIT_PULSE_FROM, toMs: B2_SUBMIT_PULSE_TO },
@@ -2648,14 +2648,14 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     frame: { t: "pulse", target: "#reading-pane", fromMs: PROTO_CARD2_PULSE_FROM, toMs: PROTO_CARD2_PULSE_TO },
   },
   {
-    // OVERLAY (P5 #10) — pulse the "Approve visual" button (#review-approve) so the review-bar buttons
+    // OVERLAY — pulse the "Approve visual" button (#review-approve) so the review-bar buttons
     // read clearly BEFORE and THROUGH the slow cursor travel (up to the click). Draws the viewer's eye to
     // where the cursor is heading.
     tMs: PROTO_APPROVE_PULSE_FROM,
     frame: { t: "pulse", target: "#review-approve", fromMs: PROTO_APPROVE_PULSE_FROM, toMs: PROTO_APPROVE_PULSE_TO },
   },
   {
-    // OVERLAY (P5 #10) — the cursor RE-ANCHORS at the feedback field. Without this fresh origin the
+    // OVERLAY — the cursor RE-ANCHORS at the feedback field. Without this fresh origin the
     // cursor's prior waypoint is #review-submit (the round-1 cosmetic click), so the move to Approve would
     // barely travel. Re-anchoring at #prototype-feedback makes the approve move a real, legible TRAVEL
     // across the review bar (from = #prototype-feedback → to = #review-approve). Eases in place.
@@ -2663,7 +2663,7 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     frame: { t: "cursor_move", target: "#prototype-feedback", moveMs: 200 },
   },
   {
-    // OVERLAY (P5 #10) — the cursor travels SLOWLY (PROTO_APPROVE_MOVE_DUR ~0.75s) from the feedback field
+    // OVERLAY — the cursor travels SLOWLY (PROTO_APPROVE_MOVE_DUR ~0.75s) from the feedback field
     // to the "Approve visual" button (#review-approve), so the viewer can FOLLOW the move (not a jump).
     tMs: PROTO_APPROVE_MOVE_MS,
     frame: { t: "cursor_move", target: "#review-approve", moveMs: PROTO_APPROVE_MOVE_DUR },
@@ -3426,7 +3426,7 @@ const EXEC_SUBPLANS: ExecSubplan[] = [
 //   (d) a "done" beat — folded into the execution summary + deferred result above, and
 //   (e) a parent-REVIEW beat — a top-level narration acknowledging the subplan and queueing the next.
 // THEN the next subplan's row appears, and so on. Before subplan 01's row, a master→01 "thinking" group
-// (#7) plays (the agent reasons about WHERE to start before the first row populates).
+// plays (the agent reasons about WHERE to start before the first row populates).
 //
 // Every leaf tool_use+tool_result pair shares a tMs (ATOMIC). Both the planning Task AND the execution
 // Task are SPANNING (their own deferred tool_result lands at their group's end → no stuck running Task).
@@ -3557,7 +3557,7 @@ function buildExecution(): {
     1000,
   );
 
-  // (#7) The master→01 "thinking" group: BEFORE the first subplan row appears, the agent reasons about
+  // The master→01 "thinking" group: BEFORE the first subplan row appears, the agent reasons about
   // where to start. A small spanning `planning-lead` Task whose deferred result decides "data layer first".
   narrate("Thinking about where to start — the data layer is the foundation everything else renders from.", 900);
   emitSpanningTask({

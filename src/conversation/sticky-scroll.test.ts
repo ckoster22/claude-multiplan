@@ -1,4 +1,4 @@
-// Conversation domain — sticky scroll-to-bottom (Fix 1).
+// Conversation domain — sticky scroll-to-bottom.
 //
 // Two layers:
 //   1. The PURE isAtBottom() threshold helper (no DOM, fully falsifiable in isolation).

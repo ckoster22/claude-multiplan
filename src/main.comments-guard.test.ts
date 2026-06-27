@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ---------------------------------------------------------------------------------------------
-// Verification item 8 — the main.ts render-generation guard around applyComments.
+// The main.ts render-generation guard around applyComments.
 //
 // Locks the MANDATORY post-`await` re-check after `loadCommentsFor` in openPlan/reloadOpenPlan:
 //
@@ -68,6 +68,7 @@ vi.mock("./render", () => ({
     return d.promise;
   }),
   clearAllComments: vi.fn(),
+  invalidatePopover: vi.fn(),
 }));
 vi.mock("./render/scroll", () => ({
   captureAnchor: vi.fn(() => null),
@@ -103,7 +104,7 @@ beforeEach(() => {
   (applyComments as ReturnType<typeof vi.fn>).mockClear();
 });
 
-describe("openPlan — applyComments is gated by the post-loadCommentsFor isCurrent re-check (Verification 8)", () => {
+describe("openPlan — applyComments is gated by the post-loadCommentsFor isCurrent re-check", () => {
   it("a render superseded DURING the loadCommentsFor await does NOT applyComments", async () => {
     bootDom();
     H.readResults = ["Plan A", "Plan B"];

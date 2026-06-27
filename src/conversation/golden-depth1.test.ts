@@ -330,6 +330,15 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       (chrome-devtools) are BEST-EFFORT: if unavailable or erroring it must skip them
       (screenshot: null) without failing.
 
+      \`kind\` MUST match the actual format of \`inline_preview\` — the reading pane routes by \`kind\`,
+      so a mislabel renders as an error:
+        - kind "mermaid" REQUIRES \`inline_preview\` to be VALID MERMAID DIAGRAM SOURCE — its first
+          non-empty line is a mermaid diagram-type keyword (flowchart / graph / sequenceDiagram /
+          stateDiagram / classDiagram / erDiagram / etc.) so it renders as a real diagram. A
+          box-and-arrow or freeform ASCII drawing is NOT mermaid and MUST use kind "ascii" instead
+          (rendered as a plain monospace block, always safe).
+        - kind "table" for input/output tables; kind "html" for an HTML artifact.
+
       When \`intent_clear\` is true, \`questions\` is empty. When it is false, \`questions\` holds 1–4
       decision-forcing questions (each with 2–4 options). This MUST be a FAST, lightweight clarification
       that converges in ONE short turn.
@@ -638,6 +647,15 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       may produce 2-4 labeled variants when the right direction is genuinely ambiguous. Screenshots
       (chrome-devtools) are BEST-EFFORT: if unavailable or erroring it must skip them
       (screenshot: null) without failing.
+
+      \`kind\` MUST match the actual format of \`inline_preview\` — the reading pane routes by \`kind\`,
+      so a mislabel renders as an error:
+        - kind "mermaid" REQUIRES \`inline_preview\` to be VALID MERMAID DIAGRAM SOURCE — its first
+          non-empty line is a mermaid diagram-type keyword (flowchart / graph / sequenceDiagram /
+          stateDiagram / classDiagram / erDiagram / etc.) so it renders as a real diagram. A
+          box-and-arrow or freeform ASCII drawing is NOT mermaid and MUST use kind "ascii" instead
+          (rendered as a plain monospace block, always safe).
+        - kind "table" for input/output tables; kind "html" for an HTML artifact.
 
       When \`intent_clear\` is true, \`questions\` is empty. When it is false, \`questions\` holds 1–4
       decision-forcing questions (each with 2–4 options). This MUST be a FAST, lightweight clarification

@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — PURE in-memory stream model.
+// Conversation domain — PURE in-memory stream model.
 //
 // Consumes the committed agent-stream vocabulary (types.ts) and produces a normalized,
 // renderable tree. NO DOM. Responsibilities:
@@ -24,7 +24,12 @@ import type {
   AskUserQuestionAnswers,
 } from "./types";
 
-export type ToolStatus = "running" | "done" | "error";
+// A tool-call row's lifecycle status. "running" until its tool_result correlates (→ "done"/"error");
+// "interrupted" when the turn ended (result/exit) while it was still running and no result ever landed
+// — so its row stops pulsing instead of spinning forever (see the turn-end demotion in derive()).
+// INVARIANT[tool-status-four-state] (type-level): a tool-call row's status is exactly running|done|error|interrupted.
+//   prevents: a tool abandoned at turn-end stuck visibly 'running' forever
+export type ToolStatus = "running" | "done" | "error" | "interrupted";
 
 // A rendered tool-call row (a tool_use, possibly correlated with its tool_result).
 export interface ToolNode {
@@ -78,7 +83,7 @@ export interface ModeNode {
   mode: string;
 }
 
-// The "awaiting review (wired in Sub-Plan 03)" marker for a tool-permission-requested event.
+// The "awaiting review" marker for a tool-permission-requested event.
 export interface PermissionRequestNode {
   type: "permission_request";
   seq: number;
@@ -481,6 +486,28 @@ export class ConversationModel {
     // 1. Order strictly by seq (a stable sort on a copy — never mutate the source list).
     const ordered = [...this.events].sort((a, b) => seqOf(a) - seqOf(b));
 
+    // 1b. Assign a session SEGMENT to every event, in ARRIVAL order (NOT seq order — a resume resets
+    // the wire seq, so seq order scrambles the two sessions together). A fresh sidecar — every session
+    // RESUME (quota auto-resume OR manual post-end Send) goes through a fresh `start_agent_session` —
+    // emits a NEW `system_init`; the FIRST system_init opens segment 0, each SUBSEQUENT one opens the
+    // next segment. Synthetic frames (exit/error/notice at synthSeq) inherit the segment current at
+    // their arrival point, so a session-end exit stays in the segment it ended. Keyed on the stable
+    // event object reference so the `ordered` loop below can look each event's segment back up.
+    // INVARIANT[segment-arrival-monotonic] (runtime-guard): each event gets a session-segment number in arrival order; each subsequent system_init opens the next segment.
+    //   prevents: seq-order scrambling across a resume (which resets the wire seq)
+    const segmentOf = new Map<ModelEvent, number>();
+    {
+      let segment = 0;
+      let seenSystemInit = false;
+      for (const ev of this.events) {
+        if (isStream(ev) && ev.kind === "system_init") {
+          if (seenSystemInit) segment++;
+          seenSystemInit = true;
+        }
+        segmentOf.set(ev, segment);
+      }
+    }
+
     // 2. First pass: build tool nodes keyed by id and correlate results onto them.
     const toolById = new Map<string, ToolNode>();
     let permissionMode: string | null = null;
@@ -492,6 +519,27 @@ export class ConversationModel {
     let active = false;
     let latestStatusLabel: string | null = null;
     let exited = false;
+    // The LATEST turn-terminal frame seen (a `result`, an `exit`, or a FATAL error), as a
+    // (segment, seq) pair. The model is session-scoped — it persists across the orchestrator's many
+    // sequential turns AND across a session RESUME (quota auto-resume / manual post-end Send), and
+    // `complete` is set on the FIRST result and never reset — so the turn-end tool demotion (step 2c)
+    // must be SCOPED: only a tool causally BEFORE the latest terminal frame was abandoned. Within one
+    // session segment that is a plain seq compare; ACROSS a resume seqs are NOT comparable (the fresh
+    // sidecar resets its wire seqCounter to 0 while the prior session's synthetic exit sits at the
+    // controller's synthSeq ~1e9), so we compare (segment, seq) lexicographically: a prior-segment
+    // terminal frame never demotes a current-segment running tool. (`segment` is computed below in
+    // ARRIVAL order and bumped on each non-first system_init — the fresh-sidecar marker.)
+    let lastTerminalSeg = -1;
+    let lastTerminalSeq = -Infinity;
+    // Lexicographic-max update of the latest-terminal (segment, seq).
+    const noteTerminal = (seg: number, seq: number): void => {
+      if (seg > lastTerminalSeg || (seg === lastTerminalSeg && seq > lastTerminalSeq)) {
+        lastTerminalSeg = seg;
+        lastTerminalSeq = seq;
+      }
+    };
+    // The session segment each tool node belongs to (for the seq-incomparable-across-resume scoping).
+    const toolSegment = new Map<ToolNode, number>();
     // The id of the latest UNRESOLVED interactive permission hold (the agent is blocked on the
     // user — AskUserQuestion or ExitPlanMode). Set on a tool-permission-requested event; cleared
     // by its resolution (question_answered / permission_resolved with a MATCHING id — id-matched
@@ -588,6 +636,7 @@ export class ConversationModel {
               isError: false,
             };
             toolById.set(ev.id, node);
+            toolSegment.set(node, segmentOf.get(ev) ?? 0);
             placed.push({ node, parent: ev.parent_tool_use_id });
             break;
           }
@@ -615,6 +664,7 @@ export class ConversationModel {
             // re-activates it; latestStatusLabel is cleared so the next turn re-seeds cleanly.
             active = false;
             latestStatusLabel = null;
+            noteTerminal(segmentOf.get(ev) ?? 0, ev.seq);
             placed.push({
               node: {
                 type: "result",
@@ -690,6 +740,7 @@ export class ConversationModel {
         if (ev.fatal) {
           exited = true;
           active = false;
+          noteTerminal(segmentOf.get(ev) ?? 0, ev.seq);
         }
         placed.push({
           node: {
@@ -751,6 +802,7 @@ export class ConversationModel {
         // exit — the session ended; the working indicator must hide.
         exited = true;
         active = false;
+        noteTerminal(segmentOf.get(ev) ?? 0, ev.seq);
         placed.push({
           node: { type: "exit", seq: ev.seq, code: ev.code },
           parent: null,
@@ -762,6 +814,28 @@ export class ConversationModel {
     for (const [id, answers] of answersById) {
       const node = questionNodes.get(id);
       if (node) node.answers = answers;
+    }
+
+    // 2c. Turn-end demotion (SEGMENT- + SEQ-SCOPED): a tool_use still "running" that is causally
+    // BEFORE the latest turn-terminal frame (`result`/`exit`/fatal error) never received its
+    // tool_result before that turn ended and never will — demote it to "interrupted" so its row stops
+    // pulsing forever. The scoping is load-bearing twice over: the model is session-scoped (one model
+    // across the orchestrator's many sequential turns AND across a session resume; `complete` is set on
+    // the FIRST result and never reset), so an UNSCOPED demotion would wrongly flip a still-running
+    // turn-N tool. We compare (segment, seq) LEXICOGRAPHICALLY: a tool in a LATER segment than the
+    // latest terminal frame (a fresh resumed-session tool — the resume reset the wire seq, so a raw seq
+    // compare would misfire) is left running; within the SAME segment the plain seq compare applies, so
+    // a genuinely-abandoned tool (a terminal frame after it in its own segment) still interrupts. Only
+    // RUNNING tools are touched; done/error tools already correlated. Mutates by reference (the same
+    // node objects sit in `placed`/the groups), so the change is visible everywhere.
+    // INVARIANT[turn-end-demotion-segment-and-seq-scoped] (reducer-total): a still-running tool is demoted to interrupted iff a turn-terminal frame is causally after it, compared (segment,seq) lexicographically.
+    //   prevents: a running turn-N tool flipped by an earlier turn's terminal, or a resumed-session tool flipped by the prior session's synthetic exit
+    for (const tool of toolById.values()) {
+      if (tool.status !== "running") continue;
+      const seg = toolSegment.get(tool) ?? 0;
+      const terminalIsAfter =
+        lastTerminalSeg > seg || (lastTerminalSeg === seg && lastTerminalSeq > tool.seq);
+      if (terminalIsAfter) tool.status = "interrupted";
     }
 
     // 3. Group: nodes with a non-null parent fold into a subagent group keyed by that parent.

@@ -80,7 +80,7 @@ describe("resolveModelOptions", () => {
     });
   });
 
-  // NEW (#1): Opus emits the stored effort, not the default. With "max" stored,
+  // NEW: Opus emits the stored effort, not the default. With "max" stored,
   // Opus resolves to effort:"max" — NOT "high"/"medium".
   it("emits the stored global effort for Opus", () => {
     const storage = fakeStorage({
@@ -93,7 +93,7 @@ describe("resolveModelOptions", () => {
     expect(result.effort).not.toBe("medium");
   });
 
-  // NEW (#2): non-Opus presets keep their OWN static effort; the global Opus
+  // NEW: non-Opus presets keep their OWN static effort; the global Opus
   // effort must NEVER leak onto them.
   it("never leaks the global Opus effort onto non-Opus presets", () => {
     const fableStore = fakeStorage({
@@ -124,7 +124,7 @@ describe("resolveModelOptions", () => {
     }
   });
 
-  // NEW (#6): an invalid stored effort for Opus degrades to the default "high".
+  // NEW: an invalid stored effort for Opus degrades to the default "high".
   it("degrades an invalid stored Opus effort to the default", () => {
     const storage = fakeStorage({
       [MODEL_PRESET_KEY]: "opus-4-8",
@@ -208,7 +208,7 @@ describe("buildOptions key-omission invariant", () => {
   });
 });
 
-// Drift-guard (#9, non-tautological): the frontend EFFORT_LEVELS list must agree
+// Drift-guard (non-tautological): the frontend EFFORT_LEVELS list must agree
 // with the sidecar's SDK-derived isEffortLevel. Iterate the FRONTEND list and
 // assert each is accepted; assert genuine non-levels are rejected. If the two
 // whitelists drift, this goes red.
@@ -431,7 +431,7 @@ describe("initModelPicker", () => {
 
   // ---- Effort segment (.titlebar-effort) — sibling of the model picker ----
 
-  // NEW (#1): Opus active → the effort segment is revealed and the
+  // NEW: Opus active → the effort segment is revealed and the
   // stored/default effort is the single active effort button.
   it("reveals the effort segment when Opus is active and highlights the stored effort", () => {
     const container = mountPicker();
@@ -449,7 +449,7 @@ describe("initModelPicker", () => {
     expect(effortBtn(container, "medium").classList.contains("active")).toBe(false);
   });
 
-  // NEW (#1): default effort "high" is active when none is stored.
+  // NEW: default effort "high" is active when none is stored.
   it("highlights the default effort 'high' when none is stored (Opus)", () => {
     const container = mountPicker();
     const { storage } = rwStorage({ [MODEL_PRESET_KEY]: "opus-4-8" });
@@ -460,7 +460,7 @@ describe("initModelPicker", () => {
     expect(effortGroup(container).querySelectorAll(".effort-level.active").length).toBe(1);
   });
 
-  // NEW (#2): non-Opus active → the segment is hidden (removed from layout).
+  // NEW: non-Opus active → the segment is hidden (removed from layout).
   it("hides the effort segment when a non-Opus preset is active on load", () => {
     const container = mountPicker();
     const { storage } = rwStorage({ [MODEL_PRESET_KEY]: "fable-5" });
@@ -468,7 +468,7 @@ describe("initModelPicker", () => {
     expect(effortGroup(container).hidden).toBe(true);
   });
 
-  // NEW (#2 + #3): switching presets toggles segment visibility, and the stored
+  // NEW: switching presets toggles segment visibility, and the stored
   // effort is RETAINED across switches (never cleared). Switching does NOT write
   // the EFFORT_KEY.
   it("retains the chosen effort across model switches and never writes EFFORT_KEY on switch", () => {
@@ -504,7 +504,7 @@ describe("initModelPicker", () => {
     expect(effortWrites.length).toBe(0);
   });
 
-  // NEW (#4): clicking an effort button persists it (EFFORT_KEY) and moves the
+  // NEW: clicking an effort button persists it (EFFORT_KEY) and moves the
   // active effort — exactly one .active and exactly one aria-pressed="true".
   it("clicking an effort button persists it and moves the active effort", () => {
     const container = mountPicker();
@@ -524,7 +524,7 @@ describe("initModelPicker", () => {
     expect(effortBtn(container, "max").getAttribute("aria-pressed")).toBe("true");
   });
 
-  // NEW (#5): persistence round-trip — click "low", a fresh init over the same
+  // NEW: persistence round-trip — click "low", a fresh init over the same
   // store shows "low" active and resolves Opus+low.
   it("persists the effort across a fresh init (round-trip)", () => {
     const container = mountPicker();
@@ -543,7 +543,7 @@ describe("initModelPicker", () => {
     });
   });
 
-  // NEW (#6): an invalid/absent stored effort → "high" active on load.
+  // NEW: an invalid/absent stored effort → "high" active on load.
   it("highlights 'high' for an invalid stored effort on load", () => {
     const container = mountPicker();
     const { storage } = rwStorage({
@@ -569,7 +569,7 @@ describe("initModelPicker", () => {
     expect(effortBtn(container, "high").classList.contains("active")).toBe(true);
   });
 
-  // NEW (#7): effort write failure is non-fatal — setItem throws → no throw, and
+  // NEW: effort write failure is non-fatal — setItem throws → no throw, and
   // the active effort still moves.
   it("does not throw and still moves the active effort when EFFORT setItem throws", () => {
     const container = mountPicker();
@@ -591,7 +591,7 @@ describe("initModelPicker", () => {
     expect(effortGroup(container).querySelectorAll(".effort-level.active").length).toBe(1);
   });
 
-  // NEW (#8): disjoint handlers — an effort click does NOT change the active
+  // NEW: disjoint handlers — an effort click does NOT change the active
   // preset, and a preset click does NOT change the active effort.
   it("keeps the preset and effort handlers disjoint", () => {
     const container = mountPicker();
@@ -611,7 +611,7 @@ describe("initModelPicker", () => {
     expect(effortGroup(container).querySelectorAll(".effort-level.active").length).toBe(1);
   });
 
-  // NEW (#10): clicks on the effort container that miss a .effort-level do
+  // NEW: clicks on the effort container that miss a .effort-level do
   // nothing (no persist, no change).
   it("ignores clicks that miss a .effort-level (no persist, no change)", () => {
     const container = mountPicker();

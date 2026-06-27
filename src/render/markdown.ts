@@ -42,6 +42,8 @@ function buildMd(): MarkdownIt {
     const sourceLine = token.map ? String(token.map[0]) : "";
     const sourceEndLine = token.map ? String(token.map[1]) : "";
 
+    // INVARIANT[mermaid-source-carried-verbatim-not-as-code] (convention): A mermaid fence renders to <pre class='mermaid-src'> carrying escaped raw source, never <pre><code>.
+    //   prevents: diagram source being syntax-highlighted as code instead of rendered as a diagram.
     if (lang === "mermaid") {
       // Carry the diagram SOURCE verbatim (escaped) — rendered later by mermaid.ts.
       return (

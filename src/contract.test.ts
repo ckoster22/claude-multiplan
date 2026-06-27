@@ -37,6 +37,7 @@ vi.mock("./render", () => ({
   onCommentCountChanged: vi.fn(),
   loadCommentsFor: vi.fn(async () => []),
   clearAllComments: vi.fn(),
+  invalidatePopover: vi.fn(),
 }));
 vi.mock("./render/scroll", () => ({ captureAnchor: vi.fn(), applyDelta: vi.fn() }));
 // Stub the titlebar wiring functions (importing main.ts must be a no-op), but keep the REAL
@@ -183,11 +184,11 @@ describe("contract — table-of-contents sidebar selectors present in index.html
     'id="tab-plans"',
     'id="tab-contents"',
     'id="toc-list"',
-    // Sidebar filter (Fix 1): the real interactive control inside the frozen .search container.
+    // Sidebar filter: the real interactive control inside the frozen .search container.
     'id="plan-filter"',
     'class="search"',
     'class="clear"',
-    // Sub-Plan 01: theme toggle in the .titlebar-controls slot + the persisted-theme
+    // theme toggle in the .titlebar-controls slot + the persisted-theme
     // localStorage key (pins the inline anti-FOUC script's key to the contract).
     'class="titlebar-controls"',
     'id="theme-toggle"',
@@ -232,7 +233,7 @@ describe("contract — text-size anti-FOUC literals pinned in index.html", () =>
   });
 });
 
-describe("contract — Sub-Plan 02 highlight/comment selectors present in index.html", () => {
+describe("contract — highlight/comment selectors present in index.html", () => {
   // Popover markup the comment feature depends on. Reads the real file, so removing any of
   // these from index.html turns its assertion red.
   const TOKENS = [

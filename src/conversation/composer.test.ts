@@ -1,7 +1,7 @@
-// Conversation domain (Sub-Plan 02/03) — composer tests.
+// Conversation domain — composer tests.
 //
 // We stub @tauri-apps/plugin-dialog so wd-picker's chooseDirectory is controllable, and inject the
-// single `start({cwd, request})` invoker so Start is testable without real Tauri. Sub-Plan 03: the
+// single `start({cwd, request})` invoker so Start is testable without real Tauri. The
 // composer delegates to the orchestrator's start() thunk (returns true on a real start, false on the
 // idempotent no-op) instead of firing start_agent_session + send_agent_message itself.
 
@@ -202,7 +202,7 @@ describe("Composer — Start delegates to the orchestrator start() thunk", () =>
     expect(els.modal!.classList.contains("hidden")).toBe(true);
   });
 
-  // Sub-Plan 03 (falsifiable): start() returning FALSE is the idempotent no-op (a run is already
+  // (falsifiable): start() returning FALSE is the idempotent no-op (a run is already
   // active). A dead start must NOT close the modal or run onStarted — it shows a visible error.
   // FALSIFY: run onStarted()/close() unconditionally (ignore the boolean) → these go RED.
   it("on a FALSE start (idempotent no-op) it shows an error and stays open; no onStarted", async () => {
@@ -235,7 +235,7 @@ describe("Composer — Start delegates to the orchestrator start() thunk", () =>
   });
 });
 
-describe("Composer — Fix A: failures surface as a VISIBLE inline error (never silent)", () => {
+describe("Composer — failures surface as a VISIBLE inline error (never silent)", () => {
   it("empty request => inline error shown, NO session started, modal stays open", async () => {
     const els = makeEls();
     const inv = mkStart();
@@ -297,7 +297,7 @@ describe("Composer — Fix A: failures surface as a VISIBLE inline error (never 
   });
 });
 
-describe("Composer — Fix B: Start honors a typed-but-unsaved token", () => {
+describe("Composer — Start honors a typed-but-unsaved token", () => {
   it("typed-but-unsaved token is persisted (set_agent_oauth_token path) THEN the session starts", async () => {
     const els = makeEls();
     const calls: string[] = [];

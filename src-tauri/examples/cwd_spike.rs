@@ -1,9 +1,9 @@
-// cwd-resolution spike — VALIDATION ONLY (Sub-Plan 01, step 5).
+// cwd-resolution spike — VALIDATION ONLY (step 5).
 //
 // Throwaway `cargo run --example cwd_spike`. NOT a Tauri command and NOT wired into
 // list_plans. Its sole job is to validate that a plan-file stem can be resolved to its
 // owning session `cwd` against REAL on-disk transcripts, confirming the reserved
-// `cwd: Option<String>` field shape that Sub-Plan 03 will build a production resolver for.
+// `cwd: Option<String>` field shape that a production resolver will build on.
 //
 // Match strategy (corrected against real on-disk data — do NOT key on file_path alone):
 //   1. AUTHORITATIVE: an `attachment` record with attachment.type == "plan_mode" whose

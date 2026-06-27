@@ -22,6 +22,13 @@ export interface ImageAttachments {
   isEmpty(): boolean;
   /** Drop all images, clear the chip strip + any inline error. */
   clear(): void;
+  /**
+   * Replace the attached set with `imgs` (in order) and re-render the chips. The RE-ADD seam used to
+   * RESTORE images after a FAILED send: the send path clears chips synchronously at fire time, so a
+   * transient dispatch failure would otherwise silently drop the user's attachments. Callers decide
+   * WHEN to restore (e.g. only when the tray is currently empty so re-attached chips aren't clobbered).
+   */
+  setImages(imgs: AttachedImage[]): void;
 }
 
 export interface CreateImageAttachmentsOptions {
@@ -179,6 +186,16 @@ export function createImageAttachments(opts: CreateImageAttachmentsOptions): Ima
       images.length = 0;
       chipStrip.replaceChildren();
       clearError();
+    },
+    // INVARIANT[setimages-owns-its-copies] (convention): setImages replaces the set wholesale and copies each entry, so the controller never aliases the caller's snapshot.
+    //   prevents: shared-reference mutation between controller and the captured sending-state images
+    setImages: (imgs) => {
+      // RESTORE seam (failed-send recovery): replace the set wholesale + re-render. Copy each entry so
+      // the controller owns its own objects (never aliases the caller's snapshot). Renumbering + chip
+      // wiring come from render(), exactly as the add path does.
+      images.length = 0;
+      for (const img of imgs) images.push({ media_type: img.media_type, data: img.data });
+      render();
     },
   };
 }

@@ -871,7 +871,7 @@ function mountPlayer(): void {
       // Prototype gate: the fake orchestrator seam. Pass the ROUND-AWARE Trailhead ASCII override so
       // main.ts's renderPrototypePreview composes the trail-card ASCII INLINE in #reading-pane (the real
       // app's inline-preview path) — round 1 = the clean card, round 2 = the difficulty-badge variant.
-      // Never mermaid (review item #6 — the default fixture's `flowchart LR` would otherwise paint).
+      // Never mermaid (the default fixture's `flowchart LR` would otherwise paint).
       emitGate: (_which: "prototype", round?: number): void =>
         emitGate("prototype", round, trailheadProtoPreviewOverride(round ?? 1)),
       clearGate,

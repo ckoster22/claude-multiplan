@@ -4,8 +4,16 @@
 // in attach order with 1-based positional #N badges, removal renumbers + reorders getImages(),
 // and a rejected attach shows an error with NO chip added — independent of implementation.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createImageAttachments, type ImageAttachments } from "./attachments";
+
+// Outstanding FileReader.readAsDataURL operations. The attach funnel (addFiles →
+// fileToAttachedImage → FileReader.onload, in images.ts) is async and fire-and-forget from the
+// paste/drop event handlers, so the test can't await it directly. Counting in-flight reads lets
+// settle() wait for the funnel to FULLY drain instead of guessing a fixed number of event-loop
+// turns (which is non-deterministic under parallel test load).
+let pendingReads = 0;
+const realReadAsDataURL = FileReader.prototype.readAsDataURL;
 
 // A 1x1 PNG (tiny, real bytes) — deterministic small base64 payload through jsdom's FileReader.
 const PNG_1x1_BASE64 =
@@ -51,12 +59,18 @@ async function paste(h: Harness, files: File[]): Promise<void> {
   const ev = new Event("paste") as Event & { clipboardData?: DataTransfer };
   ev.clipboardData = fakeDataTransfer(files);
   h.inputEl.dispatchEvent(ev);
-  await flush();
+  await settle();
 }
 
-// Two microtask turns: FileReader.onload (macrotask in jsdom) → addFiles awaits → render.
-async function flush(): Promise<void> {
-  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+// Wait until every FileReader read kicked off by the dispatched event has reached loadend AND the
+// (microtask-chained) render() that addFiles runs after the last read has flushed. pendingReads is
+// only 0 at a macrotask boundary once the WHOLE funnel is done — between two sequential reads the
+// 0→1 hand-off happens entirely in microtasks, so a poll never catches a transient 0. Polling that
+// invariant via vi.waitFor is deterministic no matter how the event loop interleaves under load.
+async function settle(): Promise<void> {
+  await vi.waitFor(() => {
+    if (pendingReads !== 0) throw new Error(`FileReader still reading (${pendingReads} pending)`);
+  });
 }
 
 function chips(h: Harness): HTMLElement[] {
@@ -71,6 +85,20 @@ function badges(h: Harness): string[] {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  // Instrument FileReader so settle() can track in-flight reads. The wrapper only counts (it adds a
+  // one-shot loadend listener and decrements there, alongside production's own onload) and otherwise
+  // delegates to the real read — read behavior is unchanged. loadend fires after load, so production's
+  // promise has already resolved by the time we decrement.
+  pendingReads = 0;
+  FileReader.prototype.readAsDataURL = function (this: FileReader, blob: Blob) {
+    pendingReads++;
+    this.addEventListener("loadend", () => void pendingReads--, { once: true });
+    return realReadAsDataURL.call(this, blob);
+  };
+});
+
+afterEach(() => {
+  FileReader.prototype.readAsDataURL = realReadAsDataURL;
 });
 
 describe("createImageAttachments — single image", () => {

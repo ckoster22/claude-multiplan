@@ -1,4 +1,4 @@
-// Sub-Plan 01 — Tauri shell, plan list & live file-watch.
+// Tauri shell, plan list & live file-watch.
 //
 // INVARIANT: this app never writes into `~/.claude/plans/`, so the plans watcher never fires
 // on our own writes. CONTRACT.md, the cwd_spike example, and all build artifacts live in the
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{Emitter, Manager};
 
-// Agent SDK driver (Sub-Plan 01) — all driver logic lives in this module; the
+// Agent SDK driver — all driver logic lives in this module; the
 // edits to lib.rs are additive registration only (plugin init, managed state,
 // generate_handler!, teardown RunEvent).
 mod agent;
@@ -42,15 +42,15 @@ const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024; // 25 MiB
 /// One row in the sidebar. The shape here is FROZEN as hand-off contract #2 (see CONTRACT.md);
 /// Sub-Plan 01 (nested sidebar) EXTENDS it additively — see the §"Sub-Plan 01 (nested
 /// master/sub hierarchy)" section in CONTRACT.md for the five appended fields.
-/// `cwd` and `unread` are populated by Sub-Plan 03's resolver / read-state.
+/// `cwd` and `unread` are populated by the resolver / read-state.
 #[derive(Serialize, Clone)]
 struct PlanRecord {
     absolute_path: String,
     filename_stem: String,
     mtime_ms: i64,        // millis since UNIX_EPOCH, JS-friendly
-    cwd: Option<String>,  // resolved cwd (Sub-Plan 03), else None
-    unread: bool,         // read/unread (Sub-Plan 03)
-    // ---- Nested-hierarchy fields (Sub-Plan 01). snake_case JSON keys (no rename). ----
+    cwd: Option<String>,  // resolved cwd, else None
+    unread: bool,         // read/unread
+    // ---- Nested-hierarchy fields. snake_case JSON keys (no rename). ----
     /// Closed flavor set, never absent: "master" | "sub" | "standalone".
     flavor: Flavor,
     /// Join key linking a master to its subs; `null` for standalone.
@@ -123,7 +123,7 @@ struct PlanChanged {
     kind: String,
 }
 
-/// One persisted comment for a plan (Sub-Plan 02). FROZEN wire shape — exactly 6 keys (see
+/// One persisted comment for a plan. FROZEN wire shape — exactly 6 keys (see
 /// CONTRACT.md §"Sub-Plan 02 additions" / §"Highlight + comment with quoted-text anchoring").
 /// `block_line` is `Option<i64>` (serde emits `null`)
 /// — it mirrors the existing `cwd: Option<String>` precedent; there is NO `-1` sentinel.
@@ -516,12 +516,12 @@ fn system_time_to_ms(t: std::time::SystemTime) -> i64 {
 /// Missing or empty dir => empty list (UI shows empty-state, never errors).
 /// Per-entry I/O errors skip that entry rather than failing the whole call.
 ///
-/// Sub-Plan 03: gains an injected `State<Mutex<AppState>>` (the JS `invoke("list_plans")`
+/// gains an injected `State<Mutex<AppState>>` (the JS `invoke("list_plans")`
 /// call is unchanged — Tauri injects the managed state). It populates `cwd` from the
 /// in-memory cache (NO transcript scan here — that lives in `resolve_cwds`, which must stay
 /// fast) and `unread` per the baseline / viewed / open-path rules in `compute_unread`.
 ///
-/// Sub-Plan 01 (nested sidebar): also reads a bounded head of each file, runs
+/// also reads a bounded head of each file, runs
 /// `split_frontmatter` → `parse_marker`, builds raw rows, and delegates ordering +
 /// flavor-normalization to the pure `arrange_plans` (replacing the old `sort_newest_first`).
 /// Collapse-state entries whose `tree_id` no longer appears in any record are pruned.
@@ -1165,7 +1165,7 @@ fn read_plan_contents(path: String) -> Result<String, String> {
     // Read bytes and lossy-decode so invalid UTF-8 never panics.
     let bytes = std::fs::read(&canon_path).map_err(|e| format!("read failed: {e}"))?;
     let content = String::from_utf8_lossy(&bytes).into_owned();
-    // Sub-Plan 01: strip a leading frontmatter marker so the reading pane never renders it.
+    // strip a leading frontmatter marker so the reading pane never renders it.
     // Uses the SAME `split_frontmatter` as `list_plans` (single source of truth — the two
     // read paths can never disagree on the boundary). Legacy plans (no frontmatter) pass
     // through byte-for-byte unchanged.
@@ -1252,7 +1252,7 @@ fn read_image_as_data_url(path: String) -> Result<String, String> {
 }
 
 // ============================================================================
-// Sub-Plan 03 — managed AppState, persisted cwd cache + read/unread state,
+// managed AppState, persisted cwd cache + read/unread state,
 // and the productionized (single-pass, priority-preserving) cwd resolver.
 // ============================================================================
 
@@ -2451,7 +2451,7 @@ async fn resolve_tree_fallback(
     Ok(resolved.map(|(path, _session_id)| (path, Some(cwd))))
 }
 
-// ---- Sub-Plan 03 commands --------------------------------------------------
+// ---- commands --------------------------------------------------
 
 /// Record the currently-open plan (or `null` when nothing is selected). The open plan is
 /// read by fiat in `list_plans`, so this is what keeps a live-edited open plan from re-bolding.
@@ -2504,7 +2504,7 @@ fn set_tree_collapsed(tree_id: String, collapsed: bool, state: tauri::State<'_, 
     persist_collapse_state(&data_dir, &snapshot);
 }
 
-// ---- Sub-Plan 02 comment commands (shape-twins of set_tree_collapsed) -------
+// ---- comment commands (shape-twins of set_tree_collapsed) -------
 //
 // The backend is the SINGLE SOURCE OF TRUTH for the comment count. `set_comments`/
 // `clear_comments` return the authoritative resulting array so the frontend can adopt it as
@@ -2798,7 +2798,7 @@ fn respond_to_review(review_id: String, decision: String, reason: String) -> Res
 }
 
 // ============================================================================
-// Sub-Plan 03 — write_agent_plan: materialize an agent-emitted plan as a REAL
+// write_agent_plan: materialize an agent-emitted plan as a REAL
 // file under ~/.claude/plans/ so the existing path-keyed review surface + sidebar
 // nesting work unchanged.
 //
@@ -3639,10 +3639,10 @@ fn start_watcher(app: tauri::AppHandle) -> Option<impl Sized> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        // Agent SDK driver (Sub-Plan 01): the shell plugin gives us the sidecar
+        // Agent SDK driver: the shell plugin gives us the sidecar
         // spawn/stdin-write/kill handles.
         .plugin(tauri_plugin_shell::init())
-        // Native folder picker (Sub-Plan 02): the dialog plugin backs the New-plan
+        // Native folder picker: the dialog plugin backs the New-plan
         // composer's working-directory "Choose…" button (frontend calls
         // `@tauri-apps/plugin-dialog` `open({directory:true})`). Additive only —
         // does NOT touch agent.rs.
@@ -3653,11 +3653,11 @@ pub fn run() {
         // auto-resumed). Additive only — does NOT touch agent.rs.
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            // Agent SDK driver (Sub-Plan 01): one session per launch, stored in
+            // Agent SDK driver: one session per launch, stored in
             // Mutex<Option<AgentDriver>>. Managed unconditionally so the State
             // extractor in the agent commands can never hit "state not managed".
             app.manage(Mutex::new(None::<(u64, AgentDriver)>));
-            // Sub-Plan 03: manage AppState UNCONDITIONALLY (independent of watcher success)
+            // manage AppState UNCONDITIONALLY (independent of watcher success)
             // so the `State` extractor in list_plans / mark_viewed / etc. can never hit
             // "state not managed". Locate + create the data dir; all persistence degrades to
             // in-memory on any failure (never panics).
@@ -3749,7 +3749,7 @@ pub fn run() {
             install_hook,
             uninstall_hook,
             hook_status,
-            // Agent SDK driver (Sub-Plan 01) — the eight commands.
+            // Agent SDK driver — the eight commands.
             agent::start_agent_session,
             agent::send_agent_message,
             agent::resolve_tool_permission,
@@ -3761,7 +3761,7 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        // Agent SDK driver (Sub-Plan 01) teardown: gracefully drain the agent
+        // Agent SDK driver teardown: gracefully drain the agent
         // tree on app exit (INV-4) — send `end`, wait a bounded interval for the
         // sidecar (and its `claude` grandchild) to exit, SIGKILL only as the
         // fallback — so quitting leaves NO orphaned `claude` or sidecar process.
@@ -4288,7 +4288,7 @@ mod tests {
     }
 
     // ====================================================================
-    // Sub-Plan 03 — unread, open-plan fiat, resolver, persistence, helpers.
+    // unread, open-plan fiat, resolver, persistence, helpers.
     // ====================================================================
 
     fn unique_dir(tag: &str) -> PathBuf {
@@ -5150,7 +5150,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ---- write_agent_plan (Sub-Plan 03) --------------------------------
+    // ---- write_agent_plan --------------------------------
 
     /// Seed emission (tree_id None) ⇒ a REAL file under the plans dir, with `flavor: master`
     /// frontmatter that `parse_marker` round-trips, and the returned path is contained in base.
@@ -5488,11 +5488,11 @@ mod tests {
     }
 
     // ====================================================================
-    // Sub-Plan 01 — nested master/sub hierarchy (frontmatter, markers,
+    // nested master/sub hierarchy (frontmatter, markers,
     // arrange_plans ordering/normalization, collapse persistence, two-read-paths).
     // ====================================================================
 
-    // ---- split_frontmatter (verification item 1) -----------------------
+    // ---- split_frontmatter ---------------------------------------------
 
     #[test]
     fn split_frontmatter_extracts_leading_block_and_body() {
@@ -5597,7 +5597,7 @@ mod tests {
         );
     }
 
-    // ---- parse_marker (verification item 2) ----------------------------
+    // ---- parse_marker --------------------------------------------------
 
     #[test]
     fn parse_marker_reads_master_block() {
@@ -5651,7 +5651,7 @@ mod tests {
         assert_eq!(parse_marker("tree_id: t\n"), None);
     }
 
-    // ---- arrange_plans (verification item 3) ---------------------------
+    // ---- arrange_plans -------------------------------------------------
 
     fn by_stem(records: &[PlanRecord], stem: &str) -> PlanRecord {
         records
@@ -5930,7 +5930,7 @@ mod tests {
         );
     }
 
-    // ---- collapse round-trip (verification item 4) ---------------------
+    // ---- collapse round-trip -------------------------------------------
 
     #[test]
     fn collapse_state_round_trips() {
@@ -5970,7 +5970,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ---- two read paths agree (verification item 5) --------------------
+    // ---- two read paths agree ------------------------------------------
 
     /// A reader-equivalent of `read_plan_contents`'s strip step: read bytes, lossy-decode,
     /// return the body with any leading frontmatter stripped (the production command does
@@ -6056,7 +6056,7 @@ mod tests {
     }
 
     // ====================================================================
-    // Sub-Plan 02 — comments persistence + set_comments semantics + wire freeze.
+    // comments persistence + set_comments semantics + wire freeze.
     // ====================================================================
 
     fn comment_rec(quote: &str, block_line: Option<i64>, occurrence: i64, id: i64) -> CommentRecord {

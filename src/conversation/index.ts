@@ -1,4 +1,4 @@
-// Conversation domain (Sub-Plan 02) — facade / controller.
+// Conversation domain — facade / controller.
 //
 // The single entry point main.ts calls: initConversation(). It subscribes to the FIVE frozen
 // Tauri events, feeds them into the pure ConversationModel, re-renders the DOM, and owns the UI
@@ -17,7 +17,7 @@ import { Composer } from "./composer";
 import { StatusController } from "./status";
 import { getOrchestrator, isOrchestrationActive, isOrchestratorResuming } from "./orchestrator";
 import { createImageAttachments, type ImageAttachments } from "./attachments";
-import { imagesToDataUrls } from "./images";
+import { imagesToDataUrls, type AttachedImage } from "./images";
 import { diag } from "./diag";
 import { notifyQuotaPaused, notifyQuotaExhausted, notifyQuotaResumed } from "../notify";
 import type {
@@ -64,7 +64,7 @@ export interface ConversationElements {
   // Resume: push a "Continue." user turn into the live (idle) session → state active. Enabled ⇔ idle.
   resumeBtn?: HTMLButtonElement | null;
   // The titlebar "+ New plan" button. Disabled while a session is live so the composer can't be opened
-  // mid-run (Fix 4). Optional so older callers/tests compile.
+  // mid-run. Optional so older callers/tests compile.
   newPlanBtn?: HTMLButtonElement | null;
   // ---- Free-text message composer (human-in-the-loop) ----
   // A persistent input + Send button at the bottom of the Conversation tab. Enabled ⇔ a session is
@@ -218,8 +218,37 @@ export async function initConversation(
   // from it in applySessionState() below, called on every transition. That makes the impossible states
   // — "New-plan modal open while a session is live", "pill building while none", "Resume enabled while
   // active" — unrepresentable rather than guarded after the fact.
+  // INVARIANT[session-single-source-of-truth] (convention): all liveness-derived UI derives from this one SessionState; applySessionState is the sole mutator (grep-verified — one `let session`, one writer) and re-derives every control purely on each transition.
+  //   prevents: contradictory control states (New-plan modal open while live; Resume enabled while active)
   type SessionState = "none" | "active" | "idle" | "paused";
   let session: SessionState = "none";
+
+  // ---- DispatchState: a SEPARATE dimension from SessionState — is a send/resume round-trip in flight? --
+  //
+  // SessionState answers "does a backend session exist and is a turn generating?"; DispatchState answers
+  // "have we fired a send/resume whose round-trip has not settled?". They are ORTHOGONAL (deliberately
+  // NOT merged): a send can be in flight from any live state, and the resume-from-none path even flips
+  // SessionState optimistically WHILE a send is in flight. Modeling "a send is already in flight" makes
+  // it representable for the first time, which is what kills the double-send + the text wiped during an
+  // open round-trip and the phantom stuck-active Resume.
+  //
+  //   "idle"     — nothing in flight; a fresh send/resume may start.
+  //   "sending"  — a free-text Send (LIVE or resume-from-none) is awaiting its dispatch. The field/chips
+  //                were cleared SYNCHRONOUSLY at fire time; the typed text/images are retained here so a
+  //                rejected send can restore the field IFF the user did not retype during the round-trip.
+  //   "resuming" — the Resume button's "Continue." turn is awaiting its send (no composer field involved).
+  //
+  // CORRECTNESS rests on the `dispatch.t !== "idle"` early-return gate at EVERY initiator — NEVER on the
+  // (cosmetic, applySessionState-reset) disabled attribute.
+  // INVARIANT[dispatch-dimension-orthogonal] (type-level): a send/resume round-trip in flight is its own dimension, exactly idle|sending|resuming — separate from SessionState.
+  //   prevents: a double-fire dispatching twice because 'in flight' was not representable
+  type DispatchState =
+    | { t: "idle" }
+    // INVARIANT[sending-carries-its-restore-payload] (type-level): while dispatch is 'sending', the typed text+images ride on the state object so a rejected send hands the exact input back.
+    //   prevents: a sending state with no way to recover the user's message
+    | { t: "sending"; text: string; images: AttachedImage[] }
+    | { t: "resuming" };
+  let dispatch: DispatchState = { t: "idle" };
 
   // PHASE 6 — SYNCHRONOUS QUOTA-PAUSE RACE FLAG (DA-C1). The orchestrator's QUOTA_PAUSED dispatch
   // runs in a LATER microtask (via enqueueIngest) than the agent-stream listener's fire-and-forget
@@ -254,6 +283,8 @@ export async function initConversation(
   // Apply a transition and re-derive ALL liveness-dependent UI from the new state. Idempotent: a
   // repeated transition to the same state is harmless (so a late agent-exit after an explicit Stop
   // does nothing). This is the ONLY place that mutates `session`.
+  // INVARIANT[post-stop-idempotent-none] (runtime-guard): applySessionState assigns `session = next` then re-derives, so a transition to the already-current state (a late agent-exit after explicit Stop → 'none') is idempotent.
+  //   prevents: a duplicate teardown/re-render from a redundant terminal signal
   const applySessionState = (next: SessionState): void => {
     session = next;
     const live = isLive(session); // a session/run exists (active, idle, OR quota-paused)
@@ -271,7 +302,7 @@ export async function initConversation(
     const active = session === "active"; // a turn is generating
     const idle = session === "idle"; // session alive, no active turn
 
-    // Sub-Plan 03: while a multiplan orchestration owns the session, Pause/Resume are DISABLED — the
+    // while a multiplan orchestration owns the session, Pause/Resume are DISABLED — the
     // orchestrator drives its own turns via the sequencer, and an out-of-band interrupt or "Continue."
     // would inject a turn the sequencer does not expect (corrupting pendingStep). Stop stays available
     // (it routes through the orchestrator's cancel()).
@@ -313,6 +344,20 @@ export async function initConversation(
     }
   };
 
+  // Reflect the DISPATCH dimension on Send + Resume: grey them while a SEND round-trip is in flight, and
+  // otherwise restore their session-derived enablement. COSMETIC ONLY — the `dispatch.t` early-return
+  // gate at each initiator carries the double-send correctness. applySessionState hardcodes Send enabled
+  // and re-derives Resume, so it can re-enable these mid-send; this overlay (called after every dispatch
+  // transition) is therefore best-effort. The Resume base rule MIRRORS applySessionState (enabled ⇔ idle
+  // & not orchestrated). The "resuming" state is NOT greyed — only "sending" is (per contract).
+  const refreshDispatchControls = (): void => {
+    const sending = dispatch.t === "sending";
+    if (els.sendBtn) els.sendBtn.disabled = sending;
+    if (els.resumeBtn) {
+      els.resumeBtn.disabled = sending || session !== "idle" || isOrchestrationActive();
+    }
+  };
+
   const statusController = new StatusController(els.status, {
     authStatus: () => invoke<AgentAuthStatus>("agent_auth_status"),
     setToken: (token) => invoke("set_agent_oauth_token", { token }).then(() => undefined),
@@ -321,7 +366,7 @@ export async function initConversation(
   const composer = new Composer(
     els.composer,
     {
-      // Sub-Plan 03: Start delegates to the shared orchestrator. start() opens the SDK session in
+      // Start delegates to the shared orchestrator. start() opens the SDK session in
       // plan mode AND sends the first (recon) prompt itself, so the composer no longer fires
       // start_agent_session / send_agent_message. It returns true on a real start, false on the
       // idempotent no-op (a run is already active) — the composer only closes + runs onStarted on true.
@@ -529,7 +574,7 @@ export async function initConversation(
       applySessionState(e.payload.kind === "result" ? "idle" : "active");
       onActivity();
       rerender();
-      // Sub-Plan 03 live bridge: forward the frame to the orchestrator's turn-completion sequencer so
+      // live bridge: forward the frame to the orchestrator's turn-completion sequencer so
       // a `result` advances the run. Only while an orchestration owns the seam (otherwise the legacy
       // single-shot path is untouched). Fired AFTER rendering so the Conversation tab still shows it.
       // DIAGNOSTIC (minecraft-clone halt investigation): on a `result` frame, log whether the bridge
@@ -561,7 +606,7 @@ export async function initConversation(
         // active, so submitQuestion resolves with the correct updatedInput { questions, answers } shape
         // the SDK expects (a populated questions echo, never []). The orchestrator clarify-ledger
         // integration (CLARIFY_REQUESTED / CLARIFY_ANSWERED, and reconciling that effect's missing
-        // updatedInput) is deferred to Sub-Plan 03 — for now the existing card round-trip stays correct.
+        // updatedInput) is deferred — for now the existing card round-trip stays correct.
         const input = e.payload.input as { questions?: unknown } | null | undefined;
         pendingQuestions.set(e.payload.id, input?.questions ?? []);
       }
@@ -569,13 +614,13 @@ export async function initConversation(
       // (belt-and-suspenders with onStarted / system_init). Derive liveness from this activity too so
       // the controls can't lag the backend.
       applySessionState("active");
-      // Sub-Plan 03: main.ts OWNS the reading-pane tab for an ExitPlanMode review (it flips to the
+      // main.ts OWNS the reading-pane tab for an ExitPlanMode review (it flips to the
       // Plan tab via switchToPlanTab()). Calling onActivity() here would race that by flipping to the
       // Conversation tab, so SKIP it for ExitPlanMode. Other tools (including AskUserQuestion, whose
       // card lives in the Conversation stream) keep the conversation-tab flip so the user sees it.
       if (e.payload.tool !== "ExitPlanMode") onActivity();
       rerender();
-      // Sub-Plan 03 live bridge: forward the interactive-tool request (ExitPlanMode / AskUserQuestion)
+      // live bridge: forward the interactive-tool request (ExitPlanMode / AskUserQuestion)
       // to the orchestrator so it owns the hold/redraft/approve flow. Only while an orchestration is
       // active (otherwise main.ts's legacy in-process review path handles it).
       if (isOrchestrationActive()) void getOrchestrator().ingestPermission(e.payload);
@@ -707,7 +752,7 @@ export async function initConversation(
     // flag so the (already-seen / future) agent-exit is not mis-read as a still-pending pause.
     quotaPausePending = false;
     applySessionState("none");
-    // Sub-Plan 03: when a multiplan orchestration owns the seam, route Stop through the orchestrator's
+    // when a multiplan orchestration owns the seam, route Stop through the orchestrator's
     // cancel() (it does cancelRun + endSession + purge of any held permission + deregister from the
     // active-guard). Calling the raw cancel_agent_run / end_agent_session here would strand
     // activeOrchestrator (isOrchestrationActive() stays true → the next composer open is blocked) and
@@ -730,7 +775,7 @@ export async function initConversation(
   // vs Stop contract). Gated: a no-op unless a turn is actively generating.
   els.pauseBtn?.addEventListener("click", () => {
     if (session !== "active") return;
-    // Sub-Plan 03: disabled while an orchestration owns the turns (an out-of-band interrupt corrupts
+    // disabled while an orchestration owns the turns (an out-of-band interrupt corrupts
     // the sequencer). Stop is the only valid teardown during orchestration.
     if (isOrchestrationActive()) return;
     applySessionState("idle");
@@ -744,14 +789,52 @@ export async function initConversation(
   // the session is idle.
   els.resumeBtn?.addEventListener("click", () => {
     if (session !== "idle") return;
-    // Sub-Plan 03: disabled while an orchestration owns the turns (an out-of-band "Continue." injects
+    // disabled while an orchestration owns the turns (an out-of-band "Continue." injects
     // a turn the sequencer does not expect).
     if (isOrchestrationActive()) return;
-    applySessionState("active");
-    rerender(); // show the working indicator immediately (state is now active)
-    void invoke("send_agent_message", { text: "Continue." }).catch((err) =>
-      console.error("send_agent_message failed", err),
-    );
+    // DISPATCH GATE: a send/resume is already in flight ⇒ drop this click. This early-return — not the
+    // disabled attribute — is the double-fire guard.
+    if (dispatch.t !== "idle") return;
+    // the "active" we flip to is OPTIMISTIC / PENDING-UNTIL-CONFIRMED. Capture the pre-send state so
+    // a REJECTED send reverts it (mirroring the post-end self-heal at ~"none"-revert below) instead of
+    // sticking at a phantom "Working…" with Resume disabled.
+    // INVARIANT[resume-reverts-on-reject] (runtime-guard): the optimistic flip to active is pending-until-confirmed — a rejected dispatch reverts to the captured prior state.
+    //   prevents: a phantom stuck 'Working…' with Resume disabled forever
+    const prev = session; // "idle"
+    // C1: wrap the marker→sync-work→invoke in a SYNCHRONOUS-throw guard. The marker is set non-idle
+    // BEFORE the invoke; if any of these statements (incl. invoke throwing before it returns a promise)
+    // throws synchronously, the async .catch never runs and `dispatch` would latch non-idle forever — a
+    // permanent Send/Resume lockout. The catch recovers exactly like the async reject path (mirrors the
+    // try/finally that already protects composer.start()).
+    // INVARIANT[sync-throw-no-lockout] (runtime-guard): a synchronous throw in the marker→sync-work→invoke sequence recovers dispatch to idle.
+    //   prevents: a permanent Send/Resume lockout (the async .catch never runs on a sync throw)
+    try {
+      dispatch = { t: "resuming" };
+      applySessionState("active");
+      refreshDispatchControls();
+      rerender(); // show the working indicator immediately (state is now active)
+      void invoke("send_agent_message", { text: "Continue." })
+        .then(() => {
+          dispatch = { t: "idle" };
+          refreshDispatchControls();
+        })
+        .catch((err) => {
+          console.error("send_agent_message failed", err);
+          // the optimistic active never confirmed → revert to the captured idle so Resume is reachable
+          // again and the working indicator clears (no phantom stuck "Working…").
+          dispatch = { t: "idle" };
+          applySessionState(prev);
+          refreshDispatchControls();
+          rerender();
+        });
+    } catch (err) {
+      // C1: a synchronous throw — recover so the dispatch marker can't lock out the session.
+      console.error("resume dispatch threw synchronously", err);
+      dispatch = { t: "idle" };
+      applySessionState(prev);
+      refreshDispatchControls();
+      rerender();
+    }
   });
 
   // ---- Free-text composer (human-in-the-loop): send an additional user turn ----
@@ -768,6 +851,12 @@ export async function initConversation(
     // RELAXED empty-text guard: a send proceeds when text is empty BUT ≥1 image is attached
     // (images-only send). Still a no-op when BOTH are empty (nothing to dispatch).
     if (text.length === 0 && images.length === 0) return;
+    // DISPATCH GATE: a send/resume round-trip is already in flight ⇒ drop this one. THIS
+    // early-return — not the (cosmetic, applySessionState-reset) disabled attribute — is what makes a
+    // double-fire (a second Enter before the first send resolves) dispatch EXACTLY ONCE.
+    // INVARIANT[single-dispatch-under-double-fire] (runtime-guard): a second Send/Resume/Enter before the first round-trip settles dispatches exactly once.
+    //   prevents: double send_agent_message / double session-open
+    if (dispatch.t !== "idle") return;
     // Build the send args once: include `images` ONLY when ≥1 is attached, so a text-only follow-up
     // is byte-identical to today (`{ text }`), preserving exact-match assertions + the cached shape.
     const sendArgs = images.length > 0 ? { text, images } : { text };
@@ -775,6 +864,18 @@ export async function initConversation(
     // both success branches below clear the chips. Undefined when text-only (omit-when-empty) so a
     // text-only echo stays appendUserMessage(text) exactly.
     const displayImages = images.length > 0 ? imagesToDataUrls(images) : undefined;
+
+    // C2: restore the typed text + attached images after a FAILED dispatch — but ONLY when the user did
+    // not retype / re-attach during the round-trip (mirrors the field-clear-if-empty rule; never clobber
+    // newer input). Both the field AND the chips were cleared SYNCHRONOUSLY at fire time, so without the
+    // image half a transient failure (e.g. the drain-race "try again" notice) would silently drop the
+    // user's attachments — the regression DA flagged. `images` is the captured snapshot from getImages().
+    // INVARIANT[restore-only-if-not-retyped] (runtime-guard): a failed dispatch restores captured text/images only if the field/tray is still empty.
+    //   prevents: clobbering newer input typed during the round-trip
+    const restoreInput = (): void => {
+      if (field.value === "") field.value = text;
+      if (images.length > 0 && attachments && attachments.isEmpty()) attachments.setImages(images);
+    };
 
     // POST-END RESUME: the session ended (Stop / natural exit → "none"). Re-open the SAME SDK session
     // (resuming the prior session id so the agent keeps the conversation context) and push the typed
@@ -784,68 +885,126 @@ export async function initConversation(
     // using the same Rust commands, just with `resumeSessionId` threaded into the session open.
     if (!isLive(session)) {
       // Guard: without a retained cwd there is no session to resume into (no run has started this
-      // launch). Leave the field intact; nothing to dispatch.
+      // launch). Leave the field intact; nothing to dispatch (dispatch stays idle).
       if (lastCwd === null) return;
-      // Flip UI to active NOW (controls + working indicator), mirroring the composer onStarted path.
-      applySessionState("active");
-      onActivity();
-      rerender();
-      const resumeCwd = lastCwd;
-      // PERMISSION POLICY — resumed turns run in permissionMode "default" DELIBERATELY, to stay
-      // consistent with an ordinary (non-orchestrated) live free-text follow-up turn: the LIVE PATH
-      // below pushes send_agent_message into the session WITHOUT asserting any elevated write policy,
-      // so a plain follow-up turn is gated only by host PreToolUse policy. By the time this resume
-      // branch runs the session is "none" (Stop / natural end tore the orchestrator down), so there is
-      // no live orchestrator mode to inherit — we re-open and must pick a mode explicitly. "default"
-      // keeps file-writes gated by the host's "prototype permission seam" (PreToolUse hook +
-      // settings.json allow rules), NOT the orchestrator's elevated genesis "prototype"/"acceptEdits"
-      // policies. A missing session id ⇒ omit resumeSessionId ⇒ a fresh session under the same cwd (the
-      // sidecar's expired-transcript fallback also lands here). Open FIRST, then send; on a failed open,
-      // revert to "none" and leave the field intact (no orphan bubble).
-      void invoke("start_agent_session", {
-        cwd: resumeCwd,
-        permissionMode: "default",
-        ...(lastSessionId !== null ? { resumeSessionId: lastSessionId } : {}),
-      })
-        .then(() =>
-          invoke("send_agent_message", sendArgs).then(() => {
-            model.appendUserMessage(text, displayImages);
-            field.value = ""; // clear only after the turn is dispatched
-            attachments?.clear(); // drop the chips alongside the field, only on a dispatched turn
+      const prev = session; // "none" — reverted to on a failed re-open.
+      // C1: wrap the marker→sync-work→invoke in a SYNCHRONOUS-throw guard (see the Resume button). The
+      // marker is set non-idle BEFORE the invoke; a synchronous throw (incl. invoke throwing before it
+      // returns a promise) would otherwise latch `dispatch` non-idle forever — a permanent lockout.
+      try {
+        // DISPATCH: mark in flight + clear the field/chips SYNCHRONOUSLY (so a second Enter is inert and
+        // the field is never re-cleared on resolve, preserving any text typed during the round-trip).
+        dispatch = { t: "sending", text, images };
+        field.value = "";
+        attachments?.clear();
+        // Flip UI to active NOW (controls + working indicator), mirroring the composer onStarted path.
+        applySessionState("active");
+        refreshDispatchControls();
+        onActivity();
+        rerender();
+        const resumeCwd = lastCwd;
+        // PERMISSION POLICY — resumed turns run in permissionMode "default" DELIBERATELY, to stay
+        // consistent with an ordinary (non-orchestrated) live free-text follow-up turn: the LIVE PATH
+        // below pushes send_agent_message into the session WITHOUT asserting any elevated write policy,
+        // so a plain follow-up turn is gated only by host PreToolUse policy. By the time this resume
+        // branch runs the session is "none" (Stop / natural end tore the orchestrator down), so there is
+        // no live orchestrator mode to inherit — we re-open and must pick a mode explicitly. "default"
+        // keeps file-writes gated by the host's "prototype permission seam" (PreToolUse hook +
+        // settings.json allow rules), NOT the orchestrator's elevated genesis "prototype"/"acceptEdits"
+        // policies. A missing session id ⇒ omit resumeSessionId ⇒ a fresh session under the same cwd (the
+        // sidecar's expired-transcript fallback also lands here). Open FIRST, then send; on a failed open,
+        // revert to "none" and hand the input back (no orphan bubble).
+        void invoke("start_agent_session", {
+          cwd: resumeCwd,
+          permissionMode: "default",
+          ...(lastSessionId !== null ? { resumeSessionId: lastSessionId } : {}),
+        })
+          .then(() =>
+            invoke("send_agent_message", sendArgs).then(() => {
+              // The field/chips were already cleared SYNCHRONOUSLY at fire time — do NOT re-clear here
+              // (re-clearing on resolve would wipe text typed during the open round-trip).
+              model.appendUserMessage(text, displayImages);
+              dispatch = { t: "idle" };
+              refreshDispatchControls();
+              rerender();
+            }),
+          )
+          .catch((err) => {
+            // The re-open or send failed — no live session exists. The most common cause is a RACE: the
+            // previous session is still draining (Stop drains the old child on a background task; a
+            // natural end frees the Rust slot asynchronously), so start_agent_session rejects with "a
+            // session is already running (one session per launch)". Surface a NON-FATAL, user-visible
+            // notice via the SAME mechanism the public surfaceMessage handle uses (model.appendNotice →
+            // a `.conv-notice` row) and drop back to "none" so the user can simply Send again. Kept
+            // generic/actionable because other open failures are possible too.
+            console.error("resume start_agent_session/send failed", err);
+            model.appendNotice("Previous session is still shutting down — try sending again.", synthSeq++);
+            dispatch = { t: "idle" };
+            applySessionState(prev);
+            refreshDispatchControls();
+            // C2: restore the typed text AND the attached images (if the user did not retype/re-attach),
+            // so a transient drain-race failure hands the whole message back for a one-click retry.
+            restoreInput();
             rerender();
-          }),
-        )
-        .catch((err) => {
-          // The re-open or send failed — no live session exists. The most common cause is a RACE: the
-          // previous session is still draining (Stop drains the old child on a background task; a
-          // natural end frees the Rust slot asynchronously), so start_agent_session rejects with "a
-          // session is already running (one session per launch)". Surface a NON-FATAL, user-visible
-          // notice via the SAME mechanism the public surfaceMessage handle uses (model.appendNotice →
-          // a `.conv-notice` row), keep the typed text in the field, and drop back to "none" so the
-          // user can simply Send again. Kept generic/actionable because other open failures are
-          // possible too; the field is NOT cleared (no orphan bubble, nothing to retype).
-          console.error("resume start_agent_session/send failed", err);
-          model.appendNotice("Previous session is still shutting down — try sending again.", synthSeq++);
-          applySessionState("none");
-          rerender();
-        });
+          });
+      } catch (err) {
+        // C1: a synchronous throw — recover so the dispatch marker can't lock out the session.
+        console.error("resume dispatch threw synchronously", err);
+        dispatch = { t: "idle" };
+        applySessionState(prev);
+        refreshDispatchControls();
+        restoreInput();
+        rerender();
+      }
       return;
     }
 
-    // LIVE PATH (active OR idle) — unchanged: push an additional user turn into the running session.
-    // CRITICAL ORDERING: dispatch FIRST; echo the bubble + clear the field ONLY after the send
-    // resolves. On a thrown/failed dispatch, leave the field intact and add NO bubble — a failed send
-    // must never leave an orphan bubble implying the agent received a message it did not.
-    void invoke("send_agent_message", sendArgs)
-      .then(() => {
-        // appendUserMessage stamps the bubble at lastWireSeq + 0.5 (NOT synthSeq) so it sorts before
-        // the agent's reply (the next wire frame), not after every frame in the session.
-        model.appendUserMessage(text, displayImages);
-        field.value = ""; // clear only on success
-        attachments?.clear(); // drop the chips alongside the field, only on a successful send
-        rerender();
-      })
-      .catch((err) => console.error("send_agent_message failed", err));
+    // LIVE PATH (active OR idle): push an additional user turn into the running session.
+    // DISPATCH: mark in flight + clear the field/chips SYNCHRONOUSLY at fire time. The synchronous clear
+    // is what prevents that — because we do NOT re-clear on resolve, text typed during the open
+    // round-trip is never wiped. On resolve → echo the bubble (no orphan: a bubble is added only on a
+    // dispatched-and-resolved turn) + drop the marker. On reject → drop the marker and restore the input
+    // (text + images) ONLY IF the field/tray are still empty (never clobber newer input typed/attached
+    // mid-round-trip). C1: the whole marker→sync-work→invoke is wrapped so a SYNCHRONOUS throw can't
+    // latch `dispatch` non-idle into a permanent lockout (the async .catch never runs on a sync throw).
+    try {
+      // INVARIANT[synchronous-clear-once] (runtime-guard): the field/chips clear synchronously at fire time and are never re-cleared on resolve.
+      //   prevents: text typed during an open round-trip wiped when the first send resolves
+      dispatch = { t: "sending", text, images };
+      field.value = "";
+      attachments?.clear();
+      refreshDispatchControls();
+      void invoke("send_agent_message", sendArgs)
+        // INVARIANT[no-orphan-bubble] (runtime-guard): a user bubble is appended only on a dispatched-and-resolved turn; a failed send adds a notice, no bubble.
+        //   prevents: an orphan bubble implying the agent got a message it never did
+        .then(() => {
+          // appendUserMessage stamps the bubble at lastWireSeq + 0.5 (NOT synthSeq) so it sorts before
+          // the agent's reply (the next wire frame), not after every frame in the session.
+          model.appendUserMessage(text, displayImages);
+          dispatch = { t: "idle" };
+          refreshDispatchControls();
+          rerender();
+        })
+        .catch((err) => {
+          // The live send failed — surface a NON-FATAL, user-visible notice via the SAME mechanism the
+          // resume-drain-race .catch and the public surfaceMessage handle use (model.appendNotice → a
+          // `.conv-notice` row), so the failure is not silent. Mirror the resume path's reset/restore.
+          console.error("send_agent_message failed", err);
+          model.appendNotice("Couldn't send your message — try again.", synthSeq++);
+          dispatch = { t: "idle" };
+          refreshDispatchControls();
+          restoreInput(); // C2: hand text + images back (only if not retyped/re-attached).
+          rerender();
+        });
+    } catch (err) {
+      // C1: a synchronous throw — recover so the dispatch marker can't lock out the session. The live
+      // path makes no optimistic session change, so re-derive the controls from the (unchanged) state.
+      console.error("live send dispatch threw synchronously", err);
+      dispatch = { t: "idle" };
+      applySessionState(session);
+      refreshDispatchControls();
+      restoreInput();
+    }
   };
 
   els.sendBtn?.addEventListener("click", () => sendMessage());
@@ -862,8 +1021,8 @@ export async function initConversation(
 
   let torn = false;
   return {
-    // Open the New-plan composer. PREVENTED while a session is live (Fix 4) so the modal can't be open
-    // mid-run. Refreshes the live auth status FIRST (Fix 3) so the banner + Start token-guard reflect
+    // Open the New-plan composer. PREVENTED while a session is live so the modal can't be open
+    // mid-run. Refreshes the live auth status FIRST so the banner + Start token-guard reflect
     // current backend token state, not the one-shot startup read.
     openComposer: () => {
       if (isLive(session)) return;

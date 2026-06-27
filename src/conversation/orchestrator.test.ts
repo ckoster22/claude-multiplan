@@ -1,4 +1,4 @@
-// Multiplan orchestration domain (Sub-Plan 03) — orchestrator driver tests.
+// Multiplan orchestration domain — orchestrator driver tests.
 //
 // The orchestrator is the IMPURE driver over the PURE plan-tree reducer. These tests inject a FAKE
 // OrchestratorDeps (mirroring composer.test.ts's injected-invoker pattern) so the driver is exercised
@@ -29,6 +29,7 @@ import {
   sizerPrompt,
   parseSubPlanHeaders,
   PlanValidationError,
+  __runTransientSizesForTest,
   type Mandate,
   type OrchestratorDeps,
   type OrchestratorObserver,
@@ -1440,6 +1441,25 @@ describe("orchestrator — refinePrototypePrompt (pure)", () => {
   });
 });
 
+describe("orchestrator — the kind↔format contract is spliced into both visual-mode prompts", () => {
+  // The clarifier kept labeling box-and-arrow ASCII drawings kind "mermaid"; the reading pane fed
+  // them to mermaid, which threw UnknownDiagramError. This is a GENERATION fix: the prompt now
+  // forbids that mislabel (kind "mermaid" REQUIRES valid mermaid SOURCE; freeform ASCII → kind
+  // "ascii"). Both intentPrompt and refinePrototypePrompt splice visualClarifierContractLines, so
+  // both must carry the rule. FALSIFY (verified): remove the kind↔format lines from
+  // visualClarifierContractLines → both pins below go RED. Restore → GREEN.
+  for (const [label, prompt] of [
+    ["intentPrompt", intentPrompt("x")],
+    ["refinePrototypePrompt", refinePrototypePrompt("tweak it")],
+  ] as const) {
+    it(`${label} requires kind "mermaid" to be valid mermaid source and routes ASCII to kind "ascii"`, () => {
+      expect(prompt).toContain('kind "mermaid"');
+      expect(prompt).toContain("VALID MERMAID DIAGRAM SOURCE");
+      expect(prompt).toContain('kind "ascii"');
+    });
+  }
+});
+
 describe("orchestrator — confirmed intent is threaded into downstream planning prompts", () => {
   it("a NON-EMPTY intent buffer makes the recon prompt sent contain the confirmed intent text", async () => {
     const { deps, rec } = makeDeps();
@@ -2038,7 +2058,7 @@ describe("orchestrator — cancel purges a held approval", () => {
 });
 
 // ============================================================================================
-// Sub-Plan 03 DRIVER CORE — live bridge / sequencer tests (drive ingest* entry points).
+// DRIVER CORE — live bridge / sequencer tests (drive ingest* entry points).
 // ============================================================================================
 
 describe("orchestrator — bootstrap + idempotent no-op", () => {
@@ -3054,6 +3074,139 @@ describe("orchestrator — summary threading", () => {
     expect(sub02ReconPrompt).toContain("reconnaissance scoped to THIS sub-plan");
     // It threads sub 01's summary forward. FALSIFY: stop populating `summaries` -> RED here.
     expect(sub02ReconPrompt).toContain("built the thing for sub01");
+
+    await h.cancel();
+  });
+});
+
+// ============================================================================================
+// NO CROSS-RUN TRANSIENT BLEED (HIGH). Two runs share ONE orchestrator handle (the live app
+// uses a singleton). Every PER-RUN transient — the prior-sibling `summaries`, the per-child
+// `mandates`, the in-flight `clarifyQuestions`, the pending parent-review `adjustNote` — MUST be
+// reset when a fresh run starts, or run A's context bleeds into run B's prompts (a stale summary
+// threaded into a brand-new plan; a stale mandate titling a new node). These tests drive run A to
+// populate the transients, terminate it, then start run B and prove run B is clean.
+// ============================================================================================
+
+// Drive run A (SPLIT) far enough to populate `summaries["01"]`, `mandates` (RUNA_MANDATE_* titles),
+// and `adjustNote` (a pending ADJUST note scoped to the root's children). Distinctive markers make
+// the leak unambiguous if it bleeds into run B.
+async function driveRunAToLeakState(h: OrchestratorHandle): Promise<void> {
+  await h.start({ cwd: "/work", request: "run A request" });
+  await driveIntentToRecon(h);
+  await h.ingestStream(textFrame("recon A"));
+  await h.ingestStream(resultFrame());
+  await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+  await h.ingestStream(resultFrame());
+  await h.ingestPermission(
+    exitPlanModeReq(
+      "mA",
+      "### Sub-Plan 01: RUNA_MANDATE_ONE\nbody one\n### Sub-Plan 02: RUNA_MANDATE_TWO\nbody two",
+    ),
+  );
+  await h.approve(""); // root decomposition gate
+  await h.ingestStream(resultFrame()); // interrupt boundary → sub-01 recon
+  // sub-01 leaf cycle → summary (populates summaries["01"]).
+  await h.ingestStream(textFrame("sub01 recon"));
+  await h.ingestStream(resultFrame());
+  await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+  await h.ingestStream(resultFrame());
+  await h.ingestPermission(exitPlanModeReq("subA1", "sub 1 plan"));
+  await h.approve("01");
+  await h.ingestStream(resultFrame()); // exec completion → summary prompt
+  await h.ingestStream(
+    textFrame("## Changes\nRUNA_SUMMARY_LEAK_MARKER\n## Findings\nf\n## Next-step inputs\nn"),
+  );
+  await h.ingestStream(resultFrame()); // summary → SUMMARY_WRITTEN (summaries["01"] set) → root review turn
+  // The root-review turn answers ADJUST → adjustNote is set (parentKey "" — the root's children) and
+  // sub-02's recon is sent; the note is NOT cleared until sub-02's DRAFTED (which we never reach).
+  await h.ingestStream(textFrame("ADJUST: RUNA_ADJUST_LEAK_MARKER"));
+  await h.ingestStream(resultFrame()); // PARENT_REVIEW_DONE → adjustNote stashed, sub-02 recon sent
+}
+
+describe("orchestrator — #2 no cross-run transient bleed", () => {
+  it("a fresh run's first sub-recon prompt threads NONE of the prior run's summary/mandate/adjust text", async () => {
+    const { deps, rec } = makeDeps();
+    const h = createOrchestrator(deps);
+
+    await driveRunAToLeakState(h);
+    // Sanity: run A really populated the transients (the leak source is real, not vacuous).
+    const aSizes = __runTransientSizesForTest(h);
+    expect(aSizes.summaries).toBeGreaterThan(0);
+    expect(aSizes.mandates).toBeGreaterThan(0);
+    expect(aSizes.adjustNotePresent).toBe(true);
+
+    await h.cancel(); // terminate run A — the on-disk ledger is left, the transients are NOT cleared by cancel.
+
+    // ---- RUN B: a CONFIDENT-SINGLE run (no decomposition, so `mandates` is never wholesale-replaced;
+    // its single child threads priorSummaries([]) + mandateFor([01]) + adjustNoteFor([01]) — exactly
+    // the slots run A's leaked state would surface in). ----
+    await h.start({ cwd: "/work", request: "run B request" });
+    await driveIntentToRecon(h);
+    await h.ingestStream(textFrame("recon B"));
+    await h.ingestStream(resultFrame()); // → root sizer prompt
+    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(resultFrame()); // root confident-single collapse → child [01] recon sent
+
+    const childReconB = rec.sendMessage.at(-1)!;
+    expect(childReconB).toContain("reconnaissance scoped to THIS sub-plan");
+    // FALSIFY (the leak, confirmed RED before the start() resets): run A's summary text is threaded
+    // into run B's brand-new child recon via the un-reset `summaries` map.
+    expect(childReconB).not.toContain("RUNA_SUMMARY_LEAK_MARKER");
+    // FALSIFY: run A's mandate title leaks via the un-reset `mandates` map (mandateFor([01])).
+    expect(childReconB).not.toContain("RUNA_MANDATE_ONE");
+    // adjustNote is already reset in start() today, but the RunState migration must keep it so.
+    expect(childReconB).not.toContain("RUNA_ADJUST_LEAK_MARKER");
+
+    await h.cancel();
+  });
+
+  it("a fresh run resets summaries, mandates, and adjustNote (migration guard — all transients, not summaries alone)", async () => {
+    const { deps } = makeDeps();
+    const h = createOrchestrator(deps);
+
+    await driveRunAToLeakState(h);
+    await h.cancel();
+
+    // A fresh start() must zero every per-run transient. FALSIFY: drop the reset for ANY one of
+    // summaries/mandates (or let the RunState allocation forget adjustNote) → that field stays
+    // non-zero/present here → RED. This guards the RunState migration field-by-field.
+    await h.start({ cwd: "/work", request: "run B request" });
+    const sizes = __runTransientSizesForTest(h);
+    expect(sizes.summaries).toBe(0);
+    expect(sizes.mandates).toBe(0);
+    expect(sizes.adjustNotePresent).toBe(false);
+
+    await h.cancel();
+  });
+
+  it("a fresh run resets clarifyQuestions (an unanswered run-A clarify does not bleed into run B)", async () => {
+    const { deps } = makeDeps();
+    const h = createOrchestrator(deps);
+
+    // Run A: raise an AskUserQuestion during the intent turn and leave it UNANSWERED (answering would
+    // delete the retained questions). cancel() does NOT clear the clarifyQuestions map.
+    await h.start({ cwd: "/work", request: "run A" });
+    await h.ingestPermission(
+      askUserQuestionReq("qA", {
+        questions: [
+          {
+            question: "Which?",
+            header: "H",
+            options: [{ label: "a" }, { label: "b" }],
+            multiSelect: false,
+          },
+        ],
+      }),
+    );
+    expect(__runTransientSizesForTest(h).clarifyQuestions).toBe(1); // the leak source is real
+    await h.cancel();
+    expect(__runTransientSizesForTest(h).clarifyQuestions).toBe(1); // cancel leaves it — it would bleed
+
+    // Run B: a fresh start must reset it. FALSIFY: drop clarifyQuestions from the start() reset (or
+    // the RunState allocation) → this stays 1 → RED.
+    await h.start({ cwd: "/work", request: "run B" });
+    expect(__runTransientSizesForTest(h).clarifyQuestions).toBe(0);
 
     await h.cancel();
   });

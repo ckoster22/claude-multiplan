@@ -40,7 +40,7 @@ const path = (...ns: number[]): NodePath => ns.map(nnOf);
 
 vi.mock("./diag", () => ({ diag: vi.fn() }));
 
-import type { AgentStream, AssistantText, ResultMsg } from "./types";
+import type { AgentStream, AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
 
 // ---- scripted frame builders -----------------------------------------------------------------
 
@@ -1192,5 +1192,130 @@ describe("orchestrator — Phase 7 buffer contract (the carry-forward fix)", () 
     expect(reconWrite).not.toContain("STALE PARTIAL");
 
     await h.cancel();
+  });
+});
+
+// ============================================================================================
+// THE TURN WATCHDOG IS RE-ARMED ON QUOTA RESUME. A captured summary / parent-review / intent
+// turn is a REAL generation turn again after the wall refreshes (the model re-emits its artifact),
+// so a silently-stuck RESUMED turn must drive to a loud terminal FATAL exactly as a never-paused
+// turn would. fireResume re-arms `awaiting` but used to NOT re-arm its watchdog — a resumed turn
+// that produced no result hung the run forever with no terminal signal. These tests prove the
+// watchdog comes back fireable on resume, and that it is keyed PER TAG (parent-review on its
+// `parentPath`, NOT the generic capturedPath which is [] for parent-review — a root-keyed arm is
+// inert against a non-root parentPath in armTurnWatchdog's fire guard).
+// ============================================================================================
+
+const exitPlanMode = (id: string, plan: string): ToolPermissionRequested => ({
+  seq: nextSeq(),
+  kind: "tool_permission_requested",
+  id,
+  tool: "ExitPlanMode",
+  input: { plan },
+  agent_id: null,
+});
+
+// Run a LEAF child at `key` to its summary (recon already prompted): recon text/result → sizer single
+// → draft → leaf gate → approve → exec result → summary text/result.
+async function runQuotaLeaf(h: OrchestratorHandle, key: string, marker: string): Promise<void> {
+  await h.ingestStream(textFrame(`${key} recon`));
+  await h.ingestStream(resultFrame());
+  await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+  await h.ingestStream(resultFrame());
+  await h.ingestPermission(exitPlanMode(`leaf-${key}-tu`, `${key} plan body`));
+  await flush();
+  await h.approve(key);
+  await flush();
+  await h.ingestStream(resultFrame()); // exec completion → summary prompt
+  await h.ingestStream(textFrame(`## Changes\n${marker}\n## Findings\nf\n## Next-step inputs\nn`));
+  await h.ingestStream(resultFrame()); // summary result → write + ascent hop
+}
+
+// Drive (budget 1) to an in-flight NESTED parent-review turn whose parentPath is [02] (NON-root):
+// root split[01 leaf, 02 split[02.01 leaf, 02.02 leaf]]; after 02.01's summary, 02 enters `reviewing`
+// and runs the no-tools review turn. A root-keyed ([]) watchdog arm would be INERT here.
+async function driveToNestedReview(): Promise<{ h: OrchestratorHandle; rec: Rec; clock: Clock; o: Obs }> {
+  const { h, rec, clock, o } = await freshAtIntent();
+  await advanceIntentToRecon(h);
+  await advanceReconToSizer(h);
+  await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+  await h.ingestStream(resultFrame());
+  await h.ingestPermission(
+    exitPlanMode("root-tu", "# Root\n\n### Sub-Plan 01: First\nscope one\n\n### Sub-Plan 02: Second\nscope two\n"),
+  );
+  await flush();
+  await h.approve(""); // root decomposition approval (resuming armed + interrupt)
+  await h.ingestStream(resultFrame()); // boundary → child 01 recon
+  await flush();
+  await runQuotaLeaf(h, "01", "SUM-01"); // 01 leaf → ROOT review turn (parentPath [])
+  await h.ingestStream(textFrame("NONE")); // root review NONE → child 02 recon
+  await h.ingestStream(resultFrame());
+  // Child 02 SPLITS into 02.01 / 02.02.
+  await h.ingestStream(textFrame("02 recon"));
+  await h.ingestStream(resultFrame());
+  await h.ingestStream(textFrame("SIZER: split / 2 / 0.85"));
+  await h.ingestStream(resultFrame());
+  await h.ingestPermission(
+    exitPlanMode("decomp-02-tu", "# Nested 02\n\n### Sub-Plan 01: SubA\nnested A\n\n### Sub-Plan 02: SubB\nnested B\n"),
+  );
+  await flush();
+  await h.approve("02"); // nested decomposition approval (resuming armed + interrupt)
+  await h.ingestStream(resultFrame()); // boundary → 02.01 recon
+  await flush();
+  await runQuotaLeaf(h, "02.01", "SUM-0201"); // 02.01 leaf → NESTED 02-level review turn (parentPath [02])
+  return { h, rec, clock, o };
+}
+
+describe("orchestrator — #8 turn watchdog re-armed on quota resume", () => {
+  it("summary turn: resume re-arms a FIREABLE watchdog; firing it with no result dispatches exactly one FATAL", async () => {
+    const { h, rec, clock } = await freshAtIntent();
+    const o = makeObserver();
+    h.subscribe(o.obs);
+    await advanceIntentToRecon(h);
+    await advanceReconToSizer(h);
+    await advanceSizerToChildRecon(h);
+    await advanceChildReconToDraft(h);
+    await advanceDraftToExec(h);
+    await advanceExecToSummary(h); // the summary turn for [01] is in flight (its watchdog armed)
+
+    // Wall + resume. The pause clears the in-flight summary watchdog; the resume re-arms the captured
+    // summary turn AND its watchdog.
+    await quotaWallAndResume(h, rec, clock);
+
+    // A FIREABLE turn watchdog is live again. FALSIFY (RED before the fix): fireResume re-arms
+    // `awaiting` but NOT the watchdog → no 120s timer exists → this is RED.
+    const watchdogs = live(rec).filter((t) => t.ms === 120_000);
+    expect(watchdogs).toHaveLength(1);
+
+    // Firing it with NO result drives the stuck resumed turn to EXACTLY ONE terminal FATAL.
+    watchdogs[0].fn();
+    await flush();
+    expect(o.fatal).toHaveLength(1);
+    expect(o.fatal[0]).toMatch(/watchdog/i);
+    expect(h.orchestrationActive()).toBe(false);
+  });
+
+  it("parent-review turn (non-root parentPath): resume re-arms a watchdog keyed on parentPath; firing it dispatches exactly one FATAL", async () => {
+    const { h, rec, clock, o } = await driveToNestedReview();
+    // The in-flight turn is the NESTED 02-level parent-review (parentPath [02]).
+    const originalReview = rec.sendMessage[rec.sendMessage.length - 1];
+    expect(originalReview).toContain("Sub-plan 02.01 has completed");
+
+    await quotaWallAndResume(h, rec, clock);
+
+    // A FIREABLE watchdog is live again. FALSIFY (RED before the fix): no re-arm → no 120s timer → RED.
+    const watchdogs = live(rec).filter((t) => t.ms === 120_000);
+    expect(watchdogs).toHaveLength(1);
+
+    // Firing it dispatches EXACTLY ONE FATAL. CRITICAL — this only fires when the watchdog was armed
+    // with the parent-review's `parentPath` ([02]); a root-keyed ([]) arm (the bug guarded against —
+    // using the generic capturedPath, which is [] for parent-review) would be INERT against
+    // awaiting.parentPath==[02] in armTurnWatchdog's fire guard, so NO FATAL would fire → RED.
+    watchdogs[0].fn();
+    await flush();
+    expect(o.fatal).toHaveLength(1);
+    expect(o.fatal[0]).toMatch(/watchdog/i);
+    expect(o.fatal[0]).toContain("parent-review");
+    expect(h.orchestrationActive()).toBe(false);
   });
 });

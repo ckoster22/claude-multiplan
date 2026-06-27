@@ -131,7 +131,7 @@ function splitRoot(): TreeNode {
 // fixture is kind:"mermaid" (the knob harness demonstrates the detached mermaid-preview path). The
 // mock-ANIMATE Trailhead demo passes a NON-mermaid (kind:"ascii") override here so composePreviewMarkdown
 // renders the trail-card ASCII INLINE in the reading pane (the real app's inline-preview path) rather than
-// a stray flowchart (review item #6). There is no floating overlay — the inline preview IS the prototype.
+// a stray flowchart. There is no floating overlay — the inline preview IS the prototype.
 export interface ProtoPreviewOverride {
   kind: PrototypeGate["kind"];
   inlinePreview: string | null;

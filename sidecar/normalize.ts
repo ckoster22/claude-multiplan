@@ -202,7 +202,7 @@ export function createNormalizer(deps: NormalizerDeps): Normalizer {
           const label = sub ? statusLabelFor(sub) : null;
           if (label !== null) return statusFrames(label);
         }
-        // Other system subtypes are not committed by Sub-Plan 01 → drop.
+        // Other system subtypes are not committed → drop.
         logErr("[sidecar] dropping system subtype:", sub);
         return [];
       }
