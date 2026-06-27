@@ -966,10 +966,15 @@ export async function initConversation(
           rerender();
         })
         .catch((err) => {
+          // The live send failed — surface a NON-FATAL, user-visible notice via the SAME mechanism the
+          // resume-drain-race .catch and the public surfaceMessage handle use (model.appendNotice → a
+          // `.conv-notice` row), so the failure is not silent. Mirror the resume path's reset/restore.
           console.error("send_agent_message failed", err);
+          model.appendNotice("Couldn't send your message — try again.", synthSeq++);
           dispatch = { t: "idle" };
           refreshDispatchControls();
           restoreInput(); // C2: hand text + images back (only if not retyped/re-attached).
+          rerender();
         });
     } catch (err) {
       // C1: a synchronous throw — recover so the dispatch marker can't lock out the session. The live

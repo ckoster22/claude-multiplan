@@ -124,6 +124,25 @@ function planRow(absPath: string, stem: string): Record<string, unknown> {
   };
 }
 
+// A top-level (tree-less) sidebar row — the openable standalone shape the #5 test inlines for its
+// OTHER plan. Used for the external-review plan + the neutral third plan in the Resume tie-break test.
+function standaloneRow(absPath: string, stem: string): Record<string, unknown> {
+  return {
+    absolute_path: absPath,
+    filename_stem: stem,
+    mtime_ms: 2,
+    cwd: null,
+    unread: false,
+    flavor: "standalone",
+    tree_id: null,
+    nn: null,
+    nn_path: null,
+    child_count: null,
+    collapsed: false,
+    h1s: [],
+  };
+}
+
 function bootDom(): void {
   document.body.innerHTML = `
     <div class="titlebar"><div class="titlebar-controls">
@@ -648,5 +667,80 @@ describe("orchestrator gate — #review-resume resumes the held gate from SUMMAR
       document.querySelector("#review-approve")!.classList.contains("hidden"),
       "the gate's VIEWING bar returned after Resume re-opened its plan",
     ).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // SUMMARY "Resume" TIE-BREAK — a held orchestrator gate AND a pending EXTERNAL review coexist.
+  // pendingSurfaces() unions the external review (a tracked pendingReview) with the live held gate;
+  // resumeNewestReview() resolves the GATE surface FIRST (openGatePlanFile) and only falls through to
+  // newestPendingReview() when NO gate is held. This is the one place both surfaces overlap: the gate
+  // ("01.md") plus an external review ("external.md") whose created_ms is NEWER than the gate. The
+  // INVARIANT under test: clicking #review-resume in SUMMARY mode re-opens the GATE's plan, never the
+  // more-recent external review's — the gate is preferred over a pending external review REGARDLESS of
+  // recency.
+  //
+  // FALSIFY (verified by invert/restore): delete the gate-first branch in resumeNewestReview (the
+  // `if (gateSurface ...) { openGatePlanFile(...); return; }` block) so it falls through to
+  // newestPendingReview() → #review-resume opens the external review ("external.md") instead of the
+  // gate ("01.md"). Running ONLY this test then goes RED (the gate-basename assertion fails, opening
+  // "external.md"); restoring main.ts exactly returns it to GREEN (opens "01.md").
+  // ---------------------------------------------------------------------------------------------
+  it("a held gate + a NEWER pending external review → #review-resume opens the GATE's plan, not the review's", async () => {
+    const GATE = "/p/01.md"; // the held orchestrator gate's plan (basename 01.md)
+    const EXTERNAL = "/p/external.md"; // the pending external review's plan (a DIFFERENT, known basename)
+    const NEUTRAL = "/p/neutral.md"; // a third plan to browse to so the bar drops to SUMMARY mode
+    // All three rows are listed so each is openable: the gate could re-open, AND the external review's
+    // plan COULD open if the tie-break were wrong (so a wrong tie-break is genuinely observable).
+    H.rows = [planRow(GATE, "1"), standaloneRow(EXTERNAL, "external"), standaloneRow(NEUTRAL, "neutral")];
+    const { deps } = makeDeps();
+    const h = createOrchestrator(deps);
+    __setOrchestratorForTest(h);
+    bootDom();
+    await flush();
+
+    // (1) Establish a held leaf gate — this opens its plan (01.md) into the pane.
+    await driveToSubDraftedGate(h, GATE);
+    await flush();
+    expect(document.querySelector("#doc-filename")!.textContent).toBe("01.md");
+
+    // (2) Fire an EXTERNAL review whose created_ms is LARGER (newer) than any gate time, so it is the
+    // genuinely most-recent pending REVIEW (newestPendingReview would pick it). No review is currently
+    // viewed (the open plan is the gate's, not a tracked review), so it yanks open external.md.
+    for (const fn of H.listeners["plan-review-requested"] ?? []) {
+      fn({
+        payload: {
+          review_id: "ext_newer",
+          plan_text: "# external\n\nselect this phrase here\n",
+          plan_file_path: EXTERNAL,
+          created_ms: 9_999_999_999, // newer than the gate — proves recency does NOT decide the tie-break
+        },
+      });
+    }
+    await flush();
+    expect(document.querySelector("#doc-filename")!.textContent).toBe("external.md");
+
+    // (3) Browse to a NEUTRAL third plan → the bar drops to SUMMARY (neither the gate nor the review is
+    // viewed). BOTH surfaces are now pending: the external review AND the held gate.
+    document.querySelector<HTMLElement>(`[data-path="${NEUTRAL}"]`)!.click();
+    await flush();
+    expect(document.querySelector("#doc-filename")!.textContent).toBe("neutral.md");
+    const resume = document.querySelector<HTMLElement>("#review-resume")!;
+    expect(resume.classList.contains("hidden"), "resume visible in SUMMARY with both surfaces pending").toBe(false);
+    expect(document.querySelector("#review-approve")!.classList.contains("hidden")).toBe(true); // SUMMARY: no Approve
+
+    // (4) Resume — the tie-break must prefer the held GATE over the newer external review.
+    resume.click();
+    await flush();
+
+    // INVARIANT: the gate wins regardless of recency — Resume re-opened the GATE's plan (01.md), NOT
+    // the more-recent external review (external.md).
+    expect(document.querySelector("#doc-filename")!.textContent).toBe("01.md");
+    expect(
+      document.querySelector("#doc-filename")!.textContent,
+      "the gate wins the Resume tie-break — the external review's plan must NOT open",
+    ).not.toBe("external.md");
+    // The gate's VIEWING bar returned (Approve visible) — confirming we re-entered the GATE, not the
+    // external review (whose VIEWING bar keeps Approve hidden).
+    expect(document.querySelector("#review-approve")!.classList.contains("hidden")).toBe(false);
   });
 });

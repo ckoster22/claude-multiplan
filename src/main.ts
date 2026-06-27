@@ -95,19 +95,20 @@ let searchEl: HTMLElement | null;
 let reviewBarEl: HTMLElement | null;
 let reviewBarLabelEl: HTMLElement | null;
 let reviewSubmitEl: HTMLButtonElement | null;
-// Bug #10: true between the moment a submit branch commits to dispatching (after its own validation
-// guard, before its first await) and the moment its round-trip settles. Read by refreshReviewBar to
-// drive the "submitting" visual lock, and — the real exactly-once invariant — by the submit handler's
-// top-of-handler early-return so a fast double-click cannot start a second dispatch. Reset on EVERY
-// exit path of each branch via try/finally (a guard-rejected click never sets it, so it can't stick).
-let submitInFlight = false;
-// Bug #10 (sibling): the same in-flight lock for the #review-approve handler — true while an approve
-// action (approve / approvePrototype / refinePrototype-autoApprove / approveAcceptance) is dispatching.
-// Kept SEPARATE from submitInFlight (and deliberately NOT fed into the bar derivation) so approve is
-// correctness-only: no visual "submitting" change. Both sibling handlers gate on `submitInFlight ||
-// approveInFlight`, so a fast double-click on EITHER button — or a cross click (Approve then Submit,
-// which act on the same gate with opposite decisions) — can start at most ONE dispatch.
-let approveInFlight = false;
+// Bug #10 — exactly-once lock for the TWO sibling review actions (#review-submit and #review-approve).
+// One tri-state makes the "both in flight" combination unrepresentable: at most ONE action can be
+// dispatching at a time. Set to "submit"/"approve" the moment a branch commits to dispatching (after
+// its own validation guard, before its first await) and reset to "none" when the round-trip settles —
+// on EVERY exit path via try/finally (a guard-rejected click never sets it, so it can't stick). Both
+// sibling handlers early-return whenever it is not "none", so a fast double-click on EITHER button — or
+// a cross click (Approve then Submit, which act on the same gate with opposite decisions) — starts at
+// most ONE dispatch; this top-of-handler early-return IS the exactly-once invariant. Deliberate
+// asymmetry: ONLY "submit" drives refreshReviewBar's "submitting" visual lock (Submit disabled,
+// Approve hidden) via `submitInFlight: actionInFlight === "submit"`; "approve" is correctness-only —
+// it gates dispatch but feeds NO visual change into the bar derivation. (Mirrors the Affordance
+// string-union idiom below.)
+type ActionInFlight = "none" | "submit" | "approve";
+let actionInFlight: ActionInFlight = "none";
 let reviewClearEl: HTMLButtonElement | null;
 let reviewResumeEl: HTMLButtonElement | null;
 // Sub-Plan 03: dedicated "Approve & Build" button — shown only while VIEWING an in-process review.
@@ -455,8 +456,7 @@ export function __resetReviewStateForTest(): void {
   pendingResume = null;
   // Bug #10: clear any leaked in-flight submit lock so a prior test that did not flush the round-trip
   // cannot leave the next test's Submit stuck disabled / its top-of-handler early-return tripping.
-  submitInFlight = false;
-  approveInFlight = false;
+  actionInFlight = "none";
 }
 
 // Test-only: install a live-run placeholder + its selection so tests can drive the module-level
@@ -652,7 +652,7 @@ function refreshReviewBar(countOverride?: number): void {
     // Bug #10: a submit already in flight refines VIEWING into "submitting" (Submit disabled, Approve
     // hidden). Ignored in summary/hidden and in the prototype/acceptance bars (those short-circuit
     // above) — the handler's top-of-handler early-return is what guarantees exactly-once there.
-    submitInFlight,
+    submitInFlight: actionInFlight === "submit",
   });
   reviewBarEl.classList.toggle("hidden", !state.barVisible);
   if (reviewBarLabelEl) reviewBarLabelEl.textContent = state.label;
@@ -3102,7 +3102,7 @@ window.addEventListener("DOMContentLoaded", () => {
       // (refreshReviewBar) is only the visual half and is not relied upon (a disabled button still
       // receives a programmatically dispatched click, and the prototype/acceptance/summary submit paths
       // are not disabled by the derivation at all).
-      if (submitInFlight || approveInFlight) return;
+      if (actionInFlight !== "none") return;
       // GEN-2 UNIFIED GATE: "Request changes" on the orchestrator's held gate — decomposition (root
       // included) OR leaf — routes into the ONE handle method requestChanges(pathKey, feedback). The
       // kind-routing (deny-resumes-the-decomposition-turn vs re-draft-the-leaf-in-place) lives in the
@@ -3113,7 +3113,7 @@ window.addEventListener("DOMContentLoaded", () => {
       if (gate) {
         const planPath = openPath();
         if (reviewSubmitEl?.disabled || planPath === null) return; // disabled at 0 comments
-        submitInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        actionInFlight = "submit"; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         refreshReviewBar();
         void (async () => {
           try {
@@ -3137,7 +3137,7 @@ window.addEventListener("DOMContentLoaded", () => {
             echoUserMessage?.(echoCommentsText(records));
             if (readingPaneEl) await clearAllComments(readingPaneEl, planPath);
           } finally {
-            submitInFlight = false;
+            actionInFlight = "none";
             refreshReviewBar();
           }
         })();
@@ -3151,7 +3151,7 @@ window.addEventListener("DOMContentLoaded", () => {
       if (protoGate) {
         const feedback = prototypeFeedbackEl?.value.trim() ?? "";
         if (reviewSubmitEl?.disabled || feedback === "") return;
-        submitInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        actionInFlight = "submit"; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         refreshReviewBar();
         void (async () => {
           try {
@@ -3166,7 +3166,7 @@ window.addEventListener("DOMContentLoaded", () => {
             echoUserMessage?.(feedback);
             if (prototypeFeedbackEl) prototypeFeedbackEl.value = "";
           } finally {
-            submitInFlight = false;
+            actionInFlight = "none";
             refreshReviewBar();
           }
         })();
@@ -3180,7 +3180,7 @@ window.addEventListener("DOMContentLoaded", () => {
       if (acceptGate) {
         const reason = prototypeFeedbackEl?.value.trim() ?? "";
         if (reviewSubmitEl?.disabled || reason === "") return;
-        submitInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        actionInFlight = "submit"; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         refreshReviewBar();
         void (async () => {
           try {
@@ -3194,7 +3194,7 @@ window.addEventListener("DOMContentLoaded", () => {
             if (prototypeFeedbackEl) prototypeFeedbackEl.value = "";
             switchToConversationTab();
           } finally {
-            submitInFlight = false;
+            actionInFlight = "none";
             refreshReviewBar();
           }
         })();
@@ -3207,7 +3207,7 @@ window.addEventListener("DOMContentLoaded", () => {
       // Copy uses), then deny. ORDER MATTERS: build the reason from the comments FIRST, send the deny,
       // and ONLY on success CLEAR the comments (they've been consumed into the feedback). The plan
       // stays open + selected; clearing wipes its persisted comments + in-pane highlights.
-      submitInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+      actionInFlight = "submit"; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
       refreshReviewBar();
       void (async () => {
         try {
@@ -3226,7 +3226,7 @@ window.addEventListener("DOMContentLoaded", () => {
             await clearAllComments(readingPaneEl, planPath);
           }
         } finally {
-          submitInFlight = false;
+          actionInFlight = "none";
           refreshReviewBar();
         }
       })();
@@ -3242,14 +3242,14 @@ window.addEventListener("DOMContentLoaded", () => {
       // already in flight. Bail BEFORE any branch runs so a fast double-click on Approve — or a cross
       // click after Submit — cannot start a second dispatch. Mirrors the submit handler's guard;
       // approve is correctness-only (no visual change), so the flag is NOT fed into the bar derivation.
-      if (submitInFlight || approveInFlight) return;
+      if (actionInFlight !== "none") return;
       // GEN-2 UNIFIED GATE: ONE Approve button, ONE handle method — approve(pathKey(gate.path)). The
       // dangerous routing (a decomposition approval arms the resuming hold + interrupts; a leaf
       // approval resolves + arms exec and never interrupts) lives in the orchestrator's exhaustive
       // gate.kind switch, NOT here. Flip to the Conversation tab so the next turn streams in place.
       const gate = viewingGate();
       if (gate) {
-        approveInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        actionInFlight = "approve"; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         void (async () => {
           try {
             await getOrchestrator().approve(pathKey(gate.path));
@@ -3260,7 +3260,7 @@ window.addEventListener("DOMContentLoaded", () => {
           } catch (e) {
             console.error("orchestrator gate: approve failed", e);
           } finally {
-            approveInFlight = false;
+            actionInFlight = "none";
           }
         })();
         return;
@@ -3282,7 +3282,7 @@ window.addEventListener("DOMContentLoaded", () => {
         // refined — it is not yet the final artifact — so the floor classification does not apply
         // there; the user re-checks it on the round they actually approve as-is.
         const asWorkingReference = prototypeWorkingRefEl?.checked === true;
-        approveInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        actionInFlight = "approve"; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         void (async () => {
           try {
             if (feedback !== "") {
@@ -3302,7 +3302,7 @@ window.addEventListener("DOMContentLoaded", () => {
           } catch (e) {
             console.error("prototype gate: apply-and-approve failed", e);
           } finally {
-            approveInFlight = false;
+            actionInFlight = "none";
           }
         })();
         return;
@@ -3313,7 +3313,7 @@ window.addEventListener("DOMContentLoaded", () => {
       // explicit action — no held tool to clear.
       const acceptGate = activeAcceptanceGate();
       if (acceptGate) {
-        approveInFlight = true; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
+        actionInFlight = "approve"; // Bug #10: lock BEFORE the first await; reset in finally on EVERY exit.
         void (async () => {
           try {
             await getOrchestrator().approveAcceptance();
@@ -3321,16 +3321,16 @@ window.addEventListener("DOMContentLoaded", () => {
           } catch (e) {
             console.error("acceptance gate: approve failed", e);
           } finally {
-            approveInFlight = false;
+            actionInFlight = "none";
           }
         })();
         return;
       }
       const reviewId = currentReviewId();
       if (reviewId === null) return;
-      approveInFlight = true; // Bug #10: lock BEFORE the first await; reset on settle (every exit).
+      actionInFlight = "approve"; // Bug #10: lock BEFORE the first await; reset on settle (every exit).
       void resolveReview(reviewId, "allow", "").finally(() => {
-        approveInFlight = false;
+        actionInFlight = "none";
       });
     });
 

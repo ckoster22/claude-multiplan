@@ -2000,6 +2000,37 @@ describe("controller — composer re-enabled after session end + resume-on-send"
     expect(els.stream.querySelector(".conv-text-user")).toBeNull();
   });
 
+  it("LIVE Send whose send_agent_message REJECTS surfaces a non-fatal notice, adds NO user bubble, and restores the field", async () => {
+    // The LIVE free-text path (active session) pushes a follow-up turn via send_agent_message. When that
+    // invoke rejects, the .catch must surface a NON-FATAL notice (a .conv-notice row — the same mechanism
+    // the resume-drain-race path and surfaceMessage use), add NO user bubble (the echo is only on success),
+    // and hand the typed text back so the user can retry by Sending again.
+    const els = makeEls();
+    await initConversation(els, () => {});
+    await flush();
+
+    // Go live (active) so the free-text composer dispatches down the LIVE path (not resume-from-none).
+    fire("agent-stream", SYSTEM_INIT);
+    await flush();
+    expect(els.messageInput.disabled).toBe(false);
+
+    // Arm the NEXT invoke (= the live send_agent_message) to REJECT.
+    mockInvoke.mockImplementationOnce(() => Promise.reject(new Error("send failed")));
+
+    els.messageInput.value = "keep going please";
+    els.sendBtn.click();
+    await flush();
+
+    // FALSIFY: drop the appendNotice line in the live .catch → no .conv-notice → RED.
+    const notice = els.stream.querySelector(".conv-notice");
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toBe("Couldn't send your message — try again.");
+    // No user bubble: the echo (appendUserMessage) runs only on a successful send, never on reject.
+    expect(els.stream.querySelector(".conv-text-user")).toBeNull();
+    // The typed text is restored (the user did not retype) so the message is one-click retryable.
+    expect(els.messageInput.value).toBe("keep going please");
+  });
+
   it("Send in state none with NO retained cwd is a no-op (nothing to resume into)", async () => {
     const els = makeEls();
     await initConversation(els, () => {});
