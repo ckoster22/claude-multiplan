@@ -12,7 +12,6 @@
     "gen:invariants": "node scripts/gen-invariants.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
     "pretest": "tsc --noEmit",
     "test": "vitest run",
     "tauri": "tauri",
