@@ -636,8 +636,6 @@ export function initComments(
   loaderRegistry.set(paneEl, loadCommentsFor);
   clearAllRegistry.set(paneEl, clearAll);
   invalidateRegistry.set(paneEl, invalidateOrReanchor);
-  // Read-only view of one path's RemoteData entry (the REAL per-path model) for tests.
-  stateRegistry.set(paneEl, (path) => cache.get(path) ?? initial());
 }
 
 // ---- Facade-level loader registry ----------------------------------------------------------
@@ -691,23 +689,6 @@ const invalidateRegistry = new WeakMap<HTMLElement, () => void>();
 export function invalidatePopover(paneEl: HTMLElement): void {
   const fn = invalidateRegistry.get(paneEl);
   if (fn) fn();
-}
-
-// ---- Facade-level per-path comment-model accessor (TEST-ONLY) -------------------------------
-//
-// The per-path RemoteData<CommentRecord[]> model lives inside the initComments closure (the SINGLE
-// source of truth for comments). This exposes a read-only view of one path's entry through the same
-// per-pane WeakMap pattern as the other registries, so tests assert against the REAL model rather
-// than a shadow copy. A path that was never loaded reads `initial()`.
-const stateRegistry = new WeakMap<HTMLElement, (path: string) => RemoteData<CommentRecord[]>>();
-
-/** TEST-ONLY: the RemoteData<CommentRecord[]> the facade holds for `path` on `paneEl`'s pane. */
-export function __getCommentStateForTest(
-  paneEl: HTMLElement,
-  path: string,
-): RemoteData<CommentRecord[]> {
-  const get = stateRegistry.get(paneEl);
-  return get ? get(path) : initial();
 }
 
 // ---- Small pure helpers (snippet clamp + occurrence-before counting) -----------------------

@@ -8,13 +8,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //   B. list_pending_reviews (launch recovery) as RemoteData<ReviewRequest[]>.
 //
 // These tests use the REAL ./render facade (NOT mocked) so the genuine load/save/clear IO path runs
-// end-to-end and actually drives the facade's per-path RemoteData model — exactly the way the app
-// does. Migration A asserts against the REAL model via the facade accessor `__getCommentStateForTest`
-// (paneEl + path), NOT a shadow copy. The backend is a shared in-memory comment store keyed by REAL
-// plan path; every relevant invoke is serviced from H so the arm transitions are observable.
+// end-to-end and actually drives the facade's per-path comment model — exactly the way the app does.
+// Migration A asserts through the OBSERVABLE surface (rendered `.cmt-hl` highlight spans + the backend
+// comment store), NOT internal RemoteData arms. The backend is a shared in-memory comment store keyed
+// by REAL plan path; every relevant invoke is serviced from H so the behavior is observable.
 //
-// Falsifiability (documented per test): each new arm assertion is paired with a concrete one-line
-// inversion of the production code that turns it RED. Confirmed by temporarily applying the break.
+// Falsifiability (documented per test): each assertion is paired with a concrete one-line inversion of
+// the production code that turns it RED. Confirmed by temporarily applying the break.
 // ---------------------------------------------------------------------------------------------
 
 type Rec = { quote: string; comment: string; block_line: number | null; block_end_line: number | null; occurrence: number; id: number };
@@ -63,17 +63,26 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("./titlebar", () => ({ initTitlebar: vi.fn(), initThemeToggle: vi.fn(), initTextSize: vi.fn() }));
 // NOTE: ./render is intentionally NOT mocked — we need the real comments load/save/clear IO path.
 
-import {
-  openPlan,
-  __getReviewListStateForTest,
-  __resetReviewStateForTest,
-} from "./main";
-import { __getCommentStateForTest } from "./render";
+import { openPlan, __resetReviewStateForTest } from "./main";
 import { asAbsPath, asStem } from "./types";
 
 /** The pane element initComments was wired to (the REAL per-path comment model lives behind it). */
 function readingPane(): HTMLElement {
   return document.querySelector<HTMLElement>("#reading-pane")!;
+}
+
+/**
+ * The number of DISTINCT comments highlighted in the reading pane right now, counted off the
+ * observable DOM: every `.cmt-hl` span carries its comment's id in `data-c`, and a single multi-node
+ * selection yields several SIBLING spans sharing one id, so we de-dupe by id. This is the
+ * user-observable proxy for "how many comments are anchored on screen".
+ */
+function highlightCount(): number {
+  const ids = new Set<string>();
+  for (const el of readingPane().querySelectorAll<HTMLElement>(".cmt-hl")) {
+    if (el.dataset.c) ids.add(el.dataset.c);
+  }
+  return ids.size;
 }
 
 function planRow(absPath: string, stem: string): Record<string, unknown> {
@@ -190,123 +199,98 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------------------------
 // MIGRATION A — the comment list as ONE RemoteData<CommentRecord[]>.
 // ---------------------------------------------------------------------------------------------
-describe("Migration A — comment list as a path-keyed RemoteData<CommentRecord[]>", () => {
-  it("populated load → success(data): opening a plan whose store has comments lands the model in `success`", async () => {
+describe("Migration A — comment list as a path-keyed model behind the render facade", () => {
+  it("opening a plan whose store has comments renders the persisted comment as a highlight", async () => {
     const path = "/home/u/.claude/plans/Has-Comments.md";
     H.rows = [planRow(path, "Has-Comments")];
-    H.store[path] = [{ quote: "select this phrase", comment: "c", block_line: 0, block_end_line: 0, occurrence: 0, id: 1 }];
+    H.store[path] = [{ quote: "select this phrase", comment: "c", block_line: null, block_end_line: null, occurrence: 0, id: 1 }];
     bootDom();
     await flush();
 
     await openPlan(asAbsPath(path), asStem("Has-Comments"));
     await flush();
 
-    // The open-plan load (get_comments) parsed at the facade boundary (fromArray) → the model is
-    // `success` carrying the one comment, read from the REAL per-path facade model.
-    const st = __getCommentStateForTest(readingPane(), path);
-    expect(st.kind).toBe("success");
-    expect(st.kind === "success" ? st.data.length : -1).toBe(1);
-    // FALSIFIABLE: drop the `cache.set(path, fromArray(recs))` adoption in the facade's loadCommentsFor
-    // and the model never leaves `initial` → `success` here goes RED. (Confirmed.)
+    // The open-plan load (get_comments) feeds applyComments, which re-anchors the persisted comment and
+    // wraps its quoted text in a `.cmt-hl` span — the user-observable proof the comment was loaded.
+    expect(highlightCount(), "the one persisted comment renders as a highlight").toBe(1);
+    // FALSIFIABLE: have openPlan apply [] instead of the loaded records (or skip applyComments) and no
+    // highlight wraps → this goes RED. (Confirmed.)
   });
 
-  it("empty load → zeroResults: opening a plan with NO comments lands the model in `zeroResults` (the empty-comments state)", async () => {
-    const path = "/home/u/.claude/plans/No-Comments.md";
-    H.rows = [planRow(path, "No-Comments")];
-    bootDom();
-    await flush();
-
-    await openPlan(asAbsPath(path), asStem("No-Comments"));
-    await flush();
-
-    // fromArray([]) routes the empty read to its OWN state, never success([]) or a stale `initial`.
-    expect(__getCommentStateForTest(readingPane(), path).kind).toBe("zeroResults");
-    // FALSIFIABLE: replace `fromArray(recs)` with `success(recs)` in the facade's loadCommentsFor and
-    // the empty read folds to `success` → this `zeroResults` assertion goes RED. (Confirmed.)
-  });
-
-  it("no split-brain: get_comments (open load), set_comments (add), and clear_comments (clear) all drive the SAME path-keyed model", async () => {
+  it("no split-brain: open load, in-pane add, and manual clear all drive the SAME on-screen comment + backend store", async () => {
     const path = "/home/u/.claude/plans/One-Model.md";
     H.rows = [planRow(path, "One-Model")];
     bootDom();
     await flush();
 
-    // 1) get_comments via the open load (store empty) → zeroResults.
+    // 1) Open the (empty) plan as a review → nothing highlighted, backend store empty.
     await fireReviewRequested("rev-one-model", path);
-    expect(__getCommentStateForTest(readingPane(), path).kind).toBe("zeroResults");
+    expect(highlightCount(), "no comments on a freshly-opened empty plan").toBe(0);
 
-    // 2) set_comments via adding an inline comment → the SAME path entry flips to success(1).
+    // 2) Add an inline comment via the popover → a highlight appears AND the backend store is mutated.
     addCommentViaPopover("please rename this");
     await flush();
+    expect(highlightCount(), "the added comment renders as a highlight").toBe(1);
     expect(H.store[path]).toHaveLength(1); // backend actually mutated (set_comments landed)
-    const afterAdd = __getCommentStateForTest(readingPane(), path);
-    expect(afterAdd.kind).toBe("success");
-    expect(afterAdd.kind === "success" ? afterAdd.data.length : -1).toBe(1);
 
-    // 3) clear_comments via the two-click manual clear → the SAME path entry returns to zeroResults.
+    // 3) Clear via the two-click manual clear → the highlight is removed AND clear_comments lands.
     const clearBtn = document.querySelector<HTMLButtonElement>("#review-clear")!;
     clearBtn.click(); // arms only
     await flush();
     clearBtn.click(); // confirms → clear_comments
     await flush();
     expect(H.invokeCalls.some((c) => c.cmd === "clear_comments" && c.path === path)).toBe(true);
-    expect(__getCommentStateForTest(readingPane(), path).kind).toBe("zeroResults");
+    expect(highlightCount(), "clearing removes the on-screen highlight").toBe(0);
 
-    // FALSIFIABLE: remove the cache adoptions in the facade's addComment (so the add never writes the
-    // path entry) and step (2)'s `success(1)` assertion goes RED — the entry would stay `zeroResults`
-    // from step (1), proving the add really flows through the one shared path-keyed model and not a
-    // split-brain second array. (Confirmed.)
+    // FALSIFIABLE: make the facade's addComment skip its `wrapRange` (or clearAll skip clearHighlight)
+    // and the highlight count after add/clear goes wrong → RED. The backend-store + clear_comments
+    // assertions prove the add/clear flow through to the single backend source of truth, not a
+    // split-brain second array.
   });
 
-  it("path-keyed: opening plan B does NOT clobber plan A's model entry (per-path, not a single global)", async () => {
+  it("comments are per-path: opening plan B (empty) clears A's highlight; switching back to A restores it", async () => {
     const pathA = "/home/u/.claude/plans/Plan-A.md";
     const pathB = "/home/u/.claude/plans/Plan-B.md";
     H.rows = [planRow(pathA, "Plan-A"), planRow(pathB, "Plan-B")];
-    H.store[pathA] = [{ quote: "select this phrase", comment: "a", block_line: 0, block_end_line: 0, occurrence: 0, id: 1 }];
+    H.store[pathA] = [{ quote: "select this phrase", comment: "a", block_line: null, block_end_line: null, occurrence: 0, id: 1 }];
     // plan B has NO comments.
     bootDom();
     await flush();
-    const pane = readingPane();
 
     await openPlan(asAbsPath(pathA), asStem("Plan-A"));
     await flush();
-    const aAfterOpenA = __getCommentStateForTest(pane, pathA);
-    expect(aAfterOpenA.kind).toBe("success");
-    expect(aAfterOpenA.kind === "success" ? aAfterOpenA.data.length : -1).toBe(1);
+    expect(highlightCount(), "A's persisted comment renders when A is open").toBe(1);
 
-    // Open plan B (empty) — its OWN entry is zeroResults.
+    // Open plan B (empty) — the pane re-renders B's content with NO highlight.
     await openPlan(asAbsPath(pathB), asStem("Plan-B"));
     await flush();
-    expect(__getCommentStateForTest(pane, pathB).kind).toBe("zeroResults");
+    expect(highlightCount(), "plan B has no comments → no highlight").toBe(0);
 
-    // Plan A's entry is UNTOUCHED by B's load — the model is keyed by path, not a single shared slot.
-    const aAfterOpenB = __getCommentStateForTest(pane, pathA);
-    expect(aAfterOpenB.kind).toBe("success");
-    expect(aAfterOpenB.kind === "success" ? aAfterOpenB.data.length : -1).toBe(1);
-    // FALSIFIABLE: collapse the facade's per-path `Map<string, RemoteData<…>>` to a single shared
-    // RemoteData (drop the path key) and opening B overwrites the one slot → reading pathA after
-    // opening B returns B's `zeroResults` → the final `success(1)` assertion goes RED. This is exactly
-    // the write-only single-global `commentListState` sham that was removed. (Confirmed.)
+    // Switch back to A — A's comment re-anchors from its OWN path entry and the highlight reappears.
+    await openPlan(asAbsPath(pathA), asStem("Plan-A"));
+    await flush();
+    expect(highlightCount(), "re-opening A restores A's highlight (comments are keyed by path)").toBe(1);
+    // FALSIFIABLE: load comments off a single shared/last-opened path instead of the opened plan's path
+    // and re-opening A after B would re-apply B's empty entry → A's highlight would not return → RED.
   });
 });
 
 // ---------------------------------------------------------------------------------------------
 // MIGRATION B — list_pending_reviews (launch recovery) as RemoteData<ReviewRequest[]>.
 // ---------------------------------------------------------------------------------------------
-describe("Migration B — list_pending_reviews as RemoteData<ReviewRequest[]>", () => {
-  it("empty list → zeroResults (empty-review state): nothing is recovered and the bar stays hidden", async () => {
+describe("Migration B — list_pending_reviews launch recovery", () => {
+  it("empty pending-review list recovers nothing and leaves the review bar hidden", async () => {
     H.pendingReviews = [];
     bootDom();
     await flush();
 
-    expect(__getReviewListStateForTest().kind).toBe("zeroResults");
-    // Behavior preserved: no review opened, bar hidden.
+    // Observable behavior: nothing recovered → no plan opened, the review bar stays hidden. The
+    // internal empty-vs-error arm distinction is not user-observable (both recover nothing), so only
+    // this behavior is asserted.
     expect(document.querySelector("#review-bar")!.classList.contains("hidden")).toBe(true);
-    // FALSIFIABLE: replace `fromArray(...)` with `success(...)` at the list_pending_reviews boundary and
-    // the empty read folds to `success` → this `zeroResults` assertion goes RED. (Confirmed.)
   });
 
-  it("populated list → success(data): a fresh pending review is parsed to `success` AND recovered (opened + bar shown)", async () => {
+  it("a fresh pending review is recovered on launch — its plan opens and the review bar shows", async () => {
     const path = "/home/u/.claude/plans/Recovered.md";
     H.rows = [planRow(path, "Recovered")];
     H.pendingReviews = [review("rev-recover", path, Date.now())];
@@ -315,15 +299,11 @@ describe("Migration B — list_pending_reviews as RemoteData<ReviewRequest[]>", 
     // openPlan, several microtask turns past the point doc-filename is set, so flush generously.
     await flush(30);
 
-    const st = __getReviewListStateForTest();
-    expect(st.kind).toBe("success");
-    expect(st.kind === "success" ? st.data.length : -1).toBe(1);
-    // Behavior preserved: the success arm ran the recovery — the newest pending review's real plan
-    // opened + selected and the bar is showing.
+    // Observable behavior: the recovery opened the newest pending review's real plan (selected) and
+    // showed the bar.
     expect(document.querySelector("#doc-filename")!.textContent).toBe("Recovered.md");
     expect(document.querySelector("#review-bar")!.classList.contains("hidden")).toBe(false);
-    // FALSIFIABLE: make the `success` fold arm a no-op (skip recovery) and the open/selected + bar
-    // assertions go RED while the array still parses — proving the recovery rides the success arm.
-    // (Confirmed.)
+    // FALSIFIABLE: make the launch-recovery success fold a no-op (skip recovery) and the open/selected +
+    // bar assertions go RED. (Confirmed.)
   });
 });

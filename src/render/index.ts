@@ -25,7 +25,7 @@ export type { TocEntry } from "./toc";
 // highlight/comment surface. main.ts talks only to this facade for the comment
 // feature; all popover/highlight/anchoring logic lives behind it in `./comments`. renderInto
 // stays a pure transform (NO highlight logic added here).
-export { applyComments, initComments, onCommentCountChanged, loadCommentsFor, clearAllComments, invalidatePopover, __getCommentStateForTest } from "./comments";
+export { applyComments, initComments, onCommentCountChanged, loadCommentsFor, clearAllComments, invalidatePopover } from "./comments";
 export type { CommentsIO } from "./comments";
 
 // The plan dir is captured at renderInto time and consumed by settle(), so the

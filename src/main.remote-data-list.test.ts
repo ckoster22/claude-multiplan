@@ -60,7 +60,7 @@ vi.mock("./titlebar", () => ({
   initTextSize: vi.fn(),
 }));
 
-import { __resetReviewStateForTest, __getListStateForTest, __resetListStateForTest } from "./main";
+import { __resetReviewStateForTest } from "./main";
 import { installMockOrchestrator } from "./mock/orchestrator";
 import {
   __resetOrchestratorForTest,
@@ -166,11 +166,10 @@ beforeEach(() => {
   H.listPlansRejects = false;
   H.pendingList = null;
   __resetReviewStateForTest();
-  // Module state persists across tests in a vitest file, so a prior test's success/zeroResults
-  // listState would leak into the next test — making the "rejected INITIAL load" test inherit a
-  // last-good (zeroResults) and (correctly) no-op the failure instead of surfacing the error arm.
-  // Reset to a genuine `initial()` so each lifecycle test exercises a true initial load.
-  __resetListStateForTest();
+  // No listState reset is needed: each test reboots the DOM (bootDom resets #plan-list) and the
+  // boot's refreshList re-fetches list_plans, so the rendered sidebar is driven solely by THIS
+  // test's fetch outcome — a leaked module-level listState never reaches the DOM (a successful
+  // fetch reassigns it; a rejected fetch early-returns over the freshly-empty pane).
   __resetOrchestratorForTest();
   __setActiveOrchestratorForTest(null);
   document.body.innerHTML = "";
@@ -196,8 +195,6 @@ describe("sidebar plan-list as RemoteData<PlanRecord[]>", () => {
     bootDom();
     await flush();
     expect(rowCount(), "initial load renders both rows (success)").toBe(2);
-    const st0 = __getListStateForTest();
-    expect(st0.kind, "after a populated initial load the state is success").toBe("success");
 
     // A watcher tick triggers an IN-PLACE refresh, but list_plans is HELD in flight so we can inspect
     // the DOM mid-refresh.
@@ -208,23 +205,20 @@ describe("sidebar plan-list as RemoteData<PlanRecord[]>", () => {
     }
     await flush(); // let refreshList run up to the (still-pending) list_plans await
 
-    // MID-FLIGHT: the populated success list is unchanged — no fetching/zeroResults flash cleared it.
+    // MID-FLIGHT: the populated list is unchanged — no fetching/zeroResults flash cleared it (both of
+    // those arms fold to the EMPTY sidebar render, so "rows still present" is the observable proof the
+    // in-place refresh did not revert to fetching/zeroResults).
     expect(
       rowCount(),
       "in-place refresh keeps the populated list mid-flight (no fetching/zeroResults flash)",
     ).toBe(2);
-    expect(
-      __getListStateForTest().kind,
-      "in-place refresh does NOT revert the state to fetching while in flight",
-    ).toBe("success");
 
-    // Resolve the in-flight read with the same populated rows: the data is replaced in place, the
-    // state stays success, and the rows remain rendered (never a zeroResults flash on the way through).
+    // Resolve the in-flight read with the same populated rows: the data is replaced in place and the
+    // rows remain rendered (never a zeroResults flash on the way through).
     H.pendingList = null;
     d.resolve([planRow(P1, "p1"), planRow(P2, "p2")]);
     await flush();
     expect(rowCount(), "after the in-place refresh resolves, the populated list remains").toBe(2);
-    expect(__getListStateForTest().kind, "still success after the refresh").toBe("success");
   });
 
   // ARM COVERAGE: a populated read -> `success` -> the list renders.
@@ -234,7 +228,6 @@ describe("sidebar plan-list as RemoteData<PlanRecord[]>", () => {
     bootDom();
     await flush();
 
-    expect(__getListStateForTest().kind, "populated read parses to success").toBe("success");
     expect(rowCount()).toBe(2);
     expect(document.querySelector<HTMLElement>("#plan-count")!.textContent).toBe("2 files");
   });
@@ -246,24 +239,20 @@ describe("sidebar plan-list as RemoteData<PlanRecord[]>", () => {
     bootDom();
     await flush();
 
-    expect(__getListStateForTest().kind, "empty read parses to zeroResults").toBe("zeroResults");
     expect(rowCount()).toBe(0);
     expect(document.querySelector<HTMLElement>("#plan-count")!.textContent).toBe("0 files");
   });
 
-  // ARM COVERAGE: a rejected INITIAL load (no last-good data) lands in the `error` arm. There is no
-  // sidebar error UI, so the documented behavior is the empty sidebar — but the state is `error`, NOT
-  // `fetching`/`initial`. FALSIFIABILITY: if the catch did not set `failure()` when there is no
-  // last-good, the state would remain `fetching` and the `.kind === "error"` assertion goes RED.
-  it("rejected initial load surfaces the error arm (empty sidebar, no error UI)", async () => {
+  // OBSERVABLE BEHAVIOR: a rejected INITIAL load (no last-good data) renders the empty sidebar and
+  // does not crash. The internal `error`-vs-`fetching` arm distinction is NOT user-observable (both
+  // fold to the same empty render, there is no sidebar error UI), so it is not asserted — only the
+  // observable surface is: no rows, no selection, no plan opened.
+  it("rejected initial load renders the empty sidebar without crashing", async () => {
     H.listPlansRejects = true;
     installMockOrchestrator();
     bootDom();
     await flush();
 
-    expect(__getListStateForTest().kind, "a rejected initial load lands in the error arm").toBe(
-      "error",
-    );
     expect(rowCount(), "no rows render (no error UI exists)").toBe(0);
     // The reading pane stays at the boot empty-state — the transient-list-failure no-op leaves the
     // selection/pane untouched (no plan was ever opened).

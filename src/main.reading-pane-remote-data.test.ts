@@ -101,7 +101,7 @@ vi.mock("./titlebar", () => ({
   initTextSize: vi.fn(),
 }));
 
-import { openPlan, __resetReviewStateForTest, __resetListStateForTest } from "./main";
+import { openPlan, __resetReviewStateForTest } from "./main";
 import {
   __resetOrchestratorForTest,
   __setActiveOrchestratorForTest,
@@ -141,10 +141,11 @@ beforeEach(() => {
   H.intentText = null;
   H.rows = [];
   H.invokeCalls = [];
-  // Module state persists across tests in a vitest file — clear selection/openPath, the list model,
-  // and the orchestrator so a prior test cannot bleed into the next.
+  // Module state persists across tests in a vitest file — clear selection/openPath and the
+  // orchestrator so a prior test cannot bleed into the next. The list model needs no reset: each test
+  // reboots the DOM and refreshList re-fetches list_plans from H.rows, so the records these openPlan
+  // tests read are repopulated per test.
   __resetReviewStateForTest();
-  __resetListStateForTest();
   __resetOrchestratorForTest();
   __setActiveOrchestratorForTest(null);
 });

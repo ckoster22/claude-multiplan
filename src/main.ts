@@ -313,18 +313,6 @@ interface PendingReview {
 }
 const pendingReviews = new Map<string, PendingReview>();
 
-// The launch-recovery pending-review read modeled as a five-state RemoteData (see src/remote-data.ts),
-// mirroring the sidebar `listState`. `fromArray` maps an empty result -> zeroResults (nothing to
-// recover) and a populated result -> success; a thrown read -> error. The recovery handler folds this
-// via `match`, so the empty-review state cannot be bypassed. Module-level so an arm-coverage test can
-// assert the boundary parse.
-let reviewListState: RemoteData<ReviewRequest[]> = initial();
-
-// Test-only accessor for the launch-recovery review-list RemoteData state.
-export function __getReviewListStateForTest(): RemoteData<ReviewRequest[]> {
-  return reviewListState;
-}
-
 // The reviewId whose planFilePath === the currently-open plan, or null when the open plan is not a
 // pending review (this is the single derivation of "viewing a review"). On ties (same path tracked
 // by >1 review — should not happen) the last-iterated (newest-inserted) wins.
@@ -483,8 +471,6 @@ export function reviewCommentCount(): number {
 // vitest file, so this gives each test a clean slate. Production code never calls it.
 export function __resetReviewStateForTest(): void {
   pendingReviews.clear();
-  // Reset the launch-recovery review-list model so a prior test's success/error state cannot leak.
-  reviewListState = initial();
   // Also reset the selection: module state persists across tests in a vitest file, so a plan
   // left open by a prior test could make currentReviewId() spuriously match a new review on the same
   // path (the "already viewing → don't yank" branch), breaking the next test's open. Production never
@@ -584,20 +570,6 @@ let listState: RemoteData<PlanRecord[]> = initial();
 // only way the rest of main.ts reads the records.
 function currentRecords(): PlanRecord[] {
   return unwrapOr(listState, []);
-}
-
-// Test-only accessor for the sidebar plan-list RemoteData state. Lets arm-coverage tests assert the
-// boundary parse (e.g. a rejected initial load lands in `error`, not `fetching`) without a DOM proxy.
-export function __getListStateForTest(): RemoteData<PlanRecord[]> {
-  return listState;
-}
-
-// Test-only: reset the plan-list RemoteData model to `initial`. Module state persists across tests in
-// a vitest file (mirroring __resetReviewStateForTest), so a prior test's success/zeroResults state
-// would otherwise leak into the next test and make a "rejected INITIAL load" not actually initial
-// (its last-good would be preserved as a no-op). Production code never calls this.
-export function __resetListStateForTest(): void {
-  listState = initial();
 }
 
 // The open plan's comments are modeled as a PATH-KEYED RemoteData<CommentRecord[]> per plan path,
@@ -4072,7 +4044,9 @@ window.addEventListener("DOMContentLoaded", () => {
     // Boundary parse: model the launch-recovery review read as RemoteData (mirrors the sidebar
     // `listState`). `fromArray` maps [] -> zeroResults (no pending reviews to recover) and a populated
     // array -> success; a thrown read lands in `error`. The recovery logic then folds via `match`, so
-    // the empty/error states cannot be silently skipped.
+    // the empty/error states cannot be silently skipped. Local to this handler — the only reader is the
+    // fold below, so the state never needs module scope.
+    let reviewListState: RemoteData<ReviewRequest[]>;
     try {
       reviewListState = fromArray(await invoke<ReviewRequest[]>("list_pending_reviews"));
     } catch (e) {
