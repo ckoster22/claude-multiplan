@@ -23,10 +23,10 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 |---|---|---|---|---|---|---|---|---|---|
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
 | Conversation / live-session | 7 | 19 | 0 | 1 | 0 | 0 | 0 | 5 | 32 |
-| App shell — selection / review / gates | 5 | 18 | 5 | 0 | 0 | 0 | 0 | 6 | 34 |
+| App shell — selection / review / gates | 5 | 19 | 5 | 0 | 0 | 0 | 0 | 6 | 35 |
 | Sidecar / agent-driver | 3 | 13 | 0 | 0 | 4 | 0 | 0 | 3 | 23 |
-| Other | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | 16 | 58 | 5 | 1 | 4 | 3 | 0 | 21 | 108 |
+| Other | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| **Total** | 17 | 59 | 5 | 1 | 4 | 3 | 0 | 21 | 110 |
 
 ## Reading-pane render
 
@@ -35,42 +35,42 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a comment anchored in a diagram/code re-anchoring wrong (or not at all) across reloads.
 
-**Anchor:** `src/render/comments.ts:95` — `function isExcludedContainer(node: Node, root: HTMLElement): boolean {`
+**Anchor:** `src/render/comments.ts:96` — `function isExcludedContainer(node: Node, root: HTMLElement): boolean {`
 
 ### popover-state-is-tagged-union
 **`type-level`** — The popover is a discriminated union hidden|create|view; visibility = kind!=='hidden', with no parallel boolean.
 
 **Prevents:** visible-but-no-subject / simultaneously-create-and-view states.
 
-**Anchor:** `src/render/comments.ts:299` — `type PopoverState =`
+**Anchor:** `src/render/comments.ts:300` — `type PopoverState =`
 
 ### popover-owned-by-capturing-plan
 **`runtime-guard`** — A create/view popover records the plan path open at capture; the saveEl guard makes Save a no-op when the current plan differs (the Save guard, comparing the recorded planPath to the current plan, is the enforcer).
 
 **Prevents:** a draft captured on plan A being persisted/anchored onto plan B after a mid-draft switch.
 
-**Anchor:** `src/render/comments.ts:310` — `planPath: string | null;`
+**Anchor:** `src/render/comments.ts:311` — `planPath: string | null;`
 
 ### renderpopover-is-sole-dom-writer
 **`convention`** — renderPopover is the only writer of #sel-popover.hidden / #sp-quote / #sp-text; every transition routes through it (grep-verified, not compiler-enforced).
 
 **Prevents:** the visibility class desyncing from state.kind (a visible popover with no subject, or a hidden one with live state).
 
-**Anchor:** `src/render/comments.ts:378` — `function renderPopover(next: PopoverState): void {`
+**Anchor:** `src/render/comments.ts:384` — `function renderPopover(next: PopoverState): void {`
 
 ### popover-invalidate-discards-on-plan-change-preserves-on-reload
 **`runtime-guard`** — invalidatePopover discards the draft only on a genuine plan-path change; a same-plan live reload preserves the draft and re-anchors its Range to fresh DOM.
 
 **Prevents:** a draft pointing at detached old-plan DOM, or the draft destroyed on every same-plan reload.
 
-**Anchor:** `src/render/comments.ts:603` — `function invalidateOrReanchor(): void {`
+**Anchor:** `src/render/comments.ts:609` — `function invalidateOrReanchor(): void {`
 
 ### invalidate-via-registry-preserves-sole-writer
 **`convention`** — The facade invalidates only via a per-pane WeakMap callback into the closure; it never toggles .hidden directly.
 
 **Prevents:** the facade flipping popover DOM out-of-band, breaking the renderPopover sole-writer invariant.
 
-**Anchor:** `src/render/comments.ts:683` — `export function invalidatePopover(paneEl: HTMLElement): void {`
+**Anchor:** `src/render/comments.ts:691` — `export function invalidatePopover(paneEl: HTMLElement): void {`
 
 ### renderinto-is-pure-sync-transform
 **`convention`** — renderInto does only the synchronous markdown→HTML transform; it starts no async asset/highlight work.
@@ -186,75 +186,75 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `src/conversation/composer.ts:243` — `if (!text) {`
 
-### session-single-source-of-truth
-**`convention`** — all liveness-derived UI derives from this one SessionState; applySessionState is the sole mutator (grep-verified — one `let session`, one writer) and re-derives every control purely on each transition.
-
-**Prevents:** contradictory control states (New-plan modal open while live; Resume enabled while active)
-
-**Anchor:** `src/conversation/index.ts:223` — `type SessionState = "none" | "active" | "idle" | "paused";`
-
 ### dispatch-dimension-orthogonal
 **`type-level`** — a send/resume round-trip in flight is its own dimension, exactly idle|sending|resuming — separate from SessionState.
 
 **Prevents:** a double-fire dispatching twice because 'in flight' was not representable
 
-**Anchor:** `src/conversation/index.ts:245` — `type DispatchState =`
+**Anchor:** `src/conversation/index.ts:63` — `export type DispatchState =`
 
 ### sending-carries-its-restore-payload
 **`type-level`** — while dispatch is 'sending', the typed text+images ride on the state object so a rejected send hands the exact input back.
 
 **Prevents:** a sending state with no way to recover the user's message
 
-**Anchor:** `src/conversation/index.ts:249` — `| { t: "sending"; text: string; images: AttachedImage[] }`
+**Anchor:** `src/conversation/index.ts:63` — `export type DispatchState =`
+
+### session-single-source-of-truth
+**`convention`** — all liveness-derived UI derives from this one SessionState; applySessionState is the sole mutator (grep-verified — one `let session`, one writer) and re-derives every control purely on each transition.
+
+**Prevents:** contradictory control states (New-plan modal open while live; Resume enabled while active)
+
+**Anchor:** `src/conversation/index.ts:243` — `type SessionState = "none" | "active" | "idle" | "paused";`
 
 ### post-stop-idempotent-none
 **`runtime-guard`** — applySessionState assigns `session = next` then re-derives, so a transition to the already-current state (a late agent-exit after explicit Stop → 'none') is idempotent.
 
 **Prevents:** a duplicate teardown/re-render from a redundant terminal signal
 
-**Anchor:** `src/conversation/index.ts:288` — `const applySessionState = (next: SessionState): void => {`
+**Anchor:** `src/conversation/index.ts:302` — `const applySessionState = (next: SessionState): void => {`
 
 ### resume-reverts-on-reject
 **`runtime-guard`** — the optimistic flip to active is pending-until-confirmed — a rejected dispatch reverts to the captured prior state.
 
 **Prevents:** a phantom stuck 'Working…' with Resume disabled forever
 
-**Anchor:** `src/conversation/index.ts:803` — `const prev = session; // "idle"`
+**Anchor:** `src/conversation/index.ts:817` — `const prev = session; // "idle"`
 
 ### sync-throw-no-lockout
 **`runtime-guard`** — a synchronous throw in the marker→sync-work→invoke sequence recovers dispatch to idle.
 
 **Prevents:** a permanent Send/Resume lockout (the async .catch never runs on a sync throw)
 
-**Anchor:** `src/conversation/index.ts:811` — `try {`
+**Anchor:** `src/conversation/index.ts:825` — `try {`
 
 ### single-dispatch-under-double-fire
 **`runtime-guard`** — a second Send/Resume/Enter before the first round-trip settles dispatches exactly once.
 
 **Prevents:** double send_agent_message / double session-open
 
-**Anchor:** `src/conversation/index.ts:859` — `if (dispatch.t !== "idle") return;`
+**Anchor:** `src/conversation/index.ts:873` — `if (dispatch.t !== "idle") return;`
 
 ### restore-only-if-not-retyped
 **`runtime-guard`** — a failed dispatch restores captured text/images only if the field/tray is still empty.
 
 **Prevents:** clobbering newer input typed during the round-trip
 
-**Anchor:** `src/conversation/index.ts:875` — `const restoreInput = (): void => {`
+**Anchor:** `src/conversation/index.ts:889` — `const restoreInput = (): void => {`
 
 ### synchronous-clear-once
 **`runtime-guard`** — the field/chips clear synchronously at fire time and are never re-cleared on resolve.
 
 **Prevents:** text typed during an open round-trip wiped when the first send resolves
 
-**Anchor:** `src/conversation/index.ts:973` — `dispatch = { t: "sending", text, images };`
+**Anchor:** `src/conversation/index.ts:987` — `dispatch = { t: "sending", text, images };`
 
 ### no-orphan-bubble
 **`runtime-guard`** — a user bubble is appended only on a dispatched-and-resolved turn; a failed send adds a notice, no bubble.
 
 **Prevents:** an orphan bubble implying the agent got a message it never did
 
-**Anchor:** `src/conversation/index.ts:980` — `.then(() => {`
+**Anchor:** `src/conversation/index.ts:994` — `.then(() => {`
 
 ### awaiting-exactly-one-armed-step
 **`type-level`** — at most one sequencer step is armed — `run.awaiting` is exactly one tagged variant; a result while idle is swallowed.
@@ -396,168 +396,177 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** the "submit AND approve both in flight" state
 
-**Anchor:** `src/main.ts:112` — `type ActionInFlight = "none" | "submit" | "approve";`
+**Anchor:** `src/main.ts:134` — `type ActionInFlight = "none" | "submit" | "approve";`
 
 ### selection-single-truth
 **`type-level`** — the reading-pane target is exactly one closed-union variant — none | plan | sentinel | placeholder.
 
 **Prevents:** independent openPath/placeholder/sentinel flags drifting into a contradictory double-active state
 
-**Anchor:** `src/main.ts:229` — `type Selection =`
+**Anchor:** `src/main.ts:251` — `type Selection =`
 
 ### openpath-is-derived-never-assigned
 **`type-level`** — openPath is a pure function over `selection` (no backing field) — recomputed each call, never a stored lvalue writers can set.
 
 **Prevents:** a stored openPath desyncing from the active selection
 
-**Anchor:** `src/main.ts:243` — `function openPath(): AbsPath | null {`
+**Anchor:** `src/main.ts:265` — `function openPath(): AbsPath | null {`
 
 ### placeholder-selected-folded-into-selection
 **`type-level`** — the placeholder is "selected" iff `selection.k === "placeholder"` for the current run — read off the union, with no parallel boolean.
 
 **Prevents:** a "placeholder selected AND a real plan open" double-active state
 
-**Anchor:** `src/main.ts:329` — `function placeholderSelected(): boolean {`
+**Anchor:** `src/main.ts:363` — `function placeholderSelected(): boolean {`
 
 ### pending-surface-union
 **`convention`** — every "thing awaiting the user" is one typed PendingSurface from this single builder, which both the SUMMARY count and the Resume target consult.
 
 **Prevents:** the count and the resume button computing "what's pending" from divergent paths
 
-**Anchor:** `src/main.ts:430` — `function pendingSurfaces(): PendingSurface[] {`
+**Anchor:** `src/main.ts:464` — `function pendingSurfaces(): PendingSurface[] {`
 
 ### pending-count-equals-surfaces-length-at-the-bar-site
 **`convention`** — the SUMMARY count is pendingSurfaces().length — the same builder the Resume picker consults.
 
 **Prevents:** the count double-counting or omitting a gate surface
 
-**Anchor:** `src/main.ts:657` — `pendingCount: pendingSurfaces().length,`
+**Anchor:** `src/main.ts:768` — `pendingCount: pendingSurfaces().length,`
 
 ### approve-never-drives-the-submitting-visual-lock
 **`convention`** — only "submit" maps into the bar's visual "submitting" lock; an in-flight "approve" gates dispatch but feeds no bar change.
 
 **Prevents:** an in-flight approve spuriously flipping the bar into "Submitting…"
 
-**Anchor:** `src/main.ts:669` — `submitInFlight: actionInFlight === "submit",`
+**Anchor:** `src/main.ts:780` — `submitInFlight: actionInFlight === "submit",`
 
 ### surface-removal-unsuppresses-resume
 **`convention`** — each site that removes a pending surface re-derives both affordances via refreshAffordances().
 
 **Prevents:** an out-of-band cancel leaving the resume banner stuck hidden
 
-**Anchor:** `src/main.ts:966` — `refreshAffordances();`
+**Anchor:** `src/main.ts:1091` — `refreshAffordances();`
 
 ### affordance-union
 **`precedence`** — at most one reading-pane affordance is active, chosen by first-match over the total order prototype > acceptance > review > resume > none.
 
 **Prevents:** two affordances painted into the bar at once
 
-**Anchor:** `src/main.ts:1491` — `export function computeAffordance(signals: {`
+**Anchor:** `src/main.ts:1666` — `export function computeAffordance(signals: {`
 
 ### reading-pane-affordance-precedence
 **`precedence`** — the resume banner is (re-)derived only when computeAffordance reports no higher affordance occupies the bar.
 
 **Prevents:** the resume banner showing beneath a held review / gate
 
-**Anchor:** `src/main.ts:1514` — `function refreshAffordances(): void {`
+**Anchor:** `src/main.ts:1689` — `function refreshAffordances(): void {`
 
 ### selection-collapse-only-on-genuine-vanish
 **`runtime-guard`** — a `plan` selection collapses to none only when it was in the prior list AND is absent from the new one.
 
 **Prevents:** blanking a freshly-opened / not-yet-indexed plan that was simply never listed
 
-**Anchor:** `src/main.ts:1995` — `function resolveSelection(`
+**Anchor:** `src/main.ts:2170` — `function resolveSelection(`
 
 ### held-gate-plan-exempt-from-collapse
 **`runtime-guard`** — the held orchestrator gate's plan is returned unchanged even if its row drops from list_plans mid-hold.
 
 **Prevents:** a churning gate row collapsing the selection and vanishing the in-process Approve bar
 
-**Anchor:** `src/main.ts:2004` — `if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;`
+**Anchor:** `src/main.ts:2179` — `if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;`
+
+### list-refresh-no-fetching-flash
+**`runtime-guard`** — only the INITIAL load (listState `initial`) transitions to `fetching`; an in-place refresh of an already-loaded list leaves the rendered list untouched while the next read is in flight.
+
+**Prevents:** a watcher tick blanking a populated sidebar to the empty `fetching` render mid-fetch.
+
+**Anchor:** `src/main.ts:2197` — `if (isInitial(listState)) {`
+
+**Tests:** `list-refresh-never-renders-fetching-in-place`
 
 ### transient-list-failure-is-a-noop
-**`runtime-guard`** — a failed list_plans returns early, leaving lastRecords/selection/pane untouched.
+**`runtime-guard`** — a failed list_plans returns early, leaving listState/selection/pane untouched.
 
 **Prevents:** a transient IPC failure collapsing the open plan (empty list → resolveSelection "vanish" → blanked pane)
 
-**Anchor:** `src/main.ts:2026` — `console.error("list_plans failed — leaving the sidebar/selection intact", e);`
+**Anchor:** `src/main.ts:2220` — `console.error("list_plans failed — leaving the sidebar/selection intact", e);`
 
 ### selection-set-synchronously-before-await-in-openPlan
 **`runtime-guard`** — openPlan assigns `selection` synchronously at the top, before any await, so openPath() reflects the new target throughout.
 
 **Prevents:** a post-await derivation reading a stale selection mid-open
 
-**Anchor:** `src/main.ts:2353` — `selection = isResumeSentinel(path)`
+**Anchor:** `src/main.ts:2563` — `selection = isResumeSentinel(path)`
 
 ### popover-draft-discarded-on-plan-switch-preserved-on-reopen
 **`runtime-guard`** — invalidatePopover compares the draft's planPath against the just-set openPath() — a genuine switch discards the draft, a same-plan reopen re-anchors it.
 
 **Prevents:** a cross-plan draft surviving a switch and re-anchoring against the wrong document
 
-**Anchor:** `src/main.ts:2475` — `invalidatePopover(readingPaneEl);`
+**Anchor:** `src/main.ts:2721` — `invalidatePopover(readingPaneEl);`
 
 ### render-generation-guard-cancels-superseded-settles
 **`runtime-guard`** — settle is handed `() => renderGuard.isCurrent(gen)`, so a superseded render's settle is cancelled the moment a newer render takes the generation.
 
 **Prevents:** a late settle from a stale render mutating the pane after a newer plan opened
 
-**Anchor:** `src/main.ts:2479` — `await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));`
+**Anchor:** `src/main.ts:2725` — `await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));`
 
 ### openGatePlanFile-shared-by-both-gate-paths
 **`convention`** — the gate observer and the Resume path both re-open a held gate's plan through this one sequence.
 
 **Prevents:** the two gate-open paths diverging
 
-**Anchor:** `src/main.ts:2667` — `async function openGatePlanFile(planPath: string): Promise<void> {`
+**Anchor:** `src/main.ts:2918` — `async function openGatePlanFile(planPath: string): Promise<void> {`
 
 ### gate-preferred-over-newer-external-review
 **`precedence`** — a held orchestrator gate is found first among the pending surfaces, so Resume re-opens it regardless of a newer external review.
 
 **Prevents:** a newer external review opening instead of the live held gate
 
-**Anchor:** `src/main.ts:2688` — `const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");`
+**Anchor:** `src/main.ts:2939` — `const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");`
 
 ### sentinel-touches-no-file-io
 **`runtime-guard`** — a synthetic resume sentinel is guarded out of every file-backed IPC (set_open_plan / mark_viewed) in this handler.
 
 **Prevents:** backend rejections / "reload failed" logs for a row with no real file
 
-**Anchor:** `src/main.ts:2706` — `const op = openPath();`
+**Anchor:** `src/main.ts:2957` — `const op = openPath();`
 
 ### open-plan-stamped-viewed-before-relist
 **`runtime-guard`** — when the open plan is the changed file, markViewed runs before refreshList / list_plans.
 
 **Prevents:** the sidebar momentarily bolding the plan the user is actively watching
 
-**Anchor:** `src/main.ts:2720` — `if (op !== null && changedPath === op && !isResumeSentinel(op)) {`
+**Anchor:** `src/main.ts:2971` — `if (op !== null && changedPath === op && !isResumeSentinel(op)) {`
 
 ### reload-target-re-read-after-relist
 **`runtime-guard`** — the reload target is re-read from openPath() AFTER refreshList, so a collapsed selection yields nothing to reload.
 
 **Prevents:** a reload firing against a path the same refresh just collapsed
 
-**Anchor:** `src/main.ts:2730` — `const opAfter = openPath();`
+**Anchor:** `src/main.ts:2981` — `const opAfter = openPath();`
 
 ### exactly-once-action-dispatch
 **`runtime-guard`** — the top-of-handler early-return bails whenever a sibling action is already dispatching, before any branch runs.
 
 **Prevents:** a fast double-click on Submit/Approve, or a cross-click, starting a second dispatch
 
-**Anchor:** `src/main.ts:3149` — `if (actionInFlight !== "none") return;`
+**Anchor:** `src/main.ts:3422` — `if (actionInFlight !== "none") return;`
 
 ### lock-set-after-guard-before-await
 **`runtime-guard`** — the lock is taken only after this branch's validation guard has passed, and before the branch's first await.
 
 **Prevents:** a guard-rejected click sticking the lock and freezing the bar
 
-**Anchor:** `src/main.ts:3162` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
+**Anchor:** `src/main.ts:3435` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
 
 ### lock-reset-on-every-exit
 **`runtime-guard`** — the finally returns actionInFlight to "none" on every exit path once a dispatched round-trip settles.
 
 **Prevents:** a failed dispatch leaving the lock stuck and permanently blocking actions
 
-**Anchor:** `src/main.ts:3188` — `actionInFlight = "none";`
+**Anchor:** `src/main.ts:3463` — `actionInFlight = "none";`
 
 ### prototype-loop-always-has-an-escape
 **`runtime-guard`** — from round >= PROTOTYPE_MAX_ROUNDS the approve affordance relabels to "Proceed as-is", guaranteeing a loop exit.
@@ -794,7 +803,12 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 ## Other
 
-_No invariants annotated yet in this domain._
+### remote-data-exhaustive-five-state
+**`type-level`** — folding a RemoteData via match() (all five states) or matchScalar() (the four reachable states) is exhaustive — the cases object requires every handler key, so a missing case is a compile error and each fold ends in assertNever; matchScalar accepts only ScalarRemoteData (zeroResults excluded by type), so a possibly-empty source cannot bypass the empty state.
+
+**Prevents:** a consumer routed through match()/matchScalar() silently ignoring the loading/empty/error states — stale data mid-fetch or a missing empty-state UI — and a collection read mis-routed through the scalar fold turning a legitimate empty result into a false error. (It does NOT prevent swallowed errors at leaf reads: unwrapOr is the sanctioned escape hatch that deliberately collapses error→fallback.)
+
+**Anchor:** `src/remote-data.ts:10` — `export type RemoteData<T> =`
 
 ## §Rust backend (`src-tauri/`)
 

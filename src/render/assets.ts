@@ -8,6 +8,12 @@
 // sets the <img>'s real .src.
 
 import { invoke } from "@tauri-apps/api/core";
+import {
+  type ScalarRemoteData,
+  success,
+  failure,
+  matchScalar,
+} from "../remote-data";
 
 /**
  * PURE path/scheme logic. Remote/data srcs pass through unchanged. Local srcs
@@ -15,21 +21,30 @@ import { invoke } from "@tauri-apps/api/core";
  * is handed to the `read_image_as_data_url` Rust command, whose data: URL is
  * returned.
  *
+ * A single awaited one-shot read modeled as `ScalarRemoteData<string>`: a
+ * resolved data: URL (or passthrough src) is `success`, an `invoke` rejection is
+ * `failure`. Scalar — there is no `zeroResults` for a single image read.
+ *
  * Kept pure (invoke is the only side effect, mockable in tests).
  */
 export async function resolveImageSrc(
   src: string,
   planDir: string,
-): Promise<string> {
+): Promise<ScalarRemoteData<string>> {
   if (
     src.startsWith("http://") ||
     src.startsWith("https://") ||
     src.startsWith("data:")
   ) {
-    return src;
+    return success(src);
   }
   const path = joinPath(planDir, src);
-  return invoke<string>("read_image_as_data_url", { path });
+  try {
+    const dataUrl = await invoke<string>("read_image_as_data_url", { path });
+    return success(dataUrl);
+  } catch (e) {
+    return failure(String(e));
+  }
 }
 
 /**
@@ -59,15 +74,26 @@ export async function resolveLocalImages(
   await Promise.all(
     imgs.map(async (img) => {
       const orig = img.getAttribute("data-local-src") ?? "";
-      try {
-        const url = await resolveImageSrc(orig, planDir);
-        img.src = url;
-      } catch (e) {
+      const rd = await resolveImageSrc(orig, planDir);
+      // Fold the awaited one-shot read. `initial`/`fetching` cannot fire for a
+      // settled success/failure read, so they are genuine NO-OPS — a no-op is
+      // correct-if-somehow-reached, unlike a spurious empty error marker that
+      // would flag a perfectly good image as broken. Per-image isolation is
+      // unchanged — this fold replaces the prior try/catch, so one failing image
+      // still leaves the batch intact.
+      const fail = (message: string) => {
         img.alt = img.alt || `image not found: ${orig}`;
-        img.dataset.error = String(e);
-      } finally {
-        img.removeAttribute("data-resolve");
-      }
+        img.dataset.error = message;
+      };
+      matchScalar(rd, {
+        success: (url) => {
+          img.src = url;
+        },
+        error: fail,
+        initial: () => {},
+        fetching: () => {},
+      });
+      img.removeAttribute("data-resolve");
     }),
   );
 }

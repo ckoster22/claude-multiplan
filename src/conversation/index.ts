@@ -45,6 +45,26 @@ export function isAtBottom(geom: {
   return geom.scrollHeight - geom.scrollTop - geom.clientHeight <= STICK_THRESHOLD_PX;
 }
 
+// DispatchState — the SINGLE definition (module scope). `let dispatch: DispatchState` inside
+// initConversation resolves to THIS type, and dispatch-state.test.ts imports THIS type, so the test
+// pins the exact union production uses. See the full SessionState-vs-DispatchState dimension rationale
+// next to `let dispatch` below.
+//
+// DispatchState is deliberately a command-dispatch lock, NOT a RemoteData read — its 'sending' arm
+// carries a restore payload (text+images) and it has a distinct 'resuming' arm, neither of which a
+// 5-state RemoteData data union can represent, so it is intentionally EXCEPTED from the RemoteData
+// migration. (This is design rationale, not a state-constraining invariant — left uncatalogued by
+// design.)
+//
+// INVARIANT[dispatch-dimension-orthogonal] (type-level): a send/resume round-trip in flight is its own dimension, exactly idle|sending|resuming — separate from SessionState.
+//   prevents: a double-fire dispatching twice because 'in flight' was not representable
+// INVARIANT[sending-carries-its-restore-payload] (type-level): while dispatch is 'sending', the typed text+images ride on the state object so a rejected send hands the exact input back.
+//   prevents: a sending state with no way to recover the user's message
+export type DispatchState =
+  | { t: "idle" }
+  | { t: "sending"; text: string; images: AttachedImage[] }
+  | { t: "resuming" };
+
 // All DOM handles the controller needs (resolved by main.ts from index.html).
 export interface ConversationElements {
   // The #conversation-stream render container.
@@ -240,14 +260,8 @@ export async function initConversation(
   //
   // CORRECTNESS rests on the `dispatch.t !== "idle"` early-return gate at EVERY initiator — NEVER on the
   // (cosmetic, applySessionState-reset) disabled attribute.
-  // INVARIANT[dispatch-dimension-orthogonal] (type-level): a send/resume round-trip in flight is its own dimension, exactly idle|sending|resuming — separate from SessionState.
-  //   prevents: a double-fire dispatching twice because 'in flight' was not representable
-  type DispatchState =
-    | { t: "idle" }
-    // INVARIANT[sending-carries-its-restore-payload] (type-level): while dispatch is 'sending', the typed text+images ride on the state object so a rejected send hands the exact input back.
-    //   prevents: a sending state with no way to recover the user's message
-    | { t: "sending"; text: string; images: AttachedImage[] }
-    | { t: "resuming" };
+  // The DispatchState union (idle | sending | resuming) is defined ONCE at module scope (top of file);
+  // the type-level invariants live with it there. `dispatch` resolves to that single definition.
   let dispatch: DispatchState = { t: "idle" };
 
   // PHASE 6 — SYNCHRONOUS QUOTA-PAUSE RACE FLAG (DA-C1). The orchestrator's QUOTA_PAUSED dispatch

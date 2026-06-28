@@ -4495,3 +4495,30 @@ guarded on `openEpoch` so a superseded render's late scroll can't clobber the ne
 BEFORE the async chain finished, so re-asserting in the chain tail makes the scroll a pure f(T) even on a
 fresh settled seek. Identical logic in both paths — `null` (no active scroll window at T) ⇒ the player
 leaves `scrollTop` untouched.
+
+---
+
+## Amendment 2026-06-27 — RemoteData is a client-side read model; the command/event surface is unchanged (additive; nothing above is altered)
+
+The RemoteData migration is **purely frontend** and changes **no** part of the Tauri command/event
+contract documented in §1/§2/§3 or any prior additive section. RemoteData is a **client-side read
+model** — a discriminated union whose `kind` discriminant has five values
+(`initial | fetching | zeroResults | success | error`, see `src/remote-data.ts`; the constructor is
+named `failure()` but it produces the `error` variant) constructed in the frontend at the **`invoke`
+boundary**: the TS caller wraps the `invoke(...)` promise into a RemoteData value. It is **not** a wire
+type — it never crosses the IPC boundary in either direction.
+
+**The command/event surface is BYTE-IDENTICAL and UNCHANGED by this migration.** Specifically:
+
+- **No command return type changed.** Every Tauri command still returns its existing shape. The Rust
+  backend continues to return its native `Result<T, String>` (and the raw/`serde`-serialized payloads
+  documented above) exactly as before — the migration did not touch `src-tauri/`.
+- **No event payload changed.** Every `agent-stream` / `agent-error` / `agent-exit` /
+  `plan-changed` / `plan-review-*` / `tool-permission-requested` / `agent-auth-required` payload is
+  unchanged.
+- **The seam is one-directional and local.** Mapping a settled/failed `invoke` promise into the
+  `success`/`zeroResults`/`error` variants (and the pre-resolve `fetching`/`initial` states) happens
+  entirely in TS, on the frontend side of the boundary. The backend is unaware that RemoteData exists.
+
+Net effect: this amendment records a **frontend-only read-model adoption** with a **zero-delta wire
+contract**. No prior section is rewritten, reordered, or deleted.

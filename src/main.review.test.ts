@@ -39,6 +39,12 @@ const H = vi.hoisted(() => ({
   // Sidebar rows list_plans returns. Tests push a row for a review's plan_file_path so openPlan can
   // select it (the invariant). A PlanRecord-ish shape sufficient for renderSidebar.
   rows: [] as Array<Record<string, unknown>>,
+  // Mock-plumbing flag: when true the respond_to_review invoke REJECTS (so resolveReview's error arm
+  // fires). Default false → resolves benignly (every existing success-path test is unaffected).
+  failRespond: false,
+  // Mock-plumbing flag: when true the open_prototype invoke REJECTS (so openExternally's error arm
+  // fires). Default false → resolves benignly.
+  failOpenProto: false,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -59,9 +65,11 @@ vi.mock("@tauri-apps/api/core", () => ({
       delete H.store[path];
       return Promise.resolve([]);
     }
+    if (cmd === "open_prototype" && H.failOpenProto) return Promise.reject(new Error("open boom"));
     if (cmd === "resolve_cwds") return Promise.resolve({});
     if (cmd === "list_pending_reviews") return Promise.resolve(H.pendingReviews);
     if (cmd === "respond_to_review") {
+      if (H.failRespond) return Promise.reject(new Error("respond boom"));
       H.responses.push({ reviewId: args?.reviewId ?? "", decision: args?.decision ?? "", reason: args?.reason ?? "" });
       return Promise.resolve(undefined);
     }
@@ -247,6 +255,8 @@ beforeEach(() => {
   H.responses = [];
   H.listeners = {};
   H.rows = [];
+  H.failRespond = false;
+  H.failOpenProto = false;
   // Module state (pendingReviews) persists across tests in a vitest file and re-booting the DOM does
   // not reset it. Clear it so each test starts clean.
   __resetReviewStateForTest();
@@ -359,6 +369,50 @@ describe("review action bar — Submit (deny) decision", () => {
     // Removed from pending → bar hidden (no other reviews).
     expect(document.querySelector("#review-bar")!.classList.contains("hidden")).toBe(true);
     expect(document.querySelector("#doc-filename")!.textContent).toBe("Submit-Me.md");
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // RemoteData error arm (FALSIFIABLE): a FAILED respond_to_review is surfaced, NOT swallowed. The
+  // resolveReview outcome is modeled as a ScalarRemoteData<void> folded via matchScalar; its `error`
+  // arm drives the #hook-status surface and the review STAYS pending (only the `success` arm removes
+  // it + clears the consumed comments). Inversions that turn these RED: (a) deleting the
+  // setHookStatus call from the error arm → status stays empty; (b) collapsing success+error to one
+  // path (e.g. moving pendingReviews.delete/clearAllComments to run regardless of outcome) → the
+  // comments would be cleared and the bar hidden even though the deny never landed.
+  // ---------------------------------------------------------------------------------------------
+  it("a FAILED Submit (respond_to_review rejects) surfaces #hook-status error AND leaves the review + its comments intact", async () => {
+    const path = "/home/u/.claude/plans/Submit-Fails.md";
+    H.rows = [planRow(path, "Submit-Fails")];
+    bootDom();
+    await flush();
+    await fireReviewRequested("rev-fail", path);
+
+    addCommentViaPopover("this feedback must not be consumed on failure");
+    await flush();
+    expect(H.store[path]).toHaveLength(1);
+
+    // Make the round-trip fail, then submit.
+    H.failRespond = true;
+    const submit = document.querySelector<HTMLButtonElement>("#review-submit")!;
+    expect(submit.disabled).toBe(false);
+    submit.click();
+    await flush();
+
+    // (a) The failure is surfaced on the #hook-status error affordance (the error arm fired).
+    const status = document.querySelector<HTMLElement>("#hook-status")!;
+    expect(status.textContent).toContain("Could not send review response");
+    expect(status.classList.contains("error")).toBe(true);
+    expect(status.classList.contains("hidden")).toBe(false);
+
+    // (b) The deny never landed (the mock rejected before recording) …
+    expect(H.responses).toHaveLength(0);
+    // … and the success-only follow-up did NOT run: comments were NOT consumed/cleared.
+    expect(H.invokeCalls.some((c) => c.cmd === "clear_comments" && c.path === path)).toBe(false);
+    expect(H.store[path]).toHaveLength(1);
+    // (c) The review STAYS pending → the bar is still shown in viewing mode (Submit visible).
+    const bar = document.querySelector<HTMLElement>("#review-bar")!;
+    expect(bar.classList.contains("hidden")).toBe(false);
+    expect(submit.classList.contains("hidden")).toBe(false);
   });
 
   // ---------------------------------------------------------------------------------------------
@@ -689,5 +743,54 @@ describe("un-openable review — empty plan_file_path refuses and surfaces (no u
     expect(status.classList.contains("hidden")).toBe(false);
     expect(status.classList.contains("error")).toBe(true);
     expect(status.textContent!.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// RemoteData error arm (FALSIFIABLE): the "Open in browser" command (open_prototype) is folded
+// through openExternally's matchScalar; a FAILED open drives its `error` arm onto the #hook-status
+// surface rather than being swallowed by a bare .catch(). (open_baseline rides the SAME helper —
+// only the command name + label differ at the call site, so this exercises the shared error arm.)
+// Inversions that turn this RED: deleting the setHookStatus call from openExternally's error arm
+// (status stays empty), or routing the outcome through the success arm regardless of rejection.
+// ---------------------------------------------------------------------------------------------
+describe("prototype Open in browser — a FAILED open_prototype surfaces #hook-status", () => {
+  it("clicking #prototype-open while open_prototype rejects shows the error on #hook-status", async () => {
+    const h = createOrchestrator(makeOrchDeps());
+    __setOrchestratorForTest(h); // main.ts's getOrchestrator() subscribes to OUR handle at boot
+    bootDom();
+    await flush();
+    await h.start({ cwd: "/work", request: "build a widget" });
+    await flush();
+    // Hold an HTML prototype gate WITH a path so prototypeOpenTarget resolves a non-null target and
+    // the bar's #prototype-open becomes visible (kind "html" only).
+    const gate: PrototypeGate = {
+      kind: "html",
+      paths: ["index.html"],
+      screenshot: null,
+      inlinePreview: "preview body",
+      variants: [],
+      round: 1,
+      cwd: "/work",
+    };
+    await h.dispatch({ type: "PROTOTYPE_READY", gate });
+    await flush();
+
+    // Make the open command fail, then click "Open in browser".
+    H.failOpenProto = true;
+    const open = document.querySelector<HTMLButtonElement>("#prototype-open")!;
+    expect(open.classList.contains("hidden")).toBe(false); // PROTOTYPE mode + kind html → visible
+    open.click();
+    await flush();
+
+    // The command was attempted exactly once (for the gate's resolved target) …
+    expect(H.invokeCalls.filter((c) => c.cmd === "open_prototype")).toHaveLength(1);
+    // … and its FAILURE is surfaced on #hook-status (openExternally's error arm fired).
+    const status = document.querySelector<HTMLElement>("#hook-status")!;
+    expect(status.textContent).toContain("Could not open prototype");
+    expect(status.classList.contains("error")).toBe(true);
+    expect(status.classList.contains("hidden")).toBe(false);
+
+    await h.cancel();
   });
 });
