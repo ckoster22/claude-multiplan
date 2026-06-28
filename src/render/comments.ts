@@ -16,6 +16,7 @@
 // IO is INJECTED (`CommentsIO`) so this module is unit-testable in jsdom with no Tauri.
 
 import type { CommentRecord } from "../types";
+import { fromArray, unwrapOr, initial, type RemoteData } from "../remote-data";
 
 // ---- Injected IO (main.ts wires these to Tauri invoke calls) -------------------------------
 //
@@ -359,9 +360,14 @@ export function initComments(
   getPlanPath: () => string | null,
   io: CommentsIO,
 ): void {
-  // Per-path cache. The cache is ALWAYS the last backend-confirmed value (adopted from
-  // load/save/clear return values), so divergence is unrepresentable after any mutation.
-  const cache = new Map<string, CommentRecord[]>();
+  // Per-path comment model: the SINGLE, path-keyed source of truth for the open plan's comments.
+  // Each entry is a RemoteData<CommentRecord[]> parsed at the IO boundary via `fromArray`
+  // (load/save/clearAll), so an empty result is the distinct `zeroResults` state — never `success([])`
+  // or a stale `initial`. The entry is ALWAYS the last backend-confirmed value (adopted from
+  // load/save/clear return values), so divergence is unrepresentable after any mutation. The
+  // render/read path folds each entry back to an array via `unwrapOr(entry, [])` (every non-success
+  // arm renders identically — no comments for that path). No second comment-list model exists.
+  const cache = new Map<string, RemoteData<CommentRecord[]>>();
 
   // Popover DOM (outside #reading-pane — survives the pane's innerHTML wipe).
   const popEl = document.querySelector<HTMLElement>("#sel-popover");
@@ -402,13 +408,13 @@ export function initComments(
   function currentRecords(): CommentRecord[] {
     const path = getPlanPath();
     if (path === null) return [];
-    return cache.get(path) ?? [];
+    return unwrapOr(cache.get(path) ?? initial(), []);
   }
 
   // ---- Cache loading ----
   async function loadCommentsFor(path: string): Promise<CommentRecord[]> {
     const recs = await io.load(path);
-    cache.set(path, recs);
+    cache.set(path, fromArray(recs)); // boundary parse: [] -> zeroResults, populated -> success.
     return recs;
   }
 
@@ -421,7 +427,7 @@ export function initComments(
 
   // ---- Add a comment: optimistic cache+wrap, save, adopt returned array, fire onChange ----
   async function addComment(path: string, capture: Capture, comment: string): Promise<void> {
-    const existing = cache.get(path) ?? [];
+    const existing = unwrapOr(cache.get(path) ?? initial(), []);
     const rec: CommentRecord = {
       quote: normalizeQuote(capture.quote),
       block_line: capture.blockLine,
@@ -431,7 +437,7 @@ export function initComments(
       id: mintId(existing),
     };
     const next = [...existing, rec];
-    cache.set(path, next);
+    cache.set(path, fromArray(next));
     // Wrap the stashed range immediately (the pane is live; data-c keyed by the minted id).
     wrapRange(capture.range, rec.id);
     // Fire with the MUTATED path + the authoritative post-add count (the new array length). The
@@ -440,7 +446,7 @@ export function initComments(
     fireCountChanged(path, next.length);
     try {
       const confirmed = await io.save(path, next);
-      cache.set(path, confirmed); // adopt the authoritative array (cache == backend value).
+      cache.set(path, fromArray(confirmed)); // adopt the authoritative array (cache == backend value).
     } catch (e) {
       console.error("set_comments failed", e);
     }
@@ -448,15 +454,15 @@ export function initComments(
 
   // ---- Clear a single comment (view-mode): splice the record, unwrap spans, save, fire ----
   async function clearComment(path: string, id: number): Promise<void> {
-    const existing = cache.get(path) ?? [];
+    const existing = unwrapOr(cache.get(path) ?? initial(), []);
     const next = existing.filter((r) => r.id !== id);
-    cache.set(path, next);
+    cache.set(path, fromArray(next));
     clearHighlight(paneEl, id);
     // Mutated path + authoritative post-clear count (before the backend write is awaited below).
     fireCountChanged(path, next.length);
     try {
       const confirmed = await io.save(path, next);
-      cache.set(path, confirmed);
+      cache.set(path, fromArray(confirmed));
     } catch (e) {
       console.error("set_comments (clear one) failed", e);
     }
@@ -468,14 +474,14 @@ export function initComments(
   // only known from the cache). Then clearAll on the backend, adopt the returned [] into the cache,
   // and fire onCountChanged (main.ts refreshes the count → the button hides at 0).
   async function clearAll(path: string): Promise<void> {
-    const existing = cache.get(path) ?? [];
+    const existing = unwrapOr(cache.get(path) ?? initial(), []);
     for (const rec of existing) clearHighlight(paneEl, rec.id);
     try {
       const confirmed = await io.clearAll(path);
-      cache.set(path, confirmed); // adopt the authoritative [] (cache == backend value).
+      cache.set(path, fromArray(confirmed)); // adopt the authoritative [] (cache == backend value).
     } catch (e) {
       console.error("clear_comments failed", e);
-      cache.set(path, []); // local intent already applied (highlights unwrapped); keep cache in sync.
+      cache.set(path, fromArray([])); // local intent already applied (highlights unwrapped); keep cache in sync.
     }
     // Clear-all always leaves zero comments → authoritative count is 0 (button hides, IF this is
     // still the open plan; main.ts no-ops a stale foreign-plan clear-all fire).

@@ -20,6 +20,21 @@ import { captureAnchor, applyDelta, scrollToHeading } from "./render/scroll";
 import { collapseHome, expandHome } from "./cwd";
 import { resolveCwds } from "./resolve";
 import { filterRecords, highlightInto, planCountText } from "./filter";
+import {
+  initial,
+  fetching,
+  failure,
+  success,
+  fromArray,
+  fromNullable,
+  match as foldRemoteData,
+  matchScalar,
+  unwrapOr,
+  isInitial,
+  isFetching,
+  type RemoteData,
+  type ScalarRemoteData,
+} from "./remote-data";
 import { RenderGuard } from "./render-guard";
 import { initTitlebar, initThemeToggle, initTextSize } from "./titlebar";
 import { initModelPicker } from "./model-picker";
@@ -107,6 +122,13 @@ let reviewSubmitEl: HTMLButtonElement | null;
 // Approve hidden) via `submitInFlight: actionInFlight === "submit"`; "approve" is correctness-only —
 // it gates dispatch but feeds NO visual change into the bar derivation. (Mirrors the Affordance
 // string-union idiom below.)
+// Design rationale (NOT a state-constraining invariant — the type-level guarantee lives in
+// INVARIANT[action-in-flight-tristate] below): ActionInFlight is DELIBERATELY a command-dispatch lock
+// (none | submit | approve), NOT a RemoteData read — it has no data terminal (no success payload to
+// surface), and the submit-vs-approve identity is load-bearing (only "submit" drives the bar's
+// "submitting" visual lock), so the five-state RemoteData union does not fit and must not be reflexively
+// swapped in here. A blanket RemoteData migration that replaced this dispatch lock with a dead data
+// union would drop the submit/approve identity and the exactly-once early-return that depends on it.
 // INVARIANT[action-in-flight-tristate] (type-level): at most one review action dispatches at a time — identity is the single union none | submit | approve, not two booleans.
 //   prevents: the "submit AND approve both in flight" state
 type ActionInFlight = "none" | "submit" | "approve";
@@ -442,7 +464,7 @@ function pendingSurfaces(): PendingSurface[] {
 // Test-only reader: the open plan's comment count (the review's comments are just the plan's
 // comments now). Kept under the old name so existing review assertions still read it.
 export function reviewCommentCount(): number {
-  return currentReviewId() === null ? 0 : commentCount;
+  return currentReviewId() === null ? 0 : unwrapOr(commentCount, 0);
 }
 
 // Test-only: clear ALL review state (pending reviews). Module state persists across tests in a
@@ -519,12 +541,41 @@ export function __setOpenPathForMock(path: string | null): void {
 }
 
 // ---- Sidebar filter ----
-// The live filter query (raw input value) and the last full records array `list_plans`
-// returned. The Plans tab renders `filterRecords(lastRecords, filterQuery)`; the Contents tab
-// is never filtered. Held at module scope so a late cwd patch can re-run the filter (keeping
-// highlights/matches alive) without a fresh `list_plans` round-trip.
+// The live filter query (raw input value). The Plans tab renders
+// `filterRecords(currentRecords(), filterQuery)`; the Contents tab is never filtered. Held at module
+// scope so a late cwd patch can re-run the filter (keeping highlights/matches alive) without a fresh
+// `list_plans` round-trip. The records themselves live SOLELY in `listState` (read via
+// currentRecords()) — there is no parallel records copy to drift out of sync.
 let filterQuery = "";
-let lastRecords: PlanRecord[] = [];
+
+// The sidebar plan-list read modeled as a five-state RemoteData (see src/remote-data.ts). It is the
+// state the sidebar render folds through (applyFilterAndRender via `foldRemoteData`/match). The
+// `list_plans` read is BOTH a one-shot initial load AND a continuously file-watched feed, so the
+// lifecycle is split:
+//   • INITIAL load (listState is `initial`): drives the full lifecycle initial -> fetching ->
+//     success | zeroResults | error.
+//   • IN-PLACE refresh (a watcher tick when a list already loaded): must NOT revert the rendered list
+//     to `fetching`, and must NOT flash a spurious `zeroResults` — the new state is the authoritative
+//     parse of the freshly-resolved array (success data replaced in place; a genuinely empty result is
+//     the only `zeroResults`). See INVARIANT[list-refresh-no-fetching-flash] in refreshList.
+// `listState` is the SOLE store of the records — there is no parallel module-level records array. Every
+// reader (the by-path lookups and the cwd late-patch) goes through `currentRecords()`, which returns
+// `success.data` directly (the same array reference the fold renders), so an in-place cwd patch that
+// mutates those records is seen by the fold and there is no second copy to drift out of sync.
+let listState: RemoteData<PlanRecord[]> = initial();
+
+// The single accessor for the rendered records. Unwraps `listState`'s `success` payload — the SAME
+// array reference the fold renders and the cwd late-patch mutates — or `[]` for every non-success
+// state (initial/fetching/zeroResults/error). `listState` is the single source of truth; this is the
+// only way the rest of main.ts reads the records.
+function currentRecords(): PlanRecord[] {
+  return unwrapOr(listState, []);
+}
+
+// The open plan's comments are modeled as a PATH-KEYED RemoteData<CommentRecord[]> per plan path,
+// owned by the comments facade (src/render/comments.ts) — the SINGLE source of truth that the render
+// path actually consumes. main.ts holds no second comment-list model: it wires the facade's IO and
+// reads comments back through the facade. (The scalar comment COUNT below is a separate model.)
 
 // Monotonic render-generation guard. Every open/reload of the pane takes a token at its
 // start; after each `await` it bails if a newer render has begun, so only the most-recent
@@ -536,7 +587,19 @@ const renderGuard = new RenderGuard();
 // review bar's VIEWING label + Submit-enabled state (refreshReviewBar) — the former titlebar
 // "Prompt Feedback" button that also surfaced it has been removed; commenting now goes through the
 // conversation composer + review bar.
-let commentCount = 0;
+//
+// Held as a ScalarRemoteData<number> (see src/remote-data.ts), but only TWO of its variants are ever
+// stored here: `initial()` until the first load completes, then `success(n)` thereafter (an EMPTY
+// plan is `success(0)`, NEVER zeroResults — a scalar read has no empty state). The `fetching` and
+// `error` variants are NEVER assigned to this holder — grep confirms the only writes are
+// `success(...)` (applyCommentCount / refreshCommentCount) and the `initial()` seed: a load in flight
+// is not modeled (the count is only ever replaced by its resolved value), and a failed read is a
+// NO-OP that PRESERVES the last-good `success(n)` (refreshCommentCount's fold logs the error and
+// returns without touching this holder), so the bar keeps the last known count instead of resetting
+// to 0, matching the pre-RemoteData catch-only behavior. The numeric leaf consumers
+// (currentCommentCount / reviewCommentCount / refreshReviewBar's viewedCommentCount) unwrap it with a
+// 0 fallback, so the displayed count for an unloaded plan stays 0 exactly as before.
+let commentCount: ScalarRemoteData<number> = initial();
 
 // Latest-wins request sequence. refreshCommentCount is fired un-awaited from open
 // (openPlan), reload (reloadOpenPlan), and onCommentCountChanged — concurrent/bursty calls can
@@ -563,7 +626,7 @@ let countReqSeq = 0;
 function applyCommentCount(path: AbsPath, count: number): void {
   if (path !== openPath()) return; // foreign-plan callback: ignore entirely (no commit, no seq bump).
   ++countReqSeq;
-  commentCount = count;
+  commentCount = success(count);
   // If the open plan IS a pending review, the bar's VIEWING label + Submit-enabled state derive from
   // this count — re-derive so the first comment enables Submit. Pass the authoritative count (commentCount
   // is already committed, but be explicit to mirror the override contract).
@@ -577,31 +640,51 @@ function applyCommentCount(path: AbsPath, count: number): void {
 // because the backend write may not be observed yet at fire time. EXPORTED so the count plumbing is
 // unit-testable.
 export async function refreshCommentCount(): Promise<void> {
-  // Short-circuit: nothing open ⇒ count is 0 (no await needed; no stale landing to guard).
+  // Short-circuit: nothing open ⇒ count is known to be 0 (no await needed; no stale landing to guard).
   const op = openPath();
   if (op === null) {
-    commentCount = 0;
+    commentCount = success(0);
     refreshReviewBar(0);
     return;
   }
   const seq = ++countReqSeq;
+  // Parse the scalar read at the boundary into a ScalarRemoteData<number>: a resolved read is
+  // success(n) — an empty count is success(0), NEVER zeroResults — and a rejected read is error(e).
+  // (console.error stays in the catch so a failed read logs the raw error object exactly as before,
+  // regardless of staleness.)
+  let result: ScalarRemoteData<number>;
   try {
-    const n = await invoke<number>("get_comment_count", { path: op });
-    // A newer refresh (or an authoritative applyCommentCount) began while this one was in flight —
-    // drop this stale landing so it cannot overwrite the newer count (cross-plan A→B, same-plan A→A
-    // bursty-reorder, AND a fresh in-session add whose authoritative count must not be re-read away).
-    if (seq !== countReqSeq) return;
-    commentCount = n;
-    // The open plan may BE a pending review — re-derive the bar so its VIEWING comment count is right.
-    refreshReviewBar(n);
+    result = success(await invoke<number>("get_comment_count", { path: op }));
   } catch (e) {
     console.error("get_comment_count failed", e);
+    result = failure(String(e));
   }
+  // A newer refresh (or an authoritative applyCommentCount) began while this one was in flight —
+  // drop this stale landing so it cannot overwrite the newer count (cross-plan A→B, same-plan A→A
+  // bursty-reorder, AND a fresh in-session add whose authoritative count must not be re-read away).
+  // This is the freshness gate the RemoteData write must pass BEFORE it lands; freshness is NOT
+  // folded into RemoteData — this seq check is the supersession authority and is left untouched.
+  if (seq !== countReqSeq) return;
+  matchScalar<number, void>(result, {
+    // Unreachable for a just-awaited read; required only for exhaustiveness.
+    initial: () => {},
+    fetching: () => {},
+    success: (n) => {
+      commentCount = success(n);
+      // The open plan may BE a pending review — re-derive the bar so its VIEWING comment count is right.
+      refreshReviewBar(n);
+    },
+    // Read failed — already logged above. As before, leave the last-good count in place (do NOT
+    // clobber commentCount) and do NOT re-derive the bar.
+    error: () => {},
+  });
 }
 
-// Test-only reader for the stashed count.
+// Test-only reader for the stashed count. Unwraps the RemoteData holder to a number (0 when never
+// loaded / fetching / error — the same value the bar derives from), preserving its pre-RemoteData
+// numeric contract.
 export function currentCommentCount(): number {
-  return commentCount;
+  return unwrapOr(commentCount, 0);
 }
 
 // ---- Review action bar (persistent, non-occluding, resumable) ----
@@ -656,7 +739,7 @@ function refreshReviewBar(countOverride?: number): void {
     //   prevents: the count double-counting or omitting a gate surface
     pendingCount: pendingSurfaces().length,
     viewing: currentReviewId() !== null || viewingGate() !== null,
-    viewedCommentCount: countOverride ?? commentCount,
+    viewedCommentCount: countOverride ?? unwrapOr(commentCount, 0),
     // Source-aware: drives #review-approve visibility + the Submit label ("Request changes" for
     // in-process, "Submit" for external). currentReviewSource() reads the SAME matched review (or the
     // orchestrator gate, which it reports as "in-process").
@@ -916,6 +999,12 @@ function echoCommentsText(records: CommentRecord[]): string {
 // success-only follow-up action such as clearing the submitted plan's now-consumed comments).
 async function resolveReview(reviewId: string, decision: "allow" | "deny", reason: string): Promise<boolean> {
   const review = pendingReviews.get(reviewId);
+  // Model the round-trip's outcome as a ScalarRemoteData<void>: success = the response landed, error =
+  // it failed (initial/fetching are unreachable for this awaited one-shot — no-op arms). Folding via
+  // matchScalar replaces a bare catch-and-return with an EXPLICIT error arm that drives the visible
+  // #hook-status surface and leaves the review pending; ONLY the success arm removes it + re-derives
+  // the affordances. The boolean return is preserved (Submit clears comments only on success).
+  let outcome: ScalarRemoteData<void>;
   try {
     if (review?.source === "in-process") {
       // ---- In-process (Agent SDK canUseTool seam): round-trip the SAME toolUseId ----------------
@@ -951,20 +1040,30 @@ async function resolveReview(reviewId: string, decision: "allow" | "deny", reaso
       }
       await invoke("respond_to_review", { reviewId, decision, reason });
     }
+    outcome = success(undefined);
   } catch (e) {
     console.error(`resolveReview (${decision}, ${review?.source ?? "external"}) failed`, e);
-    setHookStatus(hookStatusEl, `Could not send review response: ${String(e)}`, "error");
-    setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
-    return false;
+    outcome = failure(String(e));
   }
-  pendingReviews.delete(reviewId);
-  // Removing a pending review can UN-suppress the resume banner (precedence: a pending review
-  // outranks resume). Re-derive BOTH surfaces so a now-unsuppressed resumable open plan shows its
-  // Resume button without waiting for a re-open.
-  // INVARIANT[surface-removal-unsuppresses-resume] (convention): each site that removes a pending surface re-derives both affordances via refreshAffordances().
-  //   prevents: an out-of-band cancel leaving the resume banner stuck hidden
-  refreshAffordances();
-  return true;
+  return matchScalar<void, boolean>(outcome, {
+    initial: () => false,
+    fetching: () => false,
+    error: (message) => {
+      setHookStatus(hookStatusEl, `Could not send review response: ${message}`, "error");
+      setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
+      return false;
+    },
+    success: () => {
+      pendingReviews.delete(reviewId);
+      // Removing a pending review can UN-suppress the resume banner (precedence: a pending review
+      // outranks resume). Re-derive BOTH surfaces so a now-unsuppressed resumable open plan shows its
+      // Resume button without waiting for a re-open.
+      // INVARIANT[surface-removal-unsuppresses-resume] (convention): each site that removes a pending surface re-derives both affordances via refreshAffordances().
+      //   prevents: an out-of-band cancel leaving the resume banner stuck hidden
+      refreshAffordances();
+      return true;
+    },
+  });
 }
 
 // ---- cwd resolution + read/unread wiring (sidebar only) ----
@@ -1146,16 +1245,29 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
     // or `~`-unexpanded cwd making Rust's `read_plan_tree_file` REJECT) is distinguished from the
     // benign "no tree" case (resolve to null) and is NOT silently absorbed by the outer catch as an
     // anonymous "UNEXPECTED ERROR". Both branches → no banner; the diag tells them apart in dev.
-    let raw: string | null;
+    let stateFile: RemoteData<string>;
     try {
-      raw = await invoke<string | null>("read_plan_tree_file", { cwd, name: "state.json" });
+      stateFile = fromNullable(
+        await invoke<string | null>("read_plan_tree_file", { cwd, name: "state.json" }),
+      );
     } catch (e) {
       console.debug("detectResumable: read_plan_tree_file(state.json) rejected", e);
       diag(`detectResumable: tree_id=${rec.tree_id} cwd=${cwd} state.json READ ERROR (${e}) → no banner`);
       return null; // cwd/IO error reading the tree → not resumable (and now visibly diagnosed).
     }
+    // `fromNullable` maps an ABSENT state.json (null) -> zeroResults; a present one -> success. Fold all
+    // five arms to the raw text, or null when there is no resumable tree (absent/unread).
+    const raw = foldRemoteData(stateFile, {
+      initial: () => null,
+      fetching: () => null,
+      zeroResults: (): string | null => {
+        diag(`detectResumable: tree_id=${rec.tree_id} cwd=${cwd} state.json NOT FOUND → no banner`);
+        return null;
+      },
+      success: (data): string | null => data,
+      error: () => null,
+    });
     if (raw === null) {
-      diag(`detectResumable: tree_id=${rec.tree_id} cwd=${cwd} state.json NOT FOUND → no banner`);
       return null; // no `.plan-tree/state.json` → not a resumable tree.
     }
 
@@ -1205,17 +1317,27 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
       const isDecomposing =
         activeNode?.state.stage === "open" && activeNode.state.phase === "decomposing";
       if (isDecomposing) {
-        let probed: string | null = null;
+        let probe: RemoteData<string>;
         try {
-          probed = await invoke<string | null>("read_plan_tree_file", {
-            cwd,
-            name: planName2(activeForProbe),
-          });
+          probe = fromNullable(
+            await invoke<string | null>("read_plan_tree_file", {
+              cwd,
+              name: planName2(activeForProbe),
+            }),
+          );
         } catch (e) {
           console.debug("detectResumable: decomposition-artifact probe failed", e);
-          probed = null; // missing/IO-error ⇒ absent.
+          probe = failure(String(e)); // missing/IO-error ⇒ absent.
         }
-        decompositionArtifactCache.set(pathKey(activeForProbe), probed !== null);
+        // present (success) ⇒ exists; absent (zeroResults) or errored ⇒ does not exist.
+        const exists = foldRemoteData(probe, {
+          initial: () => false,
+          fetching: () => false,
+          zeroResults: () => false,
+          success: () => true,
+          error: () => false,
+        });
+        decompositionArtifactCache.set(pathKey(activeForProbe), exists);
       }
     }
     const decompositionArtifactExists = (path: NodePath): boolean =>
@@ -1271,25 +1393,40 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
 
     if (scope.plan.kind === "gate") {
       const plan = scope.plan;
-      let artifact: string | null = null;
+      // The leaf gate artifact is a SCALAR plans-store read (success, or a thrown read → error); the
+      // decomposition gate artifact is an OPTIONAL `.plan-tree/` read (fromNullable: absent →
+      // zeroResults, present → success). Both flow into one RemoteData<string> whose only "present"
+      // state is `success`.
+      let artifact: RemoteData<string>;
       try {
         if (plan.gateKind === "leaf") {
           // The node's absolute `~/.claude/plans/...` path — verify through the plans channel.
-          artifact = await invoke<string>("read_plan_contents", { path: plan.planPath });
+          artifact = success(await invoke<string>("read_plan_contents", { path: plan.planPath }));
         } else {
           // The decomposition plan lives under `.plan-tree/` by filename.
-          artifact = await invoke<string | null>("read_plan_tree_file", {
-            cwd,
-            name: planName2(plan.path),
-          });
+          artifact = fromNullable(
+            await invoke<string | null>("read_plan_tree_file", {
+              cwd,
+              name: planName2(plan.path),
+            }),
+          );
         }
       } catch (e) {
         // read_plan_contents REJECTS (not resolves null) on a missing/out-of-bounds file — treat any
         // throw as "absent" rather than crashing the click.
         console.debug("detectResumable: gate-artifact read failed", e);
-        artifact = null;
+        artifact = failure(String(e));
       }
-      if (artifact === null) {
+      // The gate is re-presentable only when the artifact is PRESENT (success); absent (zeroResults)
+      // or errored ⇒ missing.
+      const artifactPresent = foldRemoteData(artifact, {
+        initial: () => false,
+        fetching: () => false,
+        zeroResults: () => false,
+        success: () => true,
+        error: () => false,
+      });
+      if (!artifactPresent) {
         diag(
           `detectResumable: tree_id=${rec.tree_id} ${plan.gateKind} gate artifact MISSING (planPath=${plan.planPath}) → blocked banner`,
         );
@@ -1332,19 +1469,29 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
     if (scope.plan.kind === "rewind" && scope.plan.planPath !== null) {
       const planPath = scope.plan.planPath;
       const isAbsolute = planPath.startsWith("/") || planPath.startsWith("~");
-      let artifact: string | null = null;
+      // ABSOLUTE planPath ⇒ a SCALAR plans-store read (success, or thrown → error); RELATIVE ⇒ an
+      // OPTIONAL `.plan-tree/` read (fromNullable: absent → zeroResults, present → success). The
+      // rewind re-presents the artifact only when it is PRESENT (success).
+      let artifact: RemoteData<string>;
       try {
         artifact = isAbsolute
-          ? await invoke<string>("read_plan_contents", { path: planPath })
-          : await invoke<string | null>("read_plan_tree_file", { cwd, name: planPath });
+          ? success(await invoke<string>("read_plan_contents", { path: planPath }))
+          : fromNullable(await invoke<string | null>("read_plan_tree_file", { cwd, name: planPath }));
       } catch (e) {
         // read_plan_contents REJECTS (not resolves null) on a missing/out-of-bounds file, and
         // read_plan_tree_file rejects an invalid/out-of-bounds name — treat any throw as "absent"
         // rather than crashing the click.
         console.debug("detectResumable: rewind-artifact probe failed", e);
-        artifact = null; // missing/IO-error ⇒ absent.
+        artifact = failure(String(e)); // missing/IO-error ⇒ absent.
       }
-      if (artifact === null) {
+      const artifactPresent = foldRemoteData(artifact, {
+        initial: () => false,
+        fetching: () => false,
+        zeroResults: () => false,
+        success: () => true,
+        error: () => false,
+      });
+      if (!artifactPresent) {
         diag(
           `detectResumable: tree_id=${rec.tree_id} rewind artifact MISSING (planPath=${planPath}) → blocked banner`,
         );
@@ -1465,11 +1612,11 @@ function showResumeConfirmRow(hazard: string | null): void {
 }
 
 // Re-evaluate the resume banner for the currently-open record (fire-and-forget from openPlan). Reads
-// the freshest record for `path` from lastRecords (its tree_id/cwd may have been patched since open),
-// runs detectResumable, and paints the banner — but only if `path` is STILL the open plan when the
-// async read lands (a fast A→B switch must not paint A's banner over B).
+// the freshest record for `path` from currentRecords() (its tree_id/cwd may have been patched since
+// open), runs detectResumable, and paints the banner — but only if `path` is STILL the open plan when
+// the async read lands (a fast A→B switch must not paint A's banner over B).
 async function refreshResumeBanner(path: AbsPath): Promise<void> {
-  const rec = lastRecords.find((r) => r.absolute_path === path);
+  const rec = currentRecords().find((r) => r.absolute_path === path);
   if (!rec) {
     if (openPath() === path) renderResumeBanner(null);
     return;
@@ -2010,28 +2157,57 @@ function resolveSelection(
 // Re-fetch the list and re-render the sidebar (re-sort by recency / nesting happens in Rust).
 async function refreshList(): Promise<void> {
   if (!planListEl) return;
+
+  // INVARIANT[list-refresh-no-fetching-flash] (runtime-guard): only the INITIAL load (listState `initial`) transitions to `fetching`; an in-place refresh of an already-loaded list leaves the rendered list untouched while the next read is in flight.
+  //   prevents: a watcher tick blanking a populated sidebar to the empty `fetching` render mid-fetch.
+  //   test: list-refresh-never-renders-fetching-in-place
+  // The `isInitial(listState)` guard is LOAD-BEARING — see the test
+  // `list-refresh-never-renders-fetching-in-place`: dropping it (setting `fetching()` + rendering on
+  // EVERY refresh) repaints the empty fetching state on an in-place refresh, clearing the populated
+  // list while `list_plans` resolves. The initial load DOES paint `fetching` (an empty render — the
+  // sidebar is empty before the first load anyway), completing the lifecycle initial -> fetching.
+  if (isInitial(listState)) {
+    listState = fetching();
+    applyFilterAndRender();
+  }
+
   let records: PlanRecord[];
   try {
     records = await invoke<PlanRecord[]>("list_plans");
   } catch (e) {
-    // INVARIANT[transient-list-failure-is-a-noop] (runtime-guard): a failed list_plans returns early, leaving lastRecords/selection/pane untouched.
+    // INVARIANT[transient-list-failure-is-a-noop] (runtime-guard): a failed list_plans returns early, leaving listState/selection/pane untouched.
     //   prevents: a transient IPC failure collapsing the open plan (empty list → resolveSelection "vanish" → blanked pane)
     // A TRANSIENT list_plans failure must be a NO-OP for the selection + pane. Substituting an empty
     // list (the old behavior) would flow into resolveSelection's collapse path — prevRecords still
     // holds the open plan, records=[] ⇒ "vanished" — and blank the pane the user is reading + drop the
     // selection to `none` (non-self-healing; refreshList fires on every plan-changed). Bail without
-    // touching lastRecords/selection/pane; the next successful refresh repaints. (Pre-Phase-D a
+    // touching listState/selection/pane; the next successful refresh repaints. (Pre-Phase-D a
     // failure also left openPath untouched — this preserves the last-good sidebar rather than blanking
     // it, which is strictly more self-healing.)
+    // RemoteData error arm: when ANY last-good result exists — a populated `success` OR a
+    // successful-but-EMPTY `zeroResults` — we keep it untouched (a TRUE no-op preserving the rendered
+    // list/empty-state). Only a failure with NO last-good at all (a rejected load before any result
+    // landed — listState is still `initial`/`fetching`) surfaces the `error` arm; there is no sidebar
+    // error UI, so it folds to the same empty render, but the state is now distinguishably `error`.
     console.error("list_plans failed — leaving the sidebar/selection intact", e);
+    if (isInitial(listState) || isFetching(listState)) {
+      listState = failure(e instanceof Error ? e.message : String(e));
+    }
     return;
   }
 
-  // Capture the PRIOR list before reassigning so the reducer can tell a genuine vanish (was listed,
-  // now gone) from a never-listed open (a not-yet-indexed plan / the __setOpenPathForMock demo / a
-  // lagging gate row), then stash the full records array so the filter can re-render from memory.
-  const prevRecords = lastRecords;
-  lastRecords = records;
+  // Capture the PRIOR list BEFORE the boundary parse below reassigns `listState`, so the reducer can
+  // tell a genuine vanish (was listed, now gone) from a never-listed open (a not-yet-indexed plan /
+  // the __setOpenPathForMock demo / a lagging gate row). `currentRecords()` still reflects the
+  // last-good `listState` here (it has not been reassigned yet).
+  const prevRecords = currentRecords();
+
+  // Boundary parse: model the resolved array as RemoteData. `fromArray` maps [] -> zeroResults (drives
+  // the empty-state) and a populated array -> success (data replaced in place). This is the ONLY
+  // producer of success/zeroResults and runs ONLY on a resolved fetch, so an in-place refresh never
+  // flashes `fetching` or a spurious `zeroResults` — the new state is the authoritative parse of the
+  // fresh array. `listState` is now the SOLE store of the records (no parallel module-level copy).
+  listState = fromArray(records);
 
   // Selection reduction: collapse a `plan` that genuinely VANISHED → `none`, closing the
   // ghost pane. The held gate's plan is exempt (its row can lag the write — the placeholder stands in).
@@ -2144,8 +2320,14 @@ function makeSidebarCtx(): SidebarCtx {
 // (a heading-only match still shows its row, un-highlighted). EXPORTED for unit tests.
 export function applyFilterAndRender(): void {
   if (!planListEl) return;
-  const total = lastRecords.length;
-  const shown = filterRecords(lastRecords, filterQuery);
+  // Collapse the sidebar plan-list RemoteData to the records to render. Only `success` carries rows; the
+  // other four states render the same empty sidebar this app has always shown for the pre-load / empty /
+  // failed-initial states (no separate loading or error UI exists). `currentRecords()` is exactly that
+  // collapse (unwrapOr(listState, [])) — the same array the cwd late-patch mutates and every other reader
+  // in this file goes through, so the sidebar render and the by-path lookups cannot drift.
+  const records = currentRecords();
+  const total = records.length;
+  const shown = filterRecords(records, filterQuery);
 
   if (shown.length === 0 && filterQuery.trim() !== "") {
     // Non-empty query with no matches ⇒ empty-state affordance (NOT an empty list).
@@ -2211,7 +2393,7 @@ function patchAllCwds(): void {
   // displayed value (home-collapsed path, "unknown", or "" while unresolved); store it only
   // when it is a real path so an unresolved/unknown row's `cwd` is not poisoned with a
   // non-path placeholder.
-  for (const rec of lastRecords) {
+  for (const rec of currentRecords()) {
     const display = planSrcText(rec);
     if (display && display !== "unknown") rec.cwd = display as PlanRecord["cwd"];
   }
@@ -2257,7 +2439,7 @@ function patchDocSrc(): void {
   // resolved through resolve_cwds) — its cwd rides the record's `cwd` instead. Read it from there so
   // the reader header shows the tree's cwd, not an empty string.
   const text = isResumeSentinel(op)
-    ? displayCwd(lastRecords.find((r) => r.absolute_path === op)?.cwd ?? "")
+    ? displayCwd(currentRecords().find((r) => r.absolute_path === op)?.cwd ?? "")
     : cwdDisplayForStem(stemFromPath(op));
   docSrcEl.replaceChildren();
   if (!text) return;
@@ -2354,7 +2536,7 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
     ? {
         k: "sentinel",
         treeId: resumeSentinelTreeId(path),
-        cwd: lastRecords.find((r) => r.absolute_path === path)?.cwd ?? null,
+        cwd: currentRecords().find((r) => r.absolute_path === path)?.cwd ?? null,
       }
     : { k: "plan", path };
 
@@ -2404,7 +2586,7 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
   if (docHeaderEl) docHeaderEl.classList.remove("hidden");
   // A sentinel's `stem` is the tree_id (display-incidental, not a filename) — show the tree's title
   // (from its synthetic record's `h1s`) instead of an ugly `<tree_id>.md`. Real rows keep `<stem>.md`.
-  const sentinelRec = sentinel ? lastRecords.find((r) => r.absolute_path === path) ?? null : null;
+  const sentinelRec = sentinel ? currentRecords().find((r) => r.absolute_path === path) ?? null : null;
   if (docFilenameEl) {
     docFilenameEl.textContent = sentinel
       ? sentinelRec?.h1s?.[0] ?? "Plan in progress"
@@ -2418,51 +2600,87 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
     // render-generation guard (so a fast switch to/from this row can't land stale content). Prefer
     // the tree's INTENT.md (the original request, written under `.plan-tree/`) when readable, else a
     // static "in progress" note. The resume banner (fired below) carries the actual forward action.
-    let intent: string | null = null;
+    // The tree's INTENT.md is an OPTIONAL `.plan-tree/` read modeled as RemoteData via fromNullable:
+    // an ABSENT file (null) → zeroResults, present → success, a thrown read → error, and "cwd not yet
+    // resolved" → initial (the read never fires). The match (all five arms) collapses to the markdown
+    // to paint — only a present, NON-BLANK INTENT renders; every other arm falls back to the static
+    // in-progress note. The render block below is byte-for-byte unchanged (same gen gating); only the
+    // present/absent/blank decision moved into the RemoteData fold.
+    let intentRead: RemoteData<string> = initial();
     const cwd = sentinelRec ? resolvedCwdFor(sentinelRec) : null;
     if (cwd !== null) {
       try {
-        intent = await invoke<string | null>("read_plan_tree_file", { cwd, name: "INTENT.md" });
+        intentRead = fromNullable(
+          await invoke<string | null>("read_plan_tree_file", { cwd, name: "INTENT.md" }),
+        );
       } catch (e) {
         console.debug("openPlan: sentinel INTENT.md read failed", e);
-        intent = null; // missing/IO-error ⇒ fall back to the static placeholder.
+        intentRead = failure(String(e)); // missing/IO-error ⇒ fall back to the static placeholder.
       }
     }
     // A newer open superseded us while reading INTENT.md — drop this stale render.
     if (!renderGuard.isCurrent(gen)) return;
-    if (intent !== null && intent.trim() !== "") {
-      readingPaneEl.classList.remove("raw");
-      renderInto(readingPaneEl, intent, cwd ?? dirOf(path));
-      // switching to a sentinel is a genuine plan change (openPath now reads the sentinel
-      // scheme) — discard any draft owned by the previously-open real plan. See openPlan's plan-text
-      // site for the full rationale.
-      invalidatePopover(readingPaneEl);
-      readerScrollEl?.scrollTo({ top: 0 });
-      await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
-      if (!renderGuard.isCurrent(gen)) return;
-      rebuildTocFromPane();
-    } else {
-      readingPaneEl.classList.remove("raw");
-      renderInto(
-        readingPaneEl,
-        "_This plan is in progress. Use **Resume** above to continue it._",
-        cwd ?? dirOf(path),
-      );
-      // same sentinel-switch invalidation as the INTENT.md branch above.
-      invalidatePopover(readingPaneEl);
-      readerScrollEl?.scrollTo({ top: 0 });
-      await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
-      if (!renderGuard.isCurrent(gen)) return;
-      rebuildTocFromPane();
-    }
+    const STATIC_PLACEHOLDER = "_This plan is in progress. Use **Resume** above to continue it._";
+    const intentMd = foldRemoteData(intentRead, {
+      initial: () => STATIC_PLACEHOLDER,
+      fetching: () => STATIC_PLACEHOLDER,
+      zeroResults: () => STATIC_PLACEHOLDER,
+      // A present-but-blank INTENT.md (success("") / whitespace) is treated as no intent.
+      success: (text) => (text.trim() !== "" ? text : STATIC_PLACEHOLDER),
+      error: () => STATIC_PLACEHOLDER,
+    });
+    readingPaneEl.classList.remove("raw");
+    renderInto(readingPaneEl, intentMd, cwd ?? dirOf(path));
+    // switching to a sentinel is a genuine plan change (openPath now reads the sentinel
+    // scheme) — discard any draft owned by the previously-open real plan. See openPlan's plan-text
+    // site for the full rationale.
+    invalidatePopover(readingPaneEl);
+    readerScrollEl?.scrollTo({ top: 0 });
+    await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
+    if (!renderGuard.isCurrent(gen)) return;
+    rebuildTocFromPane();
   } else {
+    const pane = readingPaneEl; // non-null past the guard at the top of openPlan (for the error arm)
+    // The reading-pane content read modeled as a ScalarRemoteData<string>: a resolved read is
+    // success(text) — an EMPTY plan is success(""), NEVER zeroResults — and a rejected read is
+    // error(message). Only the local representation changes to RemoteData; the render-generation
+    // gating below stays byte-for-byte (the post-read isCurrent gate still fences the write before it
+    // can land in the pane). Do NOT fold freshness INTO the RemoteData — the seq/gen guard is the
+    // supersession authority and is left untouched.
+    let content: ScalarRemoteData<string>;
     try {
-      const text = await invoke<string>("read_plan_contents", { path });
-      // A newer open/reload superseded us while reading — drop this stale render.
-      if (!renderGuard.isCurrent(gen)) return;
+      content = success(await invoke<string>("read_plan_contents", { path }));
+    } catch (e) {
+      console.error("read_plan_contents failed", e);
+      // String(e) (not e.message) preserves the EXACT pane text rendered today.
+      content = failure(String(e));
+    }
+    // A newer open/reload superseded us while reading — drop this stale render. THIS is the freshness
+    // gate the new RemoteData write must pass before it lands in the pane (it also fences the error-arm
+    // write, exactly as the original catch's own isCurrent check did). Removing it lets a slow older
+    // read clobber a newer render — see src/main.reading-pane-remote-data.test.ts.
+    if (!renderGuard.isCurrent(gen)) return;
+    // Fold the four reachable scalar states. success → the markdown to render; error → paint the
+    // failure pane (a side effect) and yield null; initial/fetching are unreachable for a just-awaited
+    // read and yield null (no render). md === null means "skip the success pipeline" — the trailing
+    // affordance refresh still runs (matching the original error-path fallthrough).
+    const md = matchScalar<string, string | null>(content, {
+      initial: () => null,
+      fetching: () => null,
+      success: (text) => text,
+      error: (message) => {
+        pane.classList.add("raw");
+        pane.textContent = `Could not read plan: ${message}`;
+        // Read failed — clear the ToC so no stale entries point at headings that no
+        // longer rendered. (Cleared, not "No headings": there is no valid ToC here.)
+        tocListEl?.replaceChildren();
+        return null;
+      },
+    });
+    if (md !== null) {
       // render full-fidelity markdown into #reading-pane. New opens
       // start at the top.
-      renderInto(readingPaneEl, text, dirOf(path));
+      renderInto(readingPaneEl, md, dirOf(path));
       // the popover lives OUTSIDE #reading-pane, so it SURVIVES this innerHTML wipe. Now that
       // the fresh DOM is in place and openPath() (== getPlanPath) reflects this plan, invalidate it: a
       // genuine plan switch (draft.planPath !== openPath()) DISCARDS the stale draft; a same-plan
@@ -2492,14 +2710,6 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
       applyComments(readingPaneEl, recs);
       // Cold-read the authoritative count for the just-opened plan.
       void refreshCommentCount();
-    } catch (e) {
-      console.error("read_plan_contents failed", e);
-      if (!renderGuard.isCurrent(gen)) return;
-      readingPaneEl.classList.add("raw");
-      readingPaneEl.textContent = `Could not read plan: ${String(e)}`;
-      // Read failed — clear the ToC so no stale entries point at headings that no
-      // longer rendered. (Cleared, not "No headings": there is no valid ToC here.)
-      tocListEl?.replaceChildren();
     }
   }
 
@@ -2548,35 +2758,48 @@ export async function reloadOpenPlan(): Promise<void> {
   // older reload can never clobber a newer one.
   const gen = renderGuard.begin();
   const anchor = captureAnchor(readerScrollEl);
+  // The reload's content read modeled as a ScalarRemoteData<string>: success(text) on a resolved read
+  // (an empty plan is success(""), never zeroResults), error(message) on a rejected one (logged in the
+  // catch). Only the representation changes; the render-generation gating below stays byte-for-byte.
+  let content: ScalarRemoteData<string>;
   try {
-    const text = await invoke<string>("read_plan_contents", { path });
-    // Superseded while reading — drop this stale reload entirely.
-    if (!renderGuard.isCurrent(gen)) return;
-    renderInto(readingPaneEl, text, dirOf(path));
-    // a live reload keeps the SAME open plan (openPath unchanged), so this PRESERVES the
-    // user's in-progress draft and re-anchors its range against the freshly-rendered nodes — the app
-    // auto-reloads a plan WHILE it is being built, so hiding the draft on every reload would be a
-    // regression. MUST run after renderInto (re-anchor needs the new DOM). See render/comments.ts.
-    invalidatePopover(readingPaneEl);
-    applyDelta(readerScrollEl, anchor);
-    await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
-    // settle() is async; bail so a superseded reload's second applyDelta never runs.
-    if (!renderGuard.isCurrent(gen)) return;
-    applyDelta(readerScrollEl, anchor);
-    // Rebuild the ToC INSIDE the guarded region so a live edit that adds/removes a
-    // heading updates the Contents tab in place. Never changes the active tab.
-    rebuildTocFromPane();
-    // on a live reload the cache for this path is invalidated and re-read from the
-    // backend (loadCommentsFor re-invokes io.load), then highlights re-apply. The post-await
-    // isCurrent re-check is MANDATORY (see openPlan) so a superseded reload never wraps
-    // highlights into a newer plan's pane.
-    const recs = await loadCommentsFor(readingPaneEl, path);
-    if (!renderGuard.isCurrent(gen)) return;
-    applyComments(readingPaneEl, recs);
-    void refreshCommentCount();
+    content = success(await invoke<string>("read_plan_contents", { path }));
   } catch (e) {
     console.error("reload failed (plan may have been removed)", e);
+    content = failure(String(e));
   }
+  // Superseded while reading — drop this stale reload entirely (the freshness gate the new RemoteData
+  // write must pass before it lands; a failed read leaves the pane untouched either way).
+  if (!renderGuard.isCurrent(gen)) return;
+  const md = matchScalar<string, string | null>(content, {
+    initial: () => null,
+    fetching: () => null,
+    success: (text) => text,
+    error: () => null, // the throw was already logged in the catch; a failed reload leaves the pane as-is
+  });
+  if (md === null) return;
+  renderInto(readingPaneEl, md, dirOf(path));
+  // a live reload keeps the SAME open plan (openPath unchanged), so this PRESERVES the
+  // user's in-progress draft and re-anchors its range against the freshly-rendered nodes — the app
+  // auto-reloads a plan WHILE it is being built, so hiding the draft on every reload would be a
+  // regression. MUST run after renderInto (re-anchor needs the new DOM). See render/comments.ts.
+  invalidatePopover(readingPaneEl);
+  applyDelta(readerScrollEl, anchor);
+  await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));
+  // settle() is async; bail so a superseded reload's second applyDelta never runs.
+  if (!renderGuard.isCurrent(gen)) return;
+  applyDelta(readerScrollEl, anchor);
+  // Rebuild the ToC INSIDE the guarded region so a live edit that adds/removes a
+  // heading updates the Contents tab in place. Never changes the active tab.
+  rebuildTocFromPane();
+  // on a live reload the cache for this path is invalidated and re-read from the
+  // backend (loadCommentsFor re-invokes io.load), then highlights re-apply. The post-await
+  // isCurrent re-check is MANDATORY (see openPlan) so a superseded reload never wraps
+  // highlights into a newer plan's pane.
+  const recs = await loadCommentsFor(readingPaneEl, path);
+  if (!renderGuard.isCurrent(gen)) return;
+  applyComments(readingPaneEl, recs);
+  void refreshCommentCount();
 }
 
 // Filename stem from an absolute plan path (no `.md`). Reuses stemFromPath for the basename rule.
@@ -2777,6 +3000,25 @@ export function setHookStatus(
   statusEl.textContent = text;
   statusEl.classList.toggle("error", kind === "error");
   statusEl.classList.remove("hidden");
+}
+
+// Fire a one-shot "open in the default browser" command (open_baseline / open_prototype). This is a
+// VOID fire-once command, not a data read — there is nothing to surface on success (the OS opened the
+// file), so a plain try/catch is the right shape: success is silent, a FAILURE drives the visible
+// #hook-status surface (not a swallowed .catch()). The raw error object is logged to preserve its stack
+// in devtools, while the user-facing message stringifies it.
+async function openExternally(
+  command: "open_baseline" | "open_prototype",
+  args: { cwd: string; path: string },
+  failureLabel: string,
+): Promise<void> {
+  try {
+    await invoke(command, args);
+  } catch (e) {
+    console.error(`${command} failed`, e);
+    setHookStatus(hookStatusEl, `${failureLabel}: ${String(e)}`, "error");
+    setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
+  }
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -3112,6 +3354,9 @@ window.addEventListener("DOMContentLoaded", () => {
     // Comments are ALWAYS the open plan's normal persisted comments now (Option A): a reviewed plan
     // is a real file, so its comments key off its real path and persist to comments.json like any
     // other plan. There is no synthetic review store. The IO is the plain backend invoke path.
+    // Each adapter is the plain backend invoke. The facade parses these arrays into its PATH-KEYED
+    // RemoteData<CommentRecord[]> model (fromArray at the IO boundary) — the single source of truth
+    // for comments — so no second comment-list model lives here.
     const commentsIo: CommentsIO = {
       load: (p) => invoke<CommentRecord[]>("get_comments", { path: p }),
       save: (p, c) => invoke<CommentRecord[]>("set_comments", { path: p, comments: c }),
@@ -3165,7 +3410,9 @@ window.addEventListener("DOMContentLoaded", () => {
           try {
             let records: CommentRecord[] = [];
             try {
-              records = await invoke<CommentRecord[]>("get_comments", { path: planPath });
+              // RemoteData<CommentRecord[]> at the IO boundary (fromArray), collapsed to the
+              // feedback array. Both empty and error yield [] (the catch preserves fault tolerance).
+              records = unwrapOr(fromArray(await invoke<CommentRecord[]>("get_comments", { path: planPath })), []);
             } catch (e) {
               console.error("get_comments failed", e);
             }
@@ -3261,7 +3508,9 @@ window.addEventListener("DOMContentLoaded", () => {
         try {
           let records: CommentRecord[] = [];
           try {
-            records = await invoke<CommentRecord[]>("get_comments", { path: planPath });
+            // RemoteData<CommentRecord[]> at the IO boundary (fromArray), collapsed to the feedback
+            // array. Both empty and error yield [] (the catch preserves fault tolerance).
+            records = unwrapOr(fromArray(await invoke<CommentRecord[]>("get_comments", { path: planPath })), []);
           } catch (e) {
             console.error("get_comments failed", e);
           }
@@ -3396,22 +3645,14 @@ window.addEventListener("DOMContentLoaded", () => {
       const acceptGate = activeAcceptanceGate();
       if (acceptGate) {
         const target = acceptGate.openTarget ?? "index.html";
-        void invoke("open_baseline", { cwd: acceptGate.cwd, path: target }).catch((e) => {
-          console.error("open_baseline failed", e);
-          setHookStatus(hookStatusEl, `Could not open baseline: ${String(e)}`, "error");
-          setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
-        });
+        void openExternally("open_baseline", { cwd: acceptGate.cwd, path: target }, "Could not open baseline");
         return;
       }
       const gate = activePrototypeGate();
       if (!gate) return;
       const target = prototypeOpenTarget(gate);
       if (target === null) return;
-      void invoke("open_prototype", { cwd: gate.cwd, path: target }).catch((e) => {
-        console.error("open_prototype failed", e);
-        setHookStatus(hookStatusEl, `Could not open prototype: ${String(e)}`, "error");
-        setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
-      });
+      void openExternally("open_prototype", { cwd: gate.cwd, path: target }, "Could not open prototype");
     });
 
     // ---- #review-refine (ACCEPTANCE mode only — Phase 6): re-plan the picked sub-plan -----------
@@ -3633,32 +3874,49 @@ window.addEventListener("DOMContentLoaded", () => {
       (payload.input as { plan?: unknown } | null | undefined)?.plan;
     const planText = typeof planMarkdown === "string" ? planMarkdown : "";
 
-    let writtenPath: string;
+    // The plan-save read modeled as a ScalarRemoteData<string>: success(path) on resolve — an empty
+    // path is still success("") (NOT zeroResults: a scalar write has no empty state), so the
+    // un-openable-path liveness branch downstream is preserved — and error(String(e)) on reject. Only
+    // the local representation changes to RemoteData; the success/failure BEHAVIOR is folded unchanged.
+    let writeResult: ScalarRemoteData<string>;
     try {
       // Backend write_agent_plan returns the absolute path it wrote (frontmatter-tagged, atomic,
       // containment-guarded). tree_id / nn are left undefined for now (the backend seeds a fresh
       // tree_id); re-plan versioning is settled with the backend during live smoke.
-      writtenPath = await invoke<string>("write_agent_plan", { plan: planText });
+      writeResult = success(await invoke<string>("write_agent_plan", { plan: planText }));
     } catch (e) {
       console.error("write_agent_plan failed", e);
-      // Without a real file we cannot open + review it. Faking a pending review here (empty
-      // planFilePath) would hang the seam: currentReviewId() returns null for it, so the bar falls
-      // into summary mode, #review-approve stays hidden, and both the approve + submit handlers bail
-      // on the null guards — the held canUseTool promise would never resolve. Instead AUTO-DENY so
-      // the agent gets feedback and can retry/report, then release without registering any review.
-      try {
-        await invoke("resolve_tool_permission", {
-          id: payload.id,
-          allow: false,
-          message: "Could not save the plan for review; aborting.",
-        });
-      } catch (e2) {
-        console.error("resolve_tool_permission (write_agent_plan fallback) failed", e2);
-      }
-      setHookStatus(hookStatusEl, `Could not save the plan for review: ${String(e)}`, "error");
-      setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
-      return;
+      writeResult = failure(String(e));
     }
+    // Fold the four reachable scalar states. success → the written path (drives the post-write flow
+    // below); error → run the AUTO-DENY liveness path (a side effect) and yield null. initial/fetching
+    // are unreachable for a just-awaited write and yield null. A null fold result means "save failed —
+    // stop here" (the error arm already released the seam + surfaced the status).
+    const writtenPath = await matchScalar<string, Promise<string | null>>(writeResult, {
+      initial: () => Promise.resolve(null),
+      fetching: () => Promise.resolve(null),
+      success: (path) => Promise.resolve(path),
+      error: async (message) => {
+        // Without a real file we cannot open + review it. Faking a pending review here (empty
+        // planFilePath) would hang the seam: currentReviewId() returns null for it, so the bar falls
+        // into summary mode, #review-approve stays hidden, and both the approve + submit handlers bail
+        // on the null guards — the held canUseTool promise would never resolve. Instead AUTO-DENY so
+        // the agent gets feedback and can retry/report, then release without registering any review.
+        try {
+          await invoke("resolve_tool_permission", {
+            id: payload.id,
+            allow: false,
+            message: "Could not save the plan for review; aborting.",
+          });
+        } catch (e2) {
+          console.error("resolve_tool_permission (write_agent_plan fallback) failed", e2);
+        }
+        setHookStatus(hookStatusEl, `Could not save the plan for review: ${message}`, "error");
+        setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
+        return null;
+      },
+    });
+    if (writtenPath === null) return;
 
     // Register the in-process pending review keyed by the SDK toolUseId (= payload.id). The hold IS
     // this registration — resolve_tool_permission is NEVER called here.
@@ -3783,37 +4041,53 @@ window.addEventListener("DOMContentLoaded", () => {
   // flow (no focus — the user just launched). console.warn if more than one is pending. Chained so it
   // serializes ahead of any live request that arrives during startup.
   reviewPending = chainHandler(reviewPending, async () => {
-    let reviews: ReviewRequest[] = [];
+    // Boundary parse: model the launch-recovery review read as RemoteData (mirrors the sidebar
+    // `listState`). `fromArray` maps [] -> zeroResults (no pending reviews to recover) and a populated
+    // array -> success; a thrown read lands in `error`. The recovery logic then folds via `match`, so
+    // the empty/error states cannot be silently skipped. Local to this handler — the only reader is the
+    // fold below, so the state never needs module scope.
+    let reviewListState: RemoteData<ReviewRequest[]>;
     try {
-      reviews = await invoke<ReviewRequest[]>("list_pending_reviews");
+      reviewListState = fromArray(await invoke<ReviewRequest[]>("list_pending_reviews"));
     } catch (e) {
       console.error("list_pending_reviews failed", e);
-      return;
+      reviewListState = failure(e instanceof Error ? e.message : String(e));
     }
-    // Drop STALE entries (hook already timed out — its Submit/Dismiss would be a silent no-op).
-    const now = Date.now();
-    const fresh = reviews.filter((r) => now - r.created_ms < STALE_REVIEW_MS);
-    if (fresh.length === 0) return;
-    if (fresh.length > 1) {
-      console.warn(`launch recovery: ${fresh.length} pending reviews; auto-showing the newest`);
-    }
-    // Track every non-stale pending review so all are resumable + counted.
-    for (const r of fresh) {
-      pendingReviews.set(r.review_id, {
-        reviewId: r.review_id,
-        planFilePath: r.plan_file_path,
-        planText: r.plan_text,
-        createdMs: r.created_ms,
-        source: "external",
-      });
-    }
-    if (currentReviewId() !== null) {
-      // A live request already opened a reviewed plan during startup — leave it; just refresh.
-      refreshReviewBar();
-      return;
-    }
-    // Open the newest pending review's real plan file (newestPendingReview honors the >= tie-break).
-    const newest = newestPendingReview();
-    if (newest !== null) await openReviewPlanFile(newest);
+    await foldRemoteData(reviewListState, {
+      // Pre-/mid-fetch — unreachable at this resolved boundary; no-op for exhaustiveness.
+      initial: () => Promise.resolve(),
+      fetching: () => Promise.resolve(),
+      // No pending reviews (or none survived parse) — nothing to recover.
+      zeroResults: () => Promise.resolve(),
+      // The read failed (already logged in the catch) — leave recovery untouched.
+      error: () => Promise.resolve(),
+      success: async (reviews) => {
+        // Drop STALE entries (hook already timed out — its Submit/Dismiss would be a silent no-op).
+        const now = Date.now();
+        const fresh = reviews.filter((r) => now - r.created_ms < STALE_REVIEW_MS);
+        if (fresh.length === 0) return;
+        if (fresh.length > 1) {
+          console.warn(`launch recovery: ${fresh.length} pending reviews; auto-showing the newest`);
+        }
+        // Track every non-stale pending review so all are resumable + counted.
+        for (const r of fresh) {
+          pendingReviews.set(r.review_id, {
+            reviewId: r.review_id,
+            planFilePath: r.plan_file_path,
+            planText: r.plan_text,
+            createdMs: r.created_ms,
+            source: "external",
+          });
+        }
+        if (currentReviewId() !== null) {
+          // A live request already opened a reviewed plan during startup — leave it; just refresh.
+          refreshReviewBar();
+          return;
+        }
+        // Open the newest pending review's real plan file (newestPendingReview honors the >= tie-break).
+        const newest = newestPendingReview();
+        if (newest !== null) await openReviewPlanFile(newest);
+      },
+    });
   });
 });

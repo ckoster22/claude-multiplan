@@ -7,7 +7,16 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { resolveImageSrc, joinPath, awaitImages } from "./assets";
+import { resolveImageSrc, resolveLocalImages, joinPath, awaitImages } from "./assets";
+import { type ScalarRemoteData } from "../remote-data";
+
+// resolveImageSrc now returns a settled ScalarRemoteData<string>. Pre-migration
+// assertion LINES are kept identical (`expect(out).toBe("…")`); only the binding
+// that feeds `out` is adapted here — this unwraps the success data (undefined on
+// any non-success state, so the original assertions still catch a wrong result).
+function srcOf(rd: ScalarRemoteData<string>): string | undefined {
+  return rd.kind === "success" ? rd.data : undefined;
+}
 
 beforeEach(() => {
   invokeMock.mockReset();
@@ -16,19 +25,19 @@ beforeEach(() => {
 
 describe("resolveImageSrc — passthrough schemes", () => {
   it("returns https URLs unchanged without invoking", async () => {
-    const out = await resolveImageSrc("https://x.com/a.png", "/plans");
+    const out = srcOf(await resolveImageSrc("https://x.com/a.png", "/plans"));
     expect(out).toBe("https://x.com/a.png");
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("returns http URLs unchanged without invoking", async () => {
-    const out = await resolveImageSrc("http://x.com/a.png", "/plans");
+    const out = srcOf(await resolveImageSrc("http://x.com/a.png", "/plans"));
     expect(out).toBe("http://x.com/a.png");
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
   it("returns data: URLs unchanged without invoking", async () => {
-    const out = await resolveImageSrc("data:image/png;base64,AAAA", "/plans");
+    const out = srcOf(await resolveImageSrc("data:image/png;base64,AAAA", "/plans"));
     expect(out).toBe("data:image/png;base64,AAAA");
     expect(invokeMock).not.toHaveBeenCalled();
   });
@@ -36,7 +45,7 @@ describe("resolveImageSrc — passthrough schemes", () => {
 
 describe("resolveImageSrc — local resolution", () => {
   it("joins a relative src against planDir and invokes read_image_as_data_url", async () => {
-    const out = await resolveImageSrc("foo.png", "/Users/me/plans");
+    const out = srcOf(await resolveImageSrc("foo.png", "/Users/me/plans"));
     expect(invokeMock).toHaveBeenCalledWith("read_image_as_data_url", {
       path: "/Users/me/plans/foo.png",
     });
@@ -97,6 +106,45 @@ describe("awaitImages — unresolved placeholders are not awaited", () => {
     const started = Date.now();
     await awaitImages(pane, 5000);
     expect(Date.now() - started).toBeLessThan(500);
+  });
+});
+
+describe("resolveLocalImages — matchScalar fold drives src vs alt", () => {
+  function placeholder(localSrc: string): HTMLImageElement {
+    const el = document.createElement("img");
+    el.setAttribute("data-resolve", "1");
+    el.setAttribute("data-local-src", localSrc);
+    return el;
+  }
+
+  it("success arm sets src; error arm sets alt+data-error; batch continues per-image", async () => {
+    // One resolvable image, one that rejects, in a single batch. The fold's
+    // success arm must drive src on the good one while the error arm drives
+    // alt/data-error on the bad one — and the failing image must not abort the
+    // batch (the good one still resolves).
+    invokeMock.mockImplementation((_cmd: string, args: { path: string }) =>
+      args.path.endsWith("bad.png")
+        ? Promise.reject(new Error("boom"))
+        : Promise.resolve("data:image/png;base64,OK"),
+    );
+
+    const pane = document.createElement("div");
+    const good = placeholder("ok.png");
+    const bad = placeholder("bad.png");
+    pane.append(good, bad);
+
+    await resolveLocalImages(pane, "/p");
+
+    // success arm
+    expect(good.getAttribute("src")).toBe("data:image/png;base64,OK");
+    expect(good.dataset.error).toBeUndefined();
+    expect(good.hasAttribute("data-resolve")).toBe(false);
+
+    // error arm — no real src set, marker attributes present
+    expect(bad.getAttribute("src")).toBeNull();
+    expect(bad.alt).toBe("image not found: bad.png");
+    expect(bad.dataset.error).toBe("Error: boom");
+    expect(bad.hasAttribute("data-resolve")).toBe(false);
   });
 });
 
