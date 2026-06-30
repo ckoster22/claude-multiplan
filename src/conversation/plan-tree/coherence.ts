@@ -1,9 +1,8 @@
 // Multiplan plan-tree package — LEAF: gen-2 coherence invariants.
 //
-// The runtime coherence checker (assertCoherent2) and its private passes — enforcing what the types
-// CANNOT express (no-executing-under-reviewing, the per-level summarized*/active?/pending* partition,
-// parent-phase↔children coupling, root-only phases, sibling-nn uniqueness). PURE; depends only on
-// `ids` and `model`.
+// assertCoherent2 + private passes enforcing what the types CANNOT express (no-executing-under-
+// reviewing, the per-level summarized*/active?/pending* partition, parent-phase↔children coupling,
+// root-only phases, sibling-nn uniqueness). PURE; depends only on `ids` and `model`.
 
 import { pathKey } from "./ids";
 import type { Nn, NodePath } from "./ids";
@@ -20,22 +19,19 @@ function statusOf(node: TreeNode): ChildStatus {
   return node.state.phase === "summarized" ? "summarized" : "active";
 }
 
-// Throw on any incoherent gen-2 tree. Enforces, for what the types CANNOT express:
-//   (1) no leaf may be `executing` anywhere under a `reviewing` ancestor (the review turn is
-//       no-tools — concurrent execution below it would race the review) — checked in a dedicated
-//       first pass so its violation is reported as ITSELF, not masked by a partition error;
+// Throw on any incoherent gen-2 tree. Enforces what the types CANNOT express:
+//   (1) no leaf may be `executing` under a `reviewing` ancestor (the review turn is no-tools —
+//       execution below would race it) — a dedicated first pass so the violation reports as ITSELF,
+//       not masked by a partition error;
 //   (2) per-level partition: each split's children read summarized* active? pending* left-to-right
 //       (left siblings completed, AT MOST one in flight, right siblings untouched);
 //   (3) parent split phase ↔ children: `running-children` iff EXACTLY one child active — EXCEPT
-//       the PHASE-4 roll-up window: a NON-ROOT split may rest running-children with ZERO active
-//       and ALL children summarized (awaiting its roll-up summary turn; the root may not — it
-//       writes no roll-up);
-//       `reviewing` only BETWEEN children (no child active, ≥1 summarized behind, ≥1 pending
-//       ahead — never before the first or after the last child); `summarized` only when ALL
-//       children are summarized (a parent may not complete with an incomplete child);
+//       the PHASE-4 roll-up window: a NON-ROOT split may rest running-children with ZERO active and
+//       ALL children summarized (awaiting its roll-up summary turn; the root may not — it writes no
+//       roll-up); `reviewing` only BETWEEN children (no child active, ≥1 summarized behind, ≥1
+//       pending ahead); `summarized` only when ALL children are summarized;
 //   (4) root-only phases at depth 0: `clarifying-intent` and `prototype-review` are illegal below
-//       the root. (`done` needs no rule — it is not a representable NodeState phase; see
-//       treeIsDone.)
+//       the root. (`done` is not a representable NodeState phase — see treeIsDone.)
 export function assertCoherent2(root: TreeNode): void {
   assertNoExecutingUnderReviewing(root, false);
   assertStructure(root, []);
@@ -68,11 +64,10 @@ function assertStructure(node: TreeNode, path: NodePath): void {
   if (node.state.stage !== "split") return;
   const children = node.state.children;
 
-  // (0) SIBLING-nn UNIQUENESS: a "types-cannot-express" invariant — the NonEmptyArray type proves
-  // children is non-empty but cannot prove the nn segments are distinct, and the navigation
-  // primitives resolve nn to the FIRST match, so a duplicate-nn pair silently aliases. The
-  // CHILDREN_PARSED parse boundary already rejects this for live drafts; this is defense in depth
-  // for any tree (resume rehydration, hand-built fixtures) that reaches rest with a collision.
+  // (0) SIBLING-nn UNIQUENESS: types prove children non-empty but not nn-distinct, and navigation
+  // resolves nn to the FIRST match, so a duplicate-nn pair silently aliases. CHILDREN_PARSED already
+  // rejects this for live drafts; this is defense in depth for any tree (resume, hand-built fixtures)
+  // reaching rest with a collision.
   const seenNn = new Set<Nn>();
   for (const c of children) {
     if (seenNn.has(c.nn)) {
@@ -111,16 +106,12 @@ function assertStructure(node: TreeNode, path: NodePath): void {
   const summarizedCount = statuses.filter((s) => s === "summarized").length;
   const pendingCount = statuses.filter((s) => s === "pending").length;
   if (node.state.phase === "running-children" && activeCount !== 1) {
-    // PHASE-4 ROLL-UP WINDOW allowance: a NON-ROOT split legally rests running-children with all
-    // children summarized while its roll-up summary turn is in flight.
-    // PHASE-5 ACCEPTANCE WINDOW allowance: the ROOT — previously excluded (a root resting here was a
-    // missed completion) — now ALSO legally rests running-children with all children summarized: the
-    // forced-acceptance hold (running-children, not summarized, so treeIsDone stays false) while the
-    // user records a verdict against the frozen baseline. The shape is structurally identical to the
-    // non-root roll-up window; whether THIS root is legitimately parked (a baseline exists, the gate
-    // is held) or stuck is a transient-state concern (pendingAcceptance + the reducer's discipline),
-    // not a tree-structure one — exactly as the roll-up window's legitimacy lives in the driver's
-    // event stream, not in the tree. So the all-summarized allowance now covers the root too.
+    // ROLL-UP / ACCEPTANCE WINDOW allowance: a split may legally rest running-children with ZERO
+    // active and ALL children summarized. Non-root (PHASE 4): awaiting its roll-up summary turn.
+    // Root (PHASE 5): the forced-acceptance hold (treeIsDone stays false) while the user records a
+    // verdict against the frozen baseline. Whether a parked root is legitimate (baseline + held gate)
+    // or stuck is a transient-state concern (pendingAcceptance + reducer discipline), not a
+    // tree-structure one — like the roll-up window, its legitimacy lives in the event stream.
     const allSummarizedWindow = activeCount === 0 && summarizedCount === children.length;
     if (!allSummarizedWindow) {
       throw new Error(

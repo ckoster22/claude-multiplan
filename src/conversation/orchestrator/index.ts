@@ -1,10 +1,9 @@
 // Multiplan orchestration package — BARREL.
 //
-// Re-exports the COMPLETE public surface of the former single-file `orchestrator.ts` so every
-// consumer keeps importing `./conversation/orchestrator` / `./orchestrator` unchanged (it now
-// resolves to this `orchestrator/index.ts`). Explicit named re-exports ONLY — NO `export *` (the
-// repo is `isolatedModules`: values and types are split into `export {}` / `export type {}` groups,
-// and a cross-leaf collision under `export *` could silently drop a symbol).
+// Re-exports the public surface of the former single-file `orchestrator.ts` so consumers keep
+// importing `./conversation/orchestrator` unchanged. Explicit named re-exports ONLY — NO `export *`
+// (isolatedModules splits values/types into `export {}` / `export type {}`, and a cross-leaf
+// collision under `export *` could silently drop a symbol).
 
 // ---- values — orchestrator-owned ----
 export {

@@ -35,16 +35,15 @@ export function nodeAtPath(root: TreeNode, path: NodePath): TreeNode | null {
   return cur;
 }
 
-// The path of the ONE active node — the node the sequencer dispatches on — or null when nothing
-// is in flight (a fresh pending tree, or a done tree). PRECISE DEFINITION (depth-first):
-//   - open/pending → not active (not started); any OTHER open phase → the node itself is active.
+// The path of the ONE active node (the node the sequencer dispatches on), or null when nothing is in
+// flight (a fresh pending or done tree). PRECISE DEFINITION (depth-first):
+//   - open/pending → not active; any OTHER open phase → the node itself is active.
 //   - leaf → active unless summarized.
 //   - split summarized → nothing active below a completed subtree.
-//   - split REVIEWING → the reviewing PARENT IS the active node for dispatch (the review turn is
-//     the parent's turn; coherence guarantees no child is active during it).
-//   - split running-children → the active node is the single active DESCENDANT (the parent is
-//     bookkeeping, not dispatchable); zero active children under running-children is incoherent
-//     and throws LOUDLY rather than silently dispatching on the parent.
+//   - split REVIEWING → the reviewing PARENT is the active node (the review turn is the parent's;
+//     coherence guarantees no child is active during it).
+//   - split running-children → the single active DESCENDANT (the parent is bookkeeping); zero active
+//     children under running-children is incoherent and throws LOUDLY.
 // Serves sequencer dispatch ONLY — writePolicyFor2 is deliberately independent of this.
 export function activePathOf(root: TreeNode): NodePath | null {
   return activeWithin(root, []);
@@ -69,11 +68,10 @@ function activeWithin(node: TreeNode, prefix: NodePath): NodePath | null {
       // in flight; SUMMARY_WRITTEN{this path} completes it).
       if (prefix.length > 0 && inRollupWindow(node)) return prefix;
       // PHASE 5 ACCEPTANCE WINDOW: the ROOT resting running-children with ALL children summarized is
-      // the forced-acceptance hold — the ROOT itself is the active node (the acceptance verdict is
-      // its "turn"; ACCEPTANCE_APPROVED/DIVERGED resolves it). Without a baseline the reducer never
-      // parks the root here (it finalizes in the same reduction), so this path is only reached with
-      // the gate held — but activePathOf reads the TREE alone, so the allowance is structural, like
-      // the roll-up window's.
+      // the forced-acceptance hold — the ROOT itself is the active node (ACCEPTANCE_APPROVED/DIVERGED
+      // resolves it). Without a baseline the reducer never parks here (it finalizes in the same
+      // reduction); activePathOf reads the TREE alone, so the allowance is structural like the
+      // roll-up window's.
       if (prefix.length === 0 && inAcceptanceWindow(node)) return prefix;
       throw new Error(
         `incoherent: split node at "${pathKey(prefix)}" is running-children with no active child`,
@@ -92,12 +90,11 @@ function someNodeExecuting(node: TreeNode): boolean {
 // tree-walk helpers; NOT a barrel export.
 export { someNodeExecuting };
 
-// Whether `path` addresses THE root single-collapse child: the SOLE child of a root split holding
-// NO decomposition plan (planPath null ⇒ no decomposition was ever drafted ⇒ the split was minted
-// by the root confident-single collapse, the only arc that creates a planPath-less split). That
-// child INHERITED the root sizer's `single` verdict — running a second sizer over the same scope
-// would let one request be sized twice — so it skips the per-node sizer and goes straight to
-// leaf/drafting (preserving the gen-1 golden depth-1 single trace byte-for-byte).
+// Whether `path` addresses THE root single-collapse child: the SOLE child of a root split with NO
+// decomposition plan (planPath null ⇒ the split was minted by the root confident-single collapse,
+// the only arc creating a planPath-less split). That child INHERITED the root sizer's `single`
+// verdict, so it skips the per-node sizer (a second sizer would size one request twice) and goes
+// straight to leaf/drafting (preserving the gen-1 golden depth-1 single trace).
 export function isRootCollapseChild(root: TreeNode, path: NodePath): boolean {
   return (
     path.length === 1 &&
@@ -107,13 +104,11 @@ export function isRootCollapseChild(root: TreeNode, path: NodePath): boolean {
   );
 }
 
-// Whether a split node sits in its ROLL-UP WINDOW: running-children with EVERY child summarized.
-// This is the (non-root-only — coherence forbids it at the root) state a split rests in after its
-// last child's SUMMARY_WRITTEN, while the DRIVER runs the roll-up summary turn; the node's own
-// SUMMARY_WRITTEN{path} then completes it to split/summarized. The window deliberately re-uses
-// `running-children` (no new phase): the persisted schema is untouched, `reviewing` stays reserved
-// for Phase 5's parent-review, and the window is fully DERIVED from the children — a stored flag
-// could disagree with them.
+// Whether a split sits in its ROLL-UP WINDOW: running-children with EVERY child summarized. The
+// (non-root — coherence forbids it at the root) state a split rests in after its last child's
+// SUMMARY_WRITTEN while the DRIVER runs the roll-up turn; the node's own SUMMARY_WRITTEN{path}
+// completes it to split/summarized. Deliberately re-uses `running-children` (no new phase, schema
+// untouched) and is fully DERIVED from the children — a stored flag could disagree with them.
 export function inRollupWindow(node: TreeNode): boolean {
   return (
     node.state.stage === "split" &&
@@ -125,11 +120,10 @@ export function inRollupWindow(node: TreeNode): boolean {
 // PHASE 5 — THE FORCED ACCEPTANCE WINDOW: the ROOT resting in `running-children` with EVERY child
 // summarized. STRUCTURALLY identical to a non-root roll-up window, but at the ROOT it is the
 // forced-acceptance hold — the root writes no roll-up, so without a baseline the reducer finalizes
-// here in the SAME reduction (root → summarized). WITH a baseline it instead parks here while
-// pendingAcceptance is held, awaiting the user's ACCEPTANCE_APPROVED/DIVERGED verdict. `treeIsDone`
-// is false in this shape (phase is running-children, not summarized), so a baseline-bearing tree can
-// never read done without a recorded verdict. assertCoherent2 accepts this shape (the all-summarized
-// running-children allowance is extended to the root for exactly this window).
+// here in the SAME reduction (root → summarized). WITH a baseline it parks here while
+// pendingAcceptance is held, awaiting the ACCEPTANCE_APPROVED/DIVERGED verdict. `treeIsDone` is false
+// here (running-children, not summarized), so a baseline-bearing tree never reads done without a
+// verdict. assertCoherent2 accepts this shape.
 export function inAcceptanceWindow(root: TreeNode): boolean {
   return (
     root.state.stage === "split" &&

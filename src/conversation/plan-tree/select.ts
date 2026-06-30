@@ -23,8 +23,8 @@ export function toLedger2(state: PlanTreeState2): RecursiveLedger {
     // never aliases live state). Absent ⇒ omitted (sketch — today's behavior unchanged).
     baseline_: state.baseline_ ? { ...state.baseline_ } : undefined,
     // PHASE 5 — carry the acceptance verdict (incl. the divergence reason) through persistence so a
-    // resumed/reopened ledger keeps the recorded audit trail. Deep-copied; absent ⇒ omitted (the
-    // no-baseline path never sets it, so this stays byte-identical to today there).
+    // resumed ledger keeps the audit trail. Deep-copied; absent ⇒ omitted (the no-baseline path never
+    // sets it — byte-identical to today).
     acceptance_: state.acceptance_ ? { ...state.acceptance_ } : undefined,
     // Carry the quota auto-resume budget through persistence (deep-copied so the ledger never aliases
     // live state). Absent ⇒ omitted (no budget was set — byte-identical to today's no-quota behavior).
@@ -61,12 +61,11 @@ export function treeIsDone(root: TreeNode): boolean {
 // PURE projection, ROOT-PHASE-AWARE then TREE-WIDE EXISTENTIAL:
 //   - the ROOT in its intent-clarification window (open clarifying-intent OR prototype-review) →
 //     "prototype": throwaway visual-prototype artifacts may be written, but no plan exists yet.
-//     GENESIS therefore derives "prototype" (a fresh tree opens in clarifying-intent); recon
-//     onward falls through to the existential below.
-//   - otherwise the session is writable ("acceptEdits") iff SOME node anywhere in the tree is a
-//     leaf in `executing` — at ANY depth — else "plan". Defined INDEPENDENTLY of activePathOf
-//     (which serves dispatch): the policy must hold even if dispatch derivation drifted. Note the
-//     type system already guarantees the witness is a LEAF: `executing` is not a split phase.
+//     GENESIS therefore derives "prototype"; recon onward falls through to the existential below.
+//   - otherwise writable ("acceptEdits") iff SOME node anywhere is a leaf in `executing` — at ANY
+//     depth — else "plan". Defined INDEPENDENTLY of activePathOf so the policy holds even if dispatch
+//     derivation drifted. The type system guarantees the witness is a LEAF (`executing` is not a
+//     split phase).
 // INVARIANT[write-policy-is-derived-not-stored] (convention): write policy is one of plan|acceptEdits|prototype, computed purely from the tree by this projection and never persisted as a mutable ledger flag (RunState.assertedPolicy is only a re-derivable cache).
 //   prevents: a write policy disagreeing with the tree's actual phase
 export function writePolicyFor2(root: TreeNode): WritePolicy {

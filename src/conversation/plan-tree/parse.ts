@@ -5,12 +5,11 @@
 
 import type { SizerOutcome } from "./model";
 
-// Extract a SizerOutcome from a single assistant text line. DOCUMENTED FORMAT: a line of the form
+// Extract a SizerOutcome from a single assistant text line. FORMAT:
 //   SIZER: <decision> / <num_plans> / <confidence>
-// e.g. `SIZER: split / 3 / 0.82`. `decision` ∈ {single,split} — the ONLY two outcomes; `num_plans`
-// is a non-negative integer; `confidence` is a float in [0,1]. Returns null for any non-matching
-// line, INCLUDING a SIZER line with an unknown decision word (e.g. a stale `escalate`) — the
-// driver coerces a sizer turn with no parseable outcome to split.
+// e.g. `SIZER: split / 3 / 0.82`. `decision` ∈ {single,split}; `num_plans` a non-negative integer;
+// `confidence` a float in [0,1]. Returns null for any non-matching line, INCLUDING an unknown
+// decision word (e.g. a stale `escalate`) — the driver coerces a no-outcome sizer turn to split.
 export function parseSizerDecision(line: string): SizerOutcome | null {
   const m = /^\s*SIZER:\s*(single|split)\s*\/\s*(\d+)\s*\/\s*(\d*\.?\d+)\s*$/i.exec(line);
   if (!m) return null;

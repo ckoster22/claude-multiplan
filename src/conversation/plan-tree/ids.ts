@@ -7,9 +7,8 @@
 // ---- branded domain primitives (make the invalid representations uncompilable) ---------------
 
 // An absolute path PROVEN to come from a real plan-tree write — minted ONLY by the driver's wrapper
-// around the write command's returned path (orchestrator.ts). There is deliberately NO exported cast
-// helper: prose/summary TEXT can never flow into a `summaryPath` slot without failing tsc (the
-// text-as-path bug this brand eliminates).
+// around the write command's returned path (orchestrator.ts). No exported cast helper exists, so
+// prose/summary TEXT can never flow into a `summaryPath` slot without failing tsc.
 export type PlanTreeFilePath = string & { __brand: "PlanTreeFilePath" };
 
 // A sub-plan number, PROVEN to be an integer in 1–99 (the `NN-(plan|summary).md` two-digit on-disk
@@ -62,13 +61,12 @@ export function parsePathKey(s: string): NodePath {
 
 // ---- INV-2: typed plan-validation error -------------------------------------------------------
 
-// A RECOVERABLE decomposition-plan validation failure — a malformed master/decomposition DRAFT that
-// the user can fix by redrafting (zero `### Sub-Plan` headers, a header outside the 1-99 range, or an
-// empty children list reaching the nonEmpty boundary). Thrown by parseSubPlanHeaders (orchestrator)
-// and nonEmpty (here), discriminated by the orchestrator's `instanceof PlanValidationError` catch so
-// the held ExitPlanMode is DENIED for a redraft (the run stays active) instead of dispatching FATAL.
-// This is a TYPED discriminator, never a `message.startsWith(...)` string match: both the throwers
-// and the catch live in the same Vite frontend bundle, so the class identity is reliable.
+// A RECOVERABLE decomposition-plan validation failure — a malformed DRAFT the user can fix by
+// redrafting (zero `### Sub-Plan` headers, a header outside 1-99, or an empty children list reaching
+// nonEmpty). Thrown by parseSubPlanHeaders (orchestrator) and nonEmpty (here); the orchestrator's
+// `instanceof PlanValidationError` catch DENIES the held ExitPlanMode for a redraft instead of
+// FATALing. A TYPED discriminator, not a `message.startsWith(...)` match — thrower and catch share
+// the same Vite bundle, so class identity is reliable.
 export class PlanValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -85,10 +83,9 @@ export class PlanValidationError extends Error {
 // children list is unrepresentable at rest.
 export type NonEmptyArray<T> = readonly [T, ...T[]];
 
-// THE NonEmptyArray boundary: throws LOUDLY on an empty input (e.g. a decomposition that parsed
-// zero children) instead of letting an empty split exist. INV-2: this is a PlanValidationError — a
-// header-less decomposition that slips past parseSubPlanHeaders to here still denies-for-redraft (the
-// orchestrator's instanceof catch covers it) rather than FATALing the whole run.
+// THE NonEmptyArray boundary: throws LOUDLY on empty input instead of letting an empty split exist.
+// INV-2: a PlanValidationError — a header-less decomposition slipping past parseSubPlanHeaders to
+// here still denies-for-redraft (the orchestrator's instanceof catch) rather than FATALing the run.
 export function nonEmpty<T>(arr: readonly T[]): NonEmptyArray<T> {
   if (arr.length === 0) {
     throw new PlanValidationError("nonEmpty: array is empty — a split node must have at least one child");

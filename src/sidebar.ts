@@ -1,20 +1,7 @@
-// Sidebar PURE row-builders — the nested-hierarchy render leaves.
-//
-// Side-effect-free at import time (only function / interface declarations; no DOM-handle closure, no
-// module singleton). These pure builders depend only on their params + each other + `SidebarCtx` /
-// `PlanRecord` from `./types`. They emit LOAD-BEARING CSS class strings — copied verbatim from
-// main.ts (`contract.test.ts` / the golden snapshots pin them). The STATEFUL sidebar core
-// (`renderSidebar`, `buildFlatRow`, `buildMaster`, `applyFilterAndRender`, `makeSidebarCtx`,
-// `refreshList`, `resolveSelection`, `onToggleCollapse`, `currentRecords`, `highlightVisibleRows`,
-// `resetToEmptyPane`, `buildToc`) stays in main.ts — it reads `listState` / `selection` /
-// `collapseOverride` / `subCollapse` / the cwd subsystem / DOM handles, and `CONTRACT.md` forbids the
-// sidebar and reading-pane domains from importing each other (convergence only at main.ts).
-//
-// `SubTreeNode` is `export interface` here — the staying `renderSidebar` constructs `SubTreeNode`
-// literals, so main imports the type back (it was never in main's public export surface). main.ts
-// re-exports `placeholderVisible` + `initTabs` so their existing `./main` importers keep resolving
-// unchanged; the other movers main still uses (`applyRowState`, `relativeTime`, `buildPlaceholderRow`,
-// `renderSubTree`, `SubTreeNode`) are plain-imported back.
+// Sidebar PURE row-builders — nested-hierarchy render leaves. Side-effect-free at import time.
+// CSS class strings are LOAD-BEARING — pinned by contract.test.ts golden snapshots; do not rename.
+// CONTRACT.md forbids sidebar ↔ reading-pane imports (converge at main.ts only).
+// main.ts re-exports `placeholderVisible` + `initTabs` so their `./main` importers keep resolving unchanged.
 
 import type { PlanRecord, SidebarCtx } from "./types";
 
@@ -36,7 +23,6 @@ export function relativeTime(mtimeMs: number): string {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-// Apply the shared per-row classes/state and click → onOpen wiring to a `.plan` row.
 export function applyRowState(row: HTMLElement, rec: PlanRecord, ctx: SidebarCtx): void {
   row.dataset.path = rec.absolute_path;
   if (rec.unread) row.classList.add("unread");
@@ -46,11 +32,8 @@ export function applyRowState(row: HTMLElement, rec: PlanRecord, ctx: SidebarCtx
   });
 }
 
-// Build a compact sub row: `.plan.sub[data-path]` > `.plan-row` = `.seq`(FULL dotted nn_path,
-// e.g. "02.01") + title + unread dot ONLY (no cwd/timestamp). The seq label derives EXCLUSIVELY
-// from `nn_path` — NEVER from first-segment `nn` (labelling a "02.01" child by `nn` would render
-// a colliding duplicate "02" row). A null nn_path (legacy sub with no frontmatter nn) keeps the
-// pre-existing "00" placeholder.
+// Compact sub row: seq label derives from `nn_path` (e.g. "02.01"), NEVER from `nn`
+// (using `nn` for a "02.01" child would collide with the "02" master row). Null nn_path → "00".
 function buildSub(rec: PlanRecord, ctx: SidebarCtx): HTMLElement {
   const row = document.createElement("div");
   row.className = "plan sub";
@@ -78,18 +61,13 @@ function buildSub(rec: PlanRecord, ctx: SidebarCtx): HTMLElement {
   return row;
 }
 
-// Key for the SESSION-ONLY internal-node collapse map: tree_id + nn_path, NUL-joined so the two
-// segments can never collide with each other's content. Deliberately disjoint from the persisted
-// master collapse store (set_tree_collapsed) — internal-node collapse is never persisted.
+// SESSION-ONLY collapse key (tree_id + nn_path, NUL-joined). Not persisted (disjoint from set_tree_collapsed).
 function subCollapseKey(treeId: string, nnPath: string): string {
   return treeId + "\u0000" + nnPath;
 }
 
-// Build an INTERNAL sub node — a sub with nested dotted children. Mirrors buildMaster's
-// affordances on the compact sub row: a `.sub-node` wrapper holding the `.plan.sub` row (PLUS a
-// leading `.twirl` and a trailing per-node `.child-count` of its DIRECT children) and a nested
-// `.children` container. Collapse is session-only: the twirl mutates ctx.subCollapse and flips
-// the wrapper class directly (instant feedback, no backend call, no re-list).
+// Sub row with nested dotted children: `.sub-node` wrapper + `.twirl` + `.child-count` (direct children only)
+// + nested `.children`. Collapse is session-only — twirl mutates ctx.subCollapse and flips wrapper class directly.
 function buildInternalSub(
   rec: PlanRecord,
   directCount: number,
@@ -108,7 +86,7 @@ function buildInternalSub(
   // Disclosure twirl — its OWN listener stops propagation so toggling never also opens the sub.
   const twirl = document.createElement("span");
   twirl.className = "twirl";
-  twirl.textContent = "▾"; // ▾
+  twirl.textContent = "▾";
   twirl.addEventListener("click", (e) => {
     e.stopPropagation();
     const next = !(ctx.subCollapse.get(key) ?? false);
@@ -117,7 +95,7 @@ function buildInternalSub(
   });
   planRow.insertBefore(twirl, planRow.firstChild);
 
-  // Per-node "N sub-plans" count of DIRECT children only (singular at 1).
+  // "N sub-plan(s)" label — DIRECT children only, not all descendants.
   const count = document.createElement("span");
   count.className = "child-count";
   count.textContent = `${directCount} sub-plan${directCount === 1 ? "" : "s"}`;
@@ -131,17 +109,14 @@ function buildInternalSub(
   return { wrapper, children };
 }
 
-// A parsed sub-tree node for one master's run of sub records. `kids` is filled by the
-// prefix-stack walk below; a node renders INTERNAL iff it actually accumulated kids (so a
-// duplicate dotted id whose extensions attached to a LATER duplicate stays a plain leaf).
+// Sub-tree node; `kids` filled by the prefix-stack walk. A node is INTERNAL only if it has kids
+// (a duplicate dotted id whose extensions attached to a later duplicate stays a plain leaf).
 export interface SubTreeNode {
   rec: PlanRecord;
   kids: SubTreeNode[];
 }
 
-// Render one parsed sub-tree into `container`: leaves via buildSub (byte-identical to the flat
-// legacy shape — affordances appear ONLY when children exist), internal nodes via buildInternalSub
-// with their kids rendered recursively into the nested `.children`.
+// Recursively render the sub-tree: leaves via buildSub, internal nodes via buildInternalSub with kids into nested `.children`.
 export function renderSubTree(node: SubTreeNode, container: HTMLElement, ctx: SidebarCtx): void {
   if (node.kids.length === 0) {
     container.appendChild(buildSub(node.rec, ctx));
@@ -154,10 +129,8 @@ export function renderSubTree(node: SubTreeNode, container: HTMLElement, ctx: Si
   }
 }
 
-// Build the `.plan.placeholder` row for a live run with no real sidebar row yet (Bug A fix).
-// `.plan`-shaped (so it inherits row styling) but carries data-tree-id and NO data-path: there is
-// no file to open, so openPlan's `[data-path]` selection loop structurally cannot touch it. Click
-// routes to ctx.onPlaceholderOpen (flip to the Conversation tab + select the placeholder).
+// Placeholder row for a live run with no sidebar file yet. `.plan`-shaped but NO `data-path`
+// (so openPlan's `[data-path]` loop structurally cannot touch it). Click → ctx.onPlaceholderOpen.
 export function buildPlaceholderRow(
   ph: { treeId: string; label: string; selected: boolean },
   ctx: SidebarCtx,
@@ -187,10 +160,8 @@ export function buildPlaceholderRow(
   return row;
 }
 
-// THE SINGLE placeholder-visibility predicate (shared by renderSidebar AND applyFilterAndRender's
-// `.filter-empty` branch so the two sites cannot drift): the live-run placeholder renders only
-// while NO rendered record carries its tree_id — once the real row exists it takes over. EXPORTED
-// for unit tests.
+// Shared by renderSidebar AND applyFilterAndRender so both sites cannot drift.
+// Placeholder is visible only while no rendered record carries its tree_id. Exported for unit tests.
 export function placeholderVisible(
   ph: { treeId: string } | null,
   records: PlanRecord[],
@@ -198,9 +169,7 @@ export function placeholderVisible(
   return ph !== null && !records.some((r) => r.tree_id === ph.treeId);
 }
 
-// Wire tab switching: a click on a `.tab` makes it (and the matching `.tab-pane`) the only
-// active one. Toggling tabs is a pure view switch — it never rebuilds either pane's content.
-// EXPORTED so the toggle wiring is unit-testable against the real code.
+// Wire tab switching: click on `.tab` activates it + matching `.tab-pane`. Pure view switch — never rebuilds pane content. Exported for unit tests.
 export function initTabs(tabRowEl: HTMLElement, paneEls: HTMLElement[]): void {
   const tabs = Array.from(tabRowEl.querySelectorAll<HTMLElement>(".tab"));
   for (const tab of tabs) {

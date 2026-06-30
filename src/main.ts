@@ -85,12 +85,9 @@ import type {
 } from "./types";
 import { asAbsPath, asStem, cwdState, type AbsPath, type Stem } from "./types";
 // ---- Composition-root controllers (SP03) — pure, side-effect-free leaf modules -----------------
-// main.ts is the composition root: it imports the pure leaves these controllers own and wires them
-// to the module-level singletons / DOM handles / closures that necessarily STAY here (the staying
-// cores read `selection`/`orchSnapshot`/`runPlaceholder`/`pendingReviews`/the cwd subsystem/DOM
-// `let`s, which a pure leaf cannot). Imports are strictly one-directional main -> controller; the
-// controllers never import `./main`. The re-export shims below keep main's 24-symbol export surface
-// byte-stable so every existing `./main` test importer resolves unchanged.
+// main.ts is the composition root: wires pure leaf controllers to the module-level singletons /
+// DOM handles / closures that STAY here. Imports are one-directional (main → controller; controllers
+// never import ./main). Re-export shims below keep main's 24-symbol export surface byte-stable.
 import {
   applyRowState,
   relativeTime,
@@ -105,10 +102,8 @@ import { suppressConversationFlip, shouldClearPlaceholderOnExit } from "./run-su
 import { setHookStatus, echoCommentsText } from "./review-bar";
 import { chainHandler } from "./ipc";
 
-// Re-export shims — `export ... from` introduces NO local binding (the movers main uses internally
-// are plain-imported above IN ADDITION). These keep main's public export surface identical to
-// pre-SP03 (the 24-symbol set) so `src/chain.test.ts`, `src/contract.test.ts`, `src/main.*.test.ts`,
-// and the mock harness keep importing these symbols from `./main` unchanged.
+// Re-export shims — `export ... from` introduces no local binding (symbols are also plain-imported
+// above). Keeps main's 24-symbol export surface byte-stable for test importers.
 export { placeholderVisible, initTabs } from "./sidebar";
 export { computeAffordance } from "./resume-banner";
 export type { Affordance } from "./resume-banner";
@@ -134,31 +129,17 @@ let tocListEl: HTMLElement | null;
 let filterInputEl: HTMLInputElement | null;
 let filterClearEl: HTMLElement | null;
 let searchEl: HTMLElement | null;
-// Review action bar (non-occluding affordance docked in the reading-pane column header so inline
-// commenting in the pane stays fully usable). Shown whenever a review is pending (viewing OR
-// summary mode); see applyReviewBarState.
+// Review action bar (non-occluding, docked in the reading-pane header). Shown whenever a review
+// is pending (viewing OR summary); see applyReviewBarState.
 let reviewBarEl: HTMLElement | null;
 let reviewBarLabelEl: HTMLElement | null;
 let reviewSubmitEl: HTMLButtonElement | null;
-// exactly-once lock for the TWO sibling review actions (#review-submit and #review-approve).
-// One tri-state makes the "both in flight" combination unrepresentable: at most ONE action can be
-// dispatching at a time. Set to "submit"/"approve" the moment a branch commits to dispatching (after
-// its own validation guard, before its first await) and reset to "none" when the round-trip settles —
-// on EVERY exit path via try/finally (a guard-rejected click never sets it, so it can't stick). Both
-// sibling handlers early-return whenever it is not "none", so a fast double-click on EITHER button — or
-// a cross click (Approve then Submit, which act on the same gate with opposite decisions) — starts at
-// most ONE dispatch; this top-of-handler early-return IS the exactly-once invariant. Deliberate
-// asymmetry: ONLY "submit" drives refreshReviewBar's "submitting" visual lock (Submit disabled,
-// Approve hidden) via `submitInFlight: actionInFlight === "submit"`; "approve" is correctness-only —
-// it gates dispatch but feeds NO visual change into the bar derivation. (Mirrors the Affordance
-// string-union idiom below.)
-// Design rationale (NOT a state-constraining invariant — the type-level guarantee lives in
-// INVARIANT[action-in-flight-tristate] below): ActionInFlight is DELIBERATELY a command-dispatch lock
-// (none | submit | approve), NOT a RemoteData read — it has no data terminal (no success payload to
-// surface), and the submit-vs-approve identity is load-bearing (only "submit" drives the bar's
-// "submitting" visual lock), so the five-state RemoteData union does not fit and must not be reflexively
-// swapped in here. A blanket RemoteData migration that replaced this dispatch lock with a dead data
-// union would drop the submit/approve identity and the exactly-once early-return that depends on it.
+// Exactly-once dispatch lock for #review-submit and #review-approve. Set after a branch's
+// validation guard and before its first await; reset to "none" in try/finally on every exit.
+// Both handlers early-return if not "none" — the top-of-handler early-return IS the exactly-once
+// invariant. Only "submit" feeds the bar's "submitting" visual lock; "approve" is correctness-only.
+// ActionInFlight is a dispatch lock, NOT a RemoteData read — it has no success payload and the
+// submit/approve identity is load-bearing.
 // INVARIANT[action-in-flight-tristate] (type-level): at most one review action dispatches at a time — identity is the single union none | submit | approve, not two booleans.
 //   prevents: the "submit AND approve both in flight" state
 type ActionInFlight = "none" | "submit" | "approve";
@@ -170,70 +151,49 @@ let reviewApproveEl: HTMLButtonElement | null;
 // PHASE 6 — forced-acceptance REFINE button + its sub-plan picker — shown ONLY in ACCEPTANCE mode.
 let reviewRefineEl: HTMLButtonElement | null = null;
 let reviewRefineTargetEl: HTMLSelectElement | null = null;
-// The external Submit button's original descriptive label (captured from the DOM at wire-time so an
-// in-process review that relabeled it can be reverted exactly). Falls back to "Submit feedback".
+// External Submit button's label captured at wire-time so in-process relabels can be reverted.
 let REVIEW_SUBMIT_EXTERNAL_LABEL = "Submit feedback";
-// Visual-prototype review (Phase 4d): the bar's PROTOTYPE-mode controls. #prototype-feedback is the
-// inline refine-feedback textarea (Request changes requires non-empty text); #prototype-open opens
-// an HTML prototype in the default browser (visible only for kind "html"). Both are additive
-// `.review-bar-actions` children, hidden outside PROTOTYPE mode.
+// PROTOTYPE-mode controls: #prototype-feedback (refine textarea) and #prototype-open (browser;
+// visible only for kind "html"). Hidden outside PROTOTYPE mode.
 let prototypeFeedbackEl: HTMLTextAreaElement | null = null;
 let prototypeOpenEl: HTMLButtonElement | null = null;
-// Working-reference classification (Phase 3): the PROTOTYPE-mode checkbox + its label. UNCHECKED
-// (default) = "just a sketch" (today's approve behavior); CHECKED = "working reference" → approve
-// freezes .plan-tree/prototype/ → .plan-tree/baseline/ and records baseline_ on the ledger.
+// Working-reference checkbox: UNCHECKED = "just a sketch"; CHECKED = "working reference" →
+// approve freezes prototype/ → baseline/ and records baseline_ on the ledger.
 let prototypeWorkingRefEl: HTMLInputElement | null = null;
 let prototypeWorkingRefLabelEl: HTMLLabelElement | null = null;
-// #review-approve's default label ("Approve & Build"), captured at wire-time so PROTOTYPE mode's
-// relabel ("Approve visual" / "Proceed as-is") can be reverted exactly — same pattern as
-// REVIEW_SUBMIT_EXTERNAL_LABEL.
+// #review-approve's default label, captured at wire-time so PROTOTYPE mode's relabels revert exactly.
 let REVIEW_APPROVE_DEFAULT_LABEL = "Approve & Build";
-// #hook-status is retained: setHookStatus() surfaces review-response / save-for-review errors on it
-// (the titlebar Install/Remove plan-review hook buttons were removed — the app drives Claude in-process).
+// #hook-status: setHookStatus() surfaces review-response / save-for-review errors.
 let hookStatusEl: HTMLElement | null;
 
-// ---- Resume banner (Phase 5) — the LOWEST-precedence reading-pane affordance ------------------
-// #resume-banner is shown when the OPEN plan belongs to a NON-terminal `.plan-tree/` whose tree_id
-// matches the open plan and no orchestration is already active (detectResumable). It is a SEPARATE DOM
-// surface from the review bar (#review-bar), but per the precedence (prototype > acceptance
-// > review > resume) it is the LOWEST affordance: refreshAffordances suppresses it whenever the bar is
-// occupied by a higher one. #resume-plan-btn is the resumable-state control (label
-// "Resume — <phaseLabel>"); the banner shows a static muted message for blocked phases.
+// ---- Resume banner — the LOWEST-precedence reading-pane affordance ----------------------------
+// Shown when the open plan belongs to a non-terminal .plan-tree/ with no active orchestration.
+// Separate from the review bar; suppressed whenever a higher affordance occupies it.
 let resumeBannerEl: HTMLElement | null = null;
 let resumeBannerMsgEl: HTMLElement | null = null;
 let resumePlanBtnEl: HTMLButtonElement | null = null;
-// PHASE 3c — the HAZARDOUS-resume confirmation step. A resumable verdict whose plan carries
-// `requiresConfirm:true` (only leaf/executing today — edits may be partially applied) must not fire
-// resume() on the first click. Clicking #resume-plan-btn for a hazardous verdict reveals an inline
-// confirm row (#resume-confirm — the hazard text + Confirm/Cancel) instead of resuming; resume() only
-// fires after #resume-confirm-btn. #resume-cancel-btn aborts back to the one-click button. Non-hazardous
-// verdicts never show this row and keep their immediate one-click behavior.
+// HAZARDOUS-resume confirmation: a verdict with requiresConfirm:true reveals an inline confirm
+// row (#resume-confirm) instead of resuming immediately; resume() fires only from #resume-confirm-btn.
 let resumeHazardEl: HTMLElement | null = null;
 let resumeConfirmRowEl: HTMLElement | null = null;
 let resumeConfirmBtnEl: HTMLButtonElement | null = null;
 let resumeCancelBtnEl: HTMLButtonElement | null = null;
-// The resume context for the CURRENTLY-rendered resumable banner (cwd + parsed ledger), or null when
-// the banner is hidden / showing a blocked message. The #resume-plan-btn click reads this — it is set
-// by renderResumeBanner the moment a resumable verdict paints, and cleared on hide / blocked / success.
-// `requiresConfirm` rides through from the verdict's plan (leaf/executing → true): a true value gates
-// the click behind the inline confirm row; `hazard` is the human-readable risk note surfaced there.
+// Resume context for the currently-rendered resumable banner; null when hidden / blocked.
+// Set by renderResumeBanner when a resumable verdict paints, cleared on hide / blocked / success.
 let pendingResume: { cwd: string; ledger: RecursiveLedger; requiresConfirm: boolean; hazard: string | null } | null = null;
 
-// #toast (Phase 5): the lightweight non-blocking notice element + its auto-dismiss timer. showToast
-// is the sole writer of its text/`.hidden`. Currently used only for the `resume_fallback` frame.
+// #toast: lightweight non-blocking notice element + auto-dismiss timer.
 let toastEl: HTMLElement | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 // ---- reading-pane [Plan | Conversation] tab handles (hoisted to module scope) ----
-// Hoisted so switchToConversationTab / switchToPlanTab are module-level: main.ts OWNS the reading-pane
-// tab for the in-process review case (it flips to Plan on a held ExitPlanMode, and to Conversation on
-// Approve). Null under unit tests until the DOMContentLoaded wiring resolves them → the switchers no-op.
+// Hoisted so switchToConversationTab / switchToPlanTab are module-level (main.ts owns this tab
+// for the in-process review case). Null under unit tests → switchers no-op.
 let readerTabRowEl: HTMLElement | null = null;
 let tabPlanPaneEl: HTMLElement | null = null;
 let tabConversationEl: HTMLElement | null = null;
-// The conversation domain handle (assigned in the DOMContentLoaded .then() once initConversation
-// resolves; null until then and under unit tests). Hoisted to module scope so the module-level
-// reader-tab switchers can repaint the minimap when the Conversation pane becomes visible.
+// Assigned in DOMContentLoaded once initConversation resolves; null until then.
+// Hoisted so tab switchers can repaint the minimap when the Conversation pane becomes visible.
 let conversationHandle: ConversationHandle | null = null;
 
 // Switch the reading pane to the Conversation tab (used when an agent run starts/streams, and after
@@ -245,16 +205,12 @@ function switchToConversationTab(): void {
   }
   tabPlanPaneEl.classList.remove("active");
   tabConversationEl.classList.add("active");
-  // The Conversation pane just transitioned display:none → visible; nothing mutated the stream
-  // subtree, so rerender()/observers did not fire. Repaint the minimap with real geometry on the next
-  // frame (offsets are 0 until layout settles after the display toggle). Guarded: handle is null until
-  // initConversation resolves; refreshMinimap is a no-op when the minimap element is absent.
+  // Repaint the minimap on the next frame — offsets are 0 until layout settles after the display
+  // toggle. No-op if handle or minimap is absent.
   requestAnimationFrame(() => conversationHandle?.refreshMinimap());
 }
 
-// Mirror of switchToConversationTab: flip the reading pane to the Plan tab. Used by the in-process
-// ExitPlanMode handler — main.ts owns the tab for the review case (the conversation facade skips its
-// onActivity() for ExitPlanMode so this is not raced). Pure view switch.
+// Flip to the Plan tab. Used by the in-process ExitPlanMode handler. Pure view switch.
 function switchToPlanTab(): void {
   if (!readerTabRowEl || !tabPlanPaneEl || !tabConversationEl) return;
   for (const t of Array.from(readerTabRowEl.querySelectorAll<HTMLElement>(".tab"))) {
@@ -265,17 +221,12 @@ function switchToPlanTab(): void {
 }
 
 // ---- THE SIDEBAR SELECTION MODEL -------------------------------------------------
-// `selection` is the SINGLE source of truth for "what is the active reading-pane target", a closed
-// union so impossible combinations (a plan AND a sentinel open at once) are unrepresentable:
+// `selection` is the SINGLE source of truth for the active reading-pane target, a closed union:
 //   • none        — nothing open (the empty pane).
-//   • plan        — a real `.md` plan is open at `path` (the normal case; also a held gate's plan
-//                   and the __setOpenPathForMock in-process review demo).
-//   • sentinel    — a synthetic resume-sentinel row (`plan-tree-resume://<treeId>`) is open; no real
-//                   file behind it. `cwd` is the tree's cwd (display-incidental).
-//   • placeholder — the live-run placeholder row is the active selection (the run owns the pane;
-//                   the user has been flipped to the Conversation tab). No real file ⇒ openPath null.
-// `openPath` is a DERIVED, read-only getter over `selection` (see openPath()); it can never be
-// assigned — writers set `selection`, which is what keeps the union the sole truth.
+//   • plan        — a real `.md` plan open at `path`.
+//   • sentinel    — a synthetic resume-sentinel row; no real file (`cwd` display-incidental).
+//   • placeholder — the live-run placeholder is selected; no real file ⇒ openPath null.
+// `openPath` is a DERIVED read-only getter over `selection` — writers set `selection`, not `openPath`.
 // INVARIANT[selection-single-truth] (type-level): the reading-pane target is exactly one closed-union variant — none | plan | sentinel | placeholder.
 //   prevents: independent openPath/placeholder/sentinel flags drifting into a contradictory double-active state
 type Selection =
@@ -286,10 +237,8 @@ type Selection =
 
 let selection: Selection = { k: "none" };
 
-// The absolute path of the currently-open plan, DERIVED from `selection` (null when nothing real is
-// open: the `none` and `placeholder` variants have no file). A `sentinel` maps back to its synthetic
-// scheme path so every existing `isResumeSentinel(openPath())` guard keeps working. This is the ONE
-// reader the rest of the module consults; nobody assigns it (it is a function, not an lvalue).
+// DERIVED from `selection` — null for `none`/`placeholder`; sentinel maps to its scheme path.
+// The ONE reader the rest of the module consults; nobody assigns it (it is a function, not an lvalue).
 // INVARIANT[openpath-is-derived-never-assigned] (type-level): openPath is a pure function over `selection` (no backing field) — recomputed each call, never a stored lvalue writers can set.
 //   prevents: a stored openPath desyncing from the active selection
 function openPath(): AbsPath | null {
@@ -304,48 +253,31 @@ function openPath(): AbsPath | null {
   }
 }
 
-// ---- Phase 6 — Plan Review (ExitPlanMode hook) — Option A: open the REAL plan file ----
+// ---- Plan Review (ExitPlanMode hook) — the reviewed plan is a REAL file under ~/.claude/plans/ ----
+// Opens it through the normal plan-open flow (sidebar selected, comments persist, live-reload works).
+// "Viewing a review" is derived: openPath === pendingReview.planFilePath. Browsing away drops to
+// SUMMARY mode — a pending review never traps navigation.
 //
-// A plan review carries a BLOCKING PreToolUse hook; the app can only RELEASE it (decision "allow" →
-// Claude Code shows its normal terminal plan-approval prompt) or DENY it with feedback (decision
-// "deny" + assembled comments → Claude revises). There is no in-app auto-approve.
-//
-// NEW MODEL (the invariant fix): the reviewed plan is a REAL file under `~/.claude/plans/` (its
-// absolute path rides on the review payload as `planFilePath`). A review now OPENS THAT FILE through
-// the NORMAL plan-open flow, so it is SELECTED in the sidebar, its comments persist with the plan
-// (keyed on its real path — no special store), and live-reload works. The review just adds an action
-// bar + tracks that this plan has a pending blocking hook.
-//
-//   pendingReviews — every known pending review (each has a live blocking hook). Keyed by reviewId.
-//                    Holds the plan file path (what we open) + planText (degraded fallback render).
-//
-// "Viewing a review" is a DERIVED condition: openPath equals some pending review's planFilePath.
-// Browsing to another plan never touches pendingReviews — the bar simply drops to SUMMARY mode, so a
-// pending review never traps navigation.
+//   pendingReviews — keyed by reviewId. Holds planFilePath (what we open) + planText (fallback).
 interface PendingReview {
   reviewId: string;
   planFilePath: string;
   planText: string;
   createdMs: number;
   // ---- in-process review support ----------------------------------------------
-  // Which review surface this came from. "external" = a settings.json ExitPlanMode hook review
-  // routed through the file-IPC path (respond_to_review). "in-process" = the in-app Agent SDK
-  // canUseTool seam (resolve_tool_permission). planFilePath holds the REAL written plan path for
-  // BOTH (in-process plans are materialized to ~/.claude/plans/ via write_agent_plan).
+  // "external" = settings.json ExitPlanMode hook (respond_to_review).
+  // "in-process" = Agent SDK canUseTool seam (resolve_tool_permission). planFilePath is the REAL
+  // written path for both (in-process plans are materialized to ~/.claude/plans/).
   source: "external" | "in-process";
-  // The SDK toolUseID to round-trip on resolve_tool_permission (in-process only; matches the
-  // tool-permission-requested payload's `id`). Undefined for external reviews.
+  // SDK toolUseID to round-trip on resolve_tool_permission (in-process only). Undefined for external.
   toolUseId?: string;
-  // The originating subagent id (or null for the main agent). Captured for diagnostics ONLY — the
-  // hold/resolve NEVER branch on it, so a subagent plan blocks + resolves identically (round-tripping
-  // the same toolUseId). Undefined for external reviews.
+  // Originating subagent id (for diagnostics only — hold/resolve never branch on it). Undefined for external.
   agentId?: string | null;
 }
 const pendingReviews = new Map<string, PendingReview>();
 
-// The reviewId whose planFilePath === the currently-open plan, or null when the open plan is not a
-// pending review (this is the single derivation of "viewing a review"). On ties (same path tracked
-// by >1 review — should not happen) the last-iterated (newest-inserted) wins.
+// The reviewId whose planFilePath === the currently-open plan, or null (the single derivation of
+// "viewing a review"). On ties, the last-iterated (newest-inserted) wins.
 function currentReviewId(): string | null {
   const op = openPath();
   if (op === null) return null;
@@ -356,25 +288,16 @@ function currentReviewId(): string | null {
   return match;
 }
 
-// the latest PlanTreeSnapshot2 from the shared orchestrator's observer (null until a run
-// is active / after it ends). The gate controller derives the approval bar from this — it holds the
-// active node's pendingApproval gate while a node awaits the user's approval.
+// Latest snapshot from the shared orchestrator (null until a run is active, null after it ends).
+// Holds the active node's pendingApproval gate while the user reviews.
 let orchSnapshot: PlanTreeSnapshot2 | null = null;
 
-// ---- Live-run placeholder sidebar row (Bug A fix) ---------------------------------------------
-// A running orchestration has NO sidebar row until the agent writes its plan file (and list_plans
-// can lag the write), so the sidebar highlight would land on nothing/the wrong row while the pane
-// shows the conversation. `runPlaceholder` is the live-run ROW descriptor (treeId + label), keyed by
-// the run's treeId (set on the first snapshot of each run); the sidebar renders it as a
-// `.plan.placeholder` row whenever no rendered record carries that tree_id. It is ORTHOGONAL to
-// `selection`: the row can be visible while a DIFFERENT real plan is the active selection (e.g. the
-// user browses another plan mid-run), so it cannot be folded into the union.
-//
-// The placeholder's `.active` (SELECTED) half — formerly the parallel `placeholderSelected` flag — is
-// now FOLDED into `selection`: the placeholder is selected iff `selection.k === "placeholder"` (set on
-// a fresh-run mint when nothing real is open, and on a placeholder click). The OTHER half — "a held
-// gate's plan is open but its row is missing" — is still derived live in makeSidebarCtx
-// (standsInForOpenGatePlan). `placeholderSelected()` reads the folded flag for the run's tree.
+// ---- Live-run placeholder sidebar row (Bug A fix) -----------------------------------------------
+// A running orchestration has no sidebar row until list_plans picks up the plan file. `runPlaceholder`
+// (treeId + label) is rendered as a `.plan.placeholder` row when no real record has its treeId.
+// ORTHOGONAL to `selection`: the row can be visible while a DIFFERENT plan is selected.
+// The placeholder's SELECTED state is folded into `selection` (k === "placeholder") rather than a
+// parallel boolean; `placeholderSelected()` reads it.
 let runPlaceholder: { treeId: string; label: string } | null = null;
 // INVARIANT[placeholder-selected-folded-into-selection] (type-level): the placeholder is "selected" iff `selection.k === "placeholder"` for the current run — read off the union, with no parallel boolean.
 //   prevents: a "placeholder selected AND a real plan open" double-active state
@@ -382,13 +305,8 @@ function placeholderSelected(): boolean {
   return selection.k === "placeholder" && selection.treeId === (runPlaceholder?.treeId ?? null);
 }
 
-// THE SINGLE GATE DERIVATION (gen-2 unified gate): the held ApprovalGate2 the user is currently
-// VIEWING, or null. The root decomposition gate lives IN pendingApproval now (the gen-1 master-phase
-// keying + masterGatePlanPath + the viewingMasterGate/viewingOrchestratorGate pair are GONE) — one
-// derivation covers decomposition AND leaf gates. Every bar derivation (count, viewing, source) and
-// the button routing consult it so they all agree; routing by gate.kind happens INSIDE the
-// orchestrator's approve()/requestChanges(), not here. The gate's planPath is an absolute path;
-// openPath is already branded AbsPath.
+// The held ApprovalGate2 the user is currently viewing (null otherwise). One derivation covers
+// decomposition AND leaf gates. Routing by gate.kind happens inside the orchestrator, not here.
 function viewingGate(): ApprovalGate2 | null {
   if (!isOrchestrationActive()) return null;
   const gate = orchSnapshot?.pendingApproval ?? null;
@@ -396,34 +314,23 @@ function viewingGate(): ApprovalGate2 | null {
   return openPath() === asAbsPath(gate.planPath) ? gate : null;
 }
 
-// Visual-prototype gate (Phase 4d): the held PrototypeGate driving the bar's PROTOTYPE mode, or
-// null. Derived STRICTLY from the orchestrator snapshot (pendingPrototype) — never module state —
-// so the gate SELF-CLEARS: approvePrototype()/refinePrototype() null pendingPrototype in the
-// reducer and the very next onSnapshot → refreshReviewBar() reverts the bar with no bookkeeping.
-// Precedence lives in the pure prototypeGateActive: a held pendingApproval beats the prototype
-// gate; the prototype gate beats the pendingReviews surfaces.
+// The held PrototypeGate driving the bar's PROTOTYPE mode, or null. Derived strictly from the
+// orchestrator snapshot (self-clears when pendingPrototype is nulled). Precedence: pendingApproval
+// outranks this; this outranks pendingReviews.
 function activePrototypeGate(): PrototypeGate | null {
   return prototypeGateActive(orchSnapshot, isOrchestrationActive());
 }
 
-// PHASE 5 — the held forced-acceptance gate driving the bar's ACCEPTANCE mode, or null. Derived
-// STRICTLY from the orchestrator snapshot (pendingAcceptance) — never module state — so it
-// self-clears: approveAcceptance()/divergeAcceptance() null pendingAcceptance in the reducer and the
-// very next onSnapshot → refreshReviewBar() reverts the bar. Precedence (pure acceptanceGateActive):
-// pendingApproval and pendingPrototype both outrank the acceptance gate (it is a post-completion
-// hold; those are mid-run interactive holds).
+// The held AcceptanceGate driving the bar's ACCEPTANCE mode, or null. Derived strictly from the
+// orchestrator snapshot (self-clears when pendingAcceptance is nulled). Precedence: pendingApproval
+// and pendingPrototype both outrank it.
 function activeAcceptanceGate(): AcceptanceGate | null {
   return acceptanceGateActive(orchSnapshot, isOrchestrationActive());
 }
 
-// the SOURCE of the review currently being viewed (external vs in-process). MUST read
-// the SAME matched review currentReviewId() resolved (never re-iterate independently), so the bar's
-// source-aware affordances (#review-approve / submit label) always agree with the resolve dispatch.
-// Defaults to "external" when nothing is being viewed.
-//
-// the orchestrator approval gate is ALSO an in-process review surface (Approve & Build +
-// "Request changes"), but it is NOT tracked in pendingReviews. Return "in-process" when viewing it so
-// every consumer — both source checks in refreshReviewBar — agrees from this one source of truth.
+// Source of the currently-viewed review. Reads from the same matched review currentReviewId()
+// resolved; defaults to "external" when nothing is viewed. Returns "in-process" when viewing the
+// orchestrator approval gate (which is not tracked in pendingReviews).
 function currentReviewSource(): "external" | "in-process" {
   if (viewingGate() !== null) return "in-process";
   const id = currentReviewId();
@@ -431,18 +338,13 @@ function currentReviewSource(): "external" | "in-process" {
   return pendingReviews.get(id)?.source ?? "external";
 }
 
-// ---- PendingSurface[]: the unified set of "things awaiting the user" -------------
-// Every distinct pending review surface, in ONE list, so `pendingCount` (the SUMMARY-mode "N plans
-// awaiting review") and `resumeNewestReview` (the #review-resume button) derive from the SAME source
-// and can never disagree:
-//   • external / in-process — the tracked pendingReviews (each a held blocking hook / canUseTool seam).
+// ---- PendingSurface[]: the unified set of "things awaiting the user" -------------------------
+// One list so pendingCount and resumeNewestReview derive from the same source:
+//   • external / in-process — tracked pendingReviews (held hooks / canUseTool seams).
 //   • orchestrator-gate     — the live run's held ApprovalGate2 (NOT in pendingReviews).
 //   • prototype / acceptance — the live run's held visual/forced-acceptance gates.
-// The gate surfaces are derived through the SAME precedence-encoded helpers the bar uses
-// (activePrototypeGate / activeAcceptanceGate yield null while a higher gate is held), so at most one
-// gate surface is ever present — keeping `pendingSurfaces().length` identical to the legacy
-// `pendingReviews.size + orchGatePending` at the one site refreshReviewBar reads it (where, by
-// precedence, no prototype/acceptance gate is held).
+// Gate surfaces use the same precedence helpers (activePrototypeGate / activeAcceptanceGate),
+// so at most one gate surface is ever present.
 type PendingSurface =
   | { kind: "external" | "in-process"; review: PendingReview }
   | { kind: "orchestrator-gate"; gate: ApprovalGate2 }
@@ -463,65 +365,44 @@ function pendingSurfaces(): PendingSurface[] {
   return surfaces;
 }
 
-// Test-only reader: the open plan's comment count (the review's comments are just the plan's
-// comments now). Kept under the old name so existing review assertions still read it.
+// Test-only: the open plan's comment count (kept under the old name for existing assertions).
 export function reviewCommentCount(): number {
   return currentReviewId() === null ? 0 : unwrapOr(commentCount, 0);
 }
 
-// Test-only: clear ALL review state (pending reviews). Module state persists across tests in a
-// vitest file, so this gives each test a clean slate. Production code never calls it.
-// IMMOVABLE (SP03): stays in main — it spans multiple controllers' singletons (pendingReviews /
-// selection / orchSnapshot / runPlaceholder / pendingResume / actionInFlight), so there is no single
-// owner module to relocate it to.
+// Test-only: clear all review state. IMMOVABLE (SP03) — spans pendingReviews / selection /
+// orchSnapshot / runPlaceholder / pendingResume / actionInFlight.
 export function __resetReviewStateForTest(): void {
   pendingReviews.clear();
-  // Also reset the selection: module state persists across tests in a vitest file, so a plan
-  // left open by a prior test could make currentReviewId() spuriously match a new review on the same
-  // path (the "already viewing → don't yank" branch), breaking the next test's open. Production never
-  // calls this. (openPath is a getter over selection — resetting selection clears it.)
+  // Reset selection to clear stale openPath/currentReviewId() for the next test.
   selection = { k: "none" };
-  // drop any orchestrator gate snapshot so a leaked pendingApproval from a prior test
-  // cannot spuriously drive the bar into "viewing the orchestrator gate" for the next test.
+  // Drop leaked orchestrator gate snapshot.
   orchSnapshot = null;
-  // Bug A fix: drop any leaked live-run placeholder so a prior test's run can't paint a phantom
-  // `.plan.placeholder` row (or steal `.active`) in the next test. (selection=none above already
-  // drops any folded placeholder-selected state.)
+  // Drop leaked placeholder (selection=none above already clears placeholder-selected state).
   runPlaceholder = null;
-  // Phase 5: drop any leaked resume context so a prior test's resumable verdict can't drive the
-  // #resume-plan-btn click in the next test.
+  // Drop leaked resume context.
   pendingResume = null;
-  // clear any leaked in-flight submit lock so a prior test that did not flush the round-trip
-  // cannot leave the next test's Submit stuck disabled / its top-of-handler early-return tripping.
+  // Clear leaked in-flight lock so the next test's Submit isn't stuck disabled.
   actionInFlight = "none";
 }
 
-// Test-only: install a live-run placeholder + its selection so tests can drive the module-level
-// render paths (applyFilterAndRender's `.filter-empty` branch reads this state through
-// makeSidebarCtx). Production code never calls it — the placeholder is minted exclusively by the
-// orchestrator's onSnapshot observer.
+// Test-only: install a live-run placeholder + selection for testing applyFilterAndRender paths.
 export function __setRunPlaceholderForTest(
   ph: { treeId: string; label: string } | null,
   selected: boolean,
 ): void {
   runPlaceholder = ph;
-  // `placeholderSelected` is folded into `selection`: a selected placeholder IS the selection. A
-  // deselect (or a null row) drops only a STALE placeholder selection — it must not clobber a real
-  // plan/sentinel a prior test left open (preserves the seam's external behavior).
+  // A selected placeholder IS the selection (folded). A deselect drops only a stale placeholder
+  // selection — must not clobber a real plan/sentinel left open by a prior test.
   if (selected && ph !== null) selection = { k: "placeholder", treeId: ph.treeId };
   else if (!selected && selection.k === "placeholder") selection = { k: "none" };
 }
 
-// Mock/automation hook: force a tree fully EXPANDED and repaint the sidebar. Clears any SESSION
-// collapse intent for the master (collapseOverride) and for every internal sub node of the tree
-// (subCollapse), so the master AND its decomposition (dotted) nodes render open regardless of a
-// prior user collapse this session. Production never calls this -- the deck's nested-plan preset
-// uses it so the user lands on a fully-expanded, explorable tree. Repaints via applyFilterAndRender
-// (the same path refreshList uses), so the new expand state is visible immediately.
+// Mock/automation hook: force a tree fully expanded. Clears session collapse intent
+// (collapseOverride for the master + all subCollapse entries), then repaints via applyFilterAndRender.
 export function __expandTreeForMock(treeId: string): void {
   collapseOverride.set(treeId, false);
-  // Drop every subCollapse entry for this tree (subCollapseKey joins tree_id + NUL + nn_path), so
-  // all internal dotted nodes (e.g. the "04" decomposition parent) render expanded too.
+  // Drop all subCollapse entries for this tree (key = tree_id + NUL + nn_path).
   const prefix = treeId + "\u0000";
   for (const key of Array.from(subCollapse.keys())) {
     if (key.startsWith(prefix)) subCollapse.delete(key);
@@ -529,121 +410,60 @@ export function __expandTreeForMock(treeId: string): void {
   applyFilterAndRender();
 }
 
-// Mock/automation hook (review2 c5): set the module-level `openPath` WITHOUT re-rendering the reading
-// pane. The mock-ANIMATE player renders the reading pane DIRECTLY through the render facade
-// (readPlan → renderInto → applyComments) and never routes through openPlan(), so main.ts's `openPath`
-// stays null/stale during the demo. But the IN-PROCESS review bar's VIEWING derivation
-// (viewingGate(): openPath === gate.planPath; currentReviewId(): r.planFilePath === openPath) compares
-// the held gate's planPath against THIS openPath — so without it the gate is seen as a review of a
-// DIFFERENT plan → SUMMARY mode ("N plans awaiting review" + external "Submit feedback"), not the
-// in-process "Request changes" VIEWING bar. This setter aligns openPath with the plan the player has
-// rendered, so viewingGate() matches WITHOUT a re-render (the freshly-applied comment highlights
-// survive). Production never calls this — production sets `selection` through openPlan(). `path: null`
-// clears it (the gate clears / the pane closes). Sets the `plan` variant (the demo always aligns to a
-// real materialized plan file); openPath() then derives the path the gate's VIEWING check compares.
+// Mock/automation hook: set `selection` (and thus openPath) WITHOUT re-rendering the pane. The mock
+// ANIMATE player renders the pane directly via renderInto, so openPath stays stale; this setter
+// aligns it so viewingGate()/currentReviewId() match the gate's planPath. Production always uses openPlan().
 export function __setOpenPathForMock(path: string | null): void {
   selection = path === null ? { k: "none" } : { k: "plan", path: asAbsPath(path) };
 }
 
 // ---- Sidebar filter ----
-// The live filter query (raw input value). The Plans tab renders
-// `filterRecords(currentRecords(), filterQuery)`; the Contents tab is never filtered. Held at module
-// scope so a late cwd patch can re-run the filter (keeping highlights/matches alive) without a fresh
-// `list_plans` round-trip. The records themselves live SOLELY in `listState` (read via
-// currentRecords()) — there is no parallel records copy to drift out of sync.
+// Live filter query. Held at module scope so a late cwd patch can re-run the filter without a
+// list_plans round-trip. Records live solely in listState (read via currentRecords()).
 let filterQuery = "";
 
-// The sidebar plan-list read modeled as a five-state RemoteData (see src/remote-data.ts). It is the
-// state the sidebar render folds through (applyFilterAndRender via `foldRemoteData`/match). The
-// `list_plans` read is BOTH a one-shot initial load AND a continuously file-watched feed, so the
-// lifecycle is split:
-//   • INITIAL load (listState is `initial`): drives the full lifecycle initial -> fetching ->
-//     success | zeroResults | error.
-//   • IN-PLACE refresh (a watcher tick when a list already loaded): must NOT revert the rendered list
-//     to `fetching`, and must NOT flash a spurious `zeroResults` — the new state is the authoritative
-//     parse of the freshly-resolved array (success data replaced in place; a genuinely empty result is
-//     the only `zeroResults`). See INVARIANT[list-refresh-no-fetching-flash] in refreshList.
-// `listState` is the SOLE store of the records — there is no parallel module-level records array. Every
-// reader (the by-path lookups and the cwd late-patch) goes through `currentRecords()`, which returns
-// `success.data` directly (the same array reference the fold renders), so an in-place cwd patch that
-// mutates those records is seen by the fold and there is no second copy to drift out of sync.
+// Sidebar plan-list as a five-state RemoteData. The lifecycle is split:
+//   • INITIAL load (listState `initial`): drives initial → fetching → success | zeroResults | error.
+//   • IN-PLACE refresh: must NOT revert to `fetching` or flash `zeroResults`. See INVARIANT[list-refresh-no-fetching-flash].
+// Sole store of the records (no parallel array). All readers use currentRecords().
 let listState: RemoteData<PlanRecord[]> = initial();
 
-// The single accessor for the rendered records. Unwraps `listState`'s `success` payload — the SAME
-// array reference the fold renders and the cwd late-patch mutates — or `[]` for every non-success
-// state (initial/fetching/zeroResults/error). `listState` is the single source of truth; this is the
-// only way the rest of main.ts reads the records.
+// Unwraps listState's success payload (same array reference the fold renders and cwd late-patch
+// mutates), or [] for non-success states.
 function currentRecords(): PlanRecord[] {
   return unwrapOr(listState, []);
 }
 
-// The open plan's comments are modeled as a PATH-KEYED RemoteData<CommentRecord[]> per plan path,
-// owned by the comments facade (src/render/comments.ts) — the SINGLE source of truth that the render
-// path actually consumes. main.ts holds no second comment-list model: it wires the facade's IO and
-// reads comments back through the facade. (The scalar comment COUNT below is a separate model.)
+// PATH-KEYED RemoteData<CommentRecord[]> per plan path is owned by the comments facade
+// (src/render/comments.ts). main.ts wires the facade's IO; no second comment-list model lives here.
 
-// Monotonic render-generation guard. Every open/reload of the pane takes a token at its
-// start; after each `await` it bails if a newer render has begun, so only the most-recent
-// open/reload mutates the pane (no stale render landing after its successor under bursts).
+// Monotonic render-generation guard — bails post-await if a newer render has begun.
 const renderGuard = new RenderGuard();
 
 // ---- comment count (backend is the single source of truth) ----
-// The backend owns the count; main.ts reads it via a command (never the DOM). The count drives the
-// review bar's VIEWING label + Submit-enabled state (refreshReviewBar) — the former titlebar
-// "Prompt Feedback" button that also surfaced it has been removed; commenting now goes through the
-// conversation composer + review bar.
-//
-// Held as a ScalarRemoteData<number> (see src/remote-data.ts), but only TWO of its variants are ever
-// stored here: `initial()` until the first load completes, then `success(n)` thereafter (an EMPTY
-// plan is `success(0)`, NEVER zeroResults — a scalar read has no empty state). The `fetching` and
-// `error` variants are NEVER assigned to this holder — grep confirms the only writes are
-// `success(...)` (applyCommentCount / refreshCommentCount) and the `initial()` seed: a load in flight
-// is not modeled (the count is only ever replaced by its resolved value), and a failed read is a
-// NO-OP that PRESERVES the last-good `success(n)` (refreshCommentCount's fold logs the error and
-// returns without touching this holder), so the bar keeps the last known count instead of resetting
-// to 0, matching the pre-RemoteData catch-only behavior. The numeric leaf consumers
-// (currentCommentCount / reviewCommentCount / refreshReviewBar's viewedCommentCount) unwrap it with a
-// 0 fallback, so the displayed count for an unloaded plan stays 0 exactly as before.
+// Held as a ScalarRemoteData<number>; only `initial()` and `success(n)` are ever stored
+// (a failed read is a no-op preserving the last-good count). Consumers unwrap with a 0 fallback.
 let commentCount: ScalarRemoteData<number> = initial();
 
-// Latest-wins request sequence. refreshCommentCount is fired un-awaited from open
-// (openPlan), reload (reloadOpenPlan), and onCommentCountChanged — concurrent/bursty calls can
-// resolve out of order. Each call takes a fresh `seq = ++countReqSeq` before its await and bails
-// after if a newer call has begun. This defends BOTH the cross-plan A→B case (a slow get_comment_count
-// for A resolving after B is open) AND the same-plan A→A bursty-reload reorder (an earlier request
-// resolving last). Strictly stronger than capturing openPath.
+// Latest-wins sequence counter for refreshCommentCount. Each call takes `seq = ++countReqSeq`
+// before its await and bails if a newer call has begun (guards cross-plan A→B and bursty reorders).
 let countReqSeq = 0;
 
-// Commit-IF-CURRENT: apply an AUTHORITATIVE count for `path` synchronously to commentCount. This is
-// the path used by onCommentCountChanged after an in-session save/clear: the facade hands us the
-// MUTATED path + post-mutation count (the just-mutated cache array's length) so we do NOT cold-re-read
-// get_comment_count — at fire time the backend write (set_comments) may not have landed yet, so a
-// cold read would race it and return a stale 0.
-//
-// PLAN-AWARE guard (cross-plan race fix): a mutation's IPC can still be in flight when the user
-// switches plans, so a FOREIGN-plan callback (e.g. a late clear-all for the plan we just left) can
-// fire while a different plan is open. Such a callback must be a TOTAL no-op: it must NOT touch the
-// count (it would be the wrong plan's) and — critically — must NOT bump countReqSeq, or it would
-// strand the open plan's own in-flight cold refresh (whose seq would then be stale and bail). So we
-// commit (and bump seq) ONLY when `path` is the currently-open plan. When it matches, the seq bump
-// makes this synchronous commit the newest request, so an in-flight same-plan cold read bails
-// instead of clobbering it (preserving latest-wins).
+// Commit-IF-CURRENT: apply an authoritative count synchronously. Used by onCommentCountChanged after
+// an in-session save/clear (the facade already has the post-mutation count; no cold re-read needed).
+// Foreign-plan callbacks (path ≠ openPath) are a total no-op — must not touch the count or bump
+// countReqSeq (which would strand the open plan's own in-flight cold refresh).
 function applyCommentCount(path: AbsPath, count: number): void {
   if (path !== openPath()) return; // foreign-plan callback: ignore entirely (no commit, no seq bump).
   ++countReqSeq;
   commentCount = success(count);
-  // If the open plan IS a pending review, the bar's VIEWING label + Submit-enabled state derive from
-  // this count — re-derive so the first comment enables Submit. Pass the authoritative count (commentCount
-  // is already committed, but be explicit to mirror the override contract).
+  // Re-derive the bar so a pending review's VIEWING count is up to date.
   refreshReviewBar(count);
 }
 
-// Cold-read the open plan's comment count from the backend (the count-path that works even when
-// the array isn't loaded frontend-side — used on OPEN/RELOAD). The latest-wins seq guard ensures
-// only the most-recent request commits to commentCount. After an in-session save/clear the count is
-// delivered authoritatively via onCommentCountChanged → applyCommentCount (NOT this cold read),
-// because the backend write may not be observed yet at fire time. EXPORTED so the count plumbing is
-// unit-testable.
+// Cold-read the open plan's comment count (used on OPEN/RELOAD). Latest-wins seq guard applies.
+// After an in-session save/clear the count arrives via onCommentCountChanged → applyCommentCount
+// instead (backend write may not be observed yet). EXPORTED for unit tests.
 export async function refreshCommentCount(): Promise<void> {
   // Short-circuit: nothing open ⇒ count is known to be 0 (no await needed; no stale landing to guard).
   const op = openPath();
@@ -653,10 +473,7 @@ export async function refreshCommentCount(): Promise<void> {
     return;
   }
   const seq = ++countReqSeq;
-  // Parse the scalar read at the boundary into a ScalarRemoteData<number>: a resolved read is
-  // success(n) — an empty count is success(0), NEVER zeroResults — and a rejected read is error(e).
-  // (console.error stays in the catch so a failed read logs the raw error object exactly as before,
-  // regardless of staleness.)
+  // Parse at the boundary: a resolved read is success(n) (never zeroResults); rejected is error(e).
   let result: ScalarRemoteData<number>;
   try {
     result = success(await invoke<number>("get_comment_count", { path: op }));
@@ -664,11 +481,7 @@ export async function refreshCommentCount(): Promise<void> {
     console.error("get_comment_count failed", e);
     result = failure(String(e));
   }
-  // A newer refresh (or an authoritative applyCommentCount) began while this one was in flight —
-  // drop this stale landing so it cannot overwrite the newer count (cross-plan A→B, same-plan A→A
-  // bursty-reorder, AND a fresh in-session add whose authoritative count must not be re-read away).
-  // This is the freshness gate the RemoteData write must pass BEFORE it lands; freshness is NOT
-  // folded into RemoteData — this seq check is the supersession authority and is left untouched.
+  // Stale landing — a newer refresh or authoritative applyCommentCount began. Drop it.
   if (seq !== countReqSeq) return;
   matchScalar<number, void>(result, {
     // Unreachable for a just-awaited read; required only for exhaustiveness.
@@ -676,50 +489,36 @@ export async function refreshCommentCount(): Promise<void> {
     fetching: () => {},
     success: (n) => {
       commentCount = success(n);
-      // The open plan may BE a pending review — re-derive the bar so its VIEWING comment count is right.
+      // Re-derive the bar so a pending review's VIEWING count is right.
       refreshReviewBar(n);
     },
-    // Read failed — already logged above. As before, leave the last-good count in place (do NOT
-    // clobber commentCount) and do NOT re-derive the bar.
+    // Read failed (already logged). Leave last-good count in place; skip bar re-derive.
     error: () => {},
   });
 }
 
-// Test-only reader for the stashed count. Unwraps the RemoteData holder to a number (0 when never
-// loaded / fetching / error — the same value the bar derives from), preserving its pre-RemoteData
-// numeric contract.
+// Test-only: unwraps the comment count to a number (0 when unloaded/fetching/error).
 export function currentCommentCount(): number {
   return unwrapOr(commentCount, 0);
 }
 
 // ---- Review action bar (persistent, non-occluding, resumable) ----
-//
-// The slim bar docked in the reading-pane header is shown whenever one or more reviews are pending.
-// It has two modes (pure derivation in applyReviewBarState):
-//   • VIEWING  — the OPEN plan IS a pending review's plan file: Submit (deny + feedback, enabled
-//                with >=1 comment). In-process reviews also show Approve & Build (#review-approve).
-//   • SUMMARY  — reviews pending but the user is browsing a non-reviewed plan: count label + Resume
-//                only, so a pending review never traps navigation.
-//
-// `viewing` is the DERIVED condition currentReviewId() !== null. `viewedCommentCount` is the OPEN
-// plan's comment count (review comments are now the plan's normal persisted comments).
-// IMMOVABLE (SP03): stays in main — derives off the module singletons pendingReviews / commentCount /
-// selection and the #review-bar DOM handle; the pure derivation already lives in src/review.ts
-// (applyReviewBarState). Only its two stray pure leaves (setHookStatus / echoCommentsText) relocated.
+// Two modes (pure derivation in applyReviewBarState):
+//   • VIEWING  — the open plan is a pending review: Submit (enabled with ≥1 comment). In-process
+//                reviews also show Approve & Build.
+//   • SUMMARY  — reviews pending but user is browsing elsewhere: count + Resume only.
+// IMMOVABLE (SP03): derives off pendingReviews / commentCount / selection and the #review-bar DOM.
 function refreshReviewBar(countOverride?: number): void {
   if (!reviewBarEl) return;
-  // ---- PROTOTYPE mode (Phase 4d) — precedence: pendingApproval gate > prototype gate > -------
-  // pendingReviews. activePrototypeGate() already yields null while pendingApproval is held, so
-  // reaching this branch means the prototype gate is the highest-precedence pending surface.
+  // PROTOTYPE mode — pendingApproval outranks prototype (activePrototypeGate() yields null while
+  // it's held), so reaching here means prototype is the highest-precedence pending surface.
   const protoGate = activePrototypeGate();
   if (protoGate !== null) {
     applyPrototypeBar(protoGate);
     return;
   }
-  // ---- ACCEPTANCE mode (Phase 5) — precedence: pendingApproval > prototype > ACCEPTANCE > --------
-  // pendingReviews. acceptanceGateActive() yields null while either higher gate is held, so reaching
-  // here with a non-null gate means the forced acceptance gate is the highest-precedence pending
-  // surface (the run is built; the user must record a verdict against the frozen baseline).
+  // ACCEPTANCE mode — both higher gates outrank it; reaching here with a non-null gate means it is
+  // the highest-precedence pending surface.
   const acceptGate = activeAcceptanceGate();
   if (acceptGate !== null) {
     applyAcceptanceBar(acceptGate);

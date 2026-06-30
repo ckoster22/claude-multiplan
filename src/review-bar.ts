@@ -1,19 +1,11 @@
-// Review-bar STRAY PURE leaves — a DOM status-setter + a comments-text formatter.
-//
-// Side-effect-free at import time (only function declarations; no DOM-handle closure). `setHookStatus`
-// takes its target element as a PARAMETER (it does NOT close over main.ts's module-level
-// `hookStatusEl`), so it is a pure leaf. The stateful review bar (`refreshReviewBar`,
-// `applyReviewBarState` from the existing pure `src/review.ts`) stays in main.ts — only these two
-// leaves move. main.ts re-exports `setHookStatus` so its `./main` importers keep resolving unchanged;
-// `echoCommentsText` was never in main's public export surface, so main imports it back directly.
+// Review-bar PURE leaves — DOM status-setter + comments-text formatter.
+// Side-effect-free at import time. `setHookStatus` takes its element as a parameter (no closure).
+// main.ts re-exports `setHookStatus` so its `./main` importers keep resolving unchanged; `echoCommentsText` is imported back directly.
 
 import type { CommentRecord } from "./types";
 
-// Build a STRUCTURED, human-readable echo of the plan-review comments the user submitted — one line
-// per comment showing the anchor quote and the comment text. This is what the user SEES (their own
-// words, attributed to them), NOT the wrapped buildFeedbackPrompt() output (that is the system text
-// the agent receives). A whole-pane comment (no anchor quote) shows the comment alone. Empty input
-// degrades to a bare "Requested changes" line so the bubble is never blank.
+// Human-readable echo of submitted comments (what the user SEES), NOT the wrapped buildFeedbackPrompt() output
+// (which the agent receives). Empty input degrades to "Requested changes." so the bubble is never blank.
 export function echoCommentsText(records: CommentRecord[]): string {
   if (records.length === 0) return "Requested changes.";
   const lines = records.map((rec) => {
