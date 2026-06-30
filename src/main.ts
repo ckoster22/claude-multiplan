@@ -51,7 +51,6 @@ import {
   type AcceptanceGate,
   type RecursiveLedger,
   type ResumeScope,
-  type ResumePlan,
 } from "./conversation/orchestrator";
 import {
   resumeScopeForRoot,
@@ -85,6 +84,37 @@ import type {
   ReviewCancelled,
 } from "./types";
 import { asAbsPath, asStem, cwdState, type AbsPath, type Stem } from "./types";
+// ---- Composition-root controllers (SP03) — pure, side-effect-free leaf modules -----------------
+// main.ts is the composition root: it imports the pure leaves these controllers own and wires them
+// to the module-level singletons / DOM handles / closures that necessarily STAY here (the staying
+// cores read `selection`/`orchSnapshot`/`runPlaceholder`/`pendingReviews`/the cwd subsystem/DOM
+// `let`s, which a pure leaf cannot). Imports are strictly one-directional main -> controller; the
+// controllers never import `./main`. The re-export shims below keep main's 24-symbol export surface
+// byte-stable so every existing `./main` test importer resolves unchanged.
+import {
+  applyRowState,
+  relativeTime,
+  buildPlaceholderRow,
+  renderSubTree,
+  placeholderVisible,
+  initTabs,
+  type SubTreeNode,
+} from "./sidebar";
+import { computeAffordance, resumeActionLabel } from "./resume-banner";
+import { suppressConversationFlip, shouldClearPlaceholderOnExit } from "./run-subscription";
+import { setHookStatus, echoCommentsText } from "./review-bar";
+import { chainHandler } from "./ipc";
+
+// Re-export shims — `export ... from` introduces NO local binding (the movers main uses internally
+// are plain-imported above IN ADDITION). These keep main's public export surface identical to
+// pre-SP03 (the 24-symbol set) so `src/chain.test.ts`, `src/contract.test.ts`, `src/main.*.test.ts`,
+// and the mock harness keep importing these symbols from `./main` unchanged.
+export { placeholderVisible, initTabs } from "./sidebar";
+export { computeAffordance } from "./resume-banner";
+export type { Affordance } from "./resume-banner";
+export { suppressConversationFlip, shouldClearPlaceholderOnExit } from "./run-subscription";
+export { setHookStatus } from "./review-bar";
+export { chainHandler } from "./ipc";
 
 // ---- Frozen contract type (mirrors Rust PlanChanged in CONTRACT.md) ----
 interface PlanChanged {
@@ -352,34 +382,6 @@ function placeholderSelected(): boolean {
   return selection.k === "placeholder" && selection.treeId === (runPlaceholder?.treeId ?? null);
 }
 
-// Pure helper (Bug B fix): should the onActivity conversation-tab flip be SUPPRESSED? Keyed
-// STRICTLY on pendingApproval — while a gate is held, every non-result stream frame still fires
-// onActivity, which would steal the tab from the Plan view the gate handler just opened. It must
-// NOT consider pendingClarify: AskUserQuestion cards render in the Conversation tab and NEED the
-// flip. EXPORTED for the unit-test truth table.
-export function suppressConversationFlip(
-  snap: Pick<PlanTreeSnapshot2, "pendingApproval"> | null,
-): boolean {
-  return snap?.pendingApproval != null;
-}
-
-// Pure helper (agent-exit × placeholder race): should an SDK SESSION exit clear the live-run
-// placeholder? agent-exit is NOT 1:1 with the placeholder's run — a previous session's late exit
-// can arrive AFTER a fresh run has minted its own placeholder. Clear ONLY when no orchestration is
-// active OR the active snapshot's treeId differs from the placeholder's (a stale placeholder no
-// ACTIVE orchestration claims). When the active run's treeId MATCHES, the placeholder belongs to a
-// still-live run — its lifecycle is owned by onDone/onFatal, never by a session exit. EXPORTED for
-// the unit-test truth table.
-export function shouldClearPlaceholderOnExit(
-  placeholder: { treeId: string } | null,
-  orchestrationActive: boolean,
-  activeSnapTreeId: string | null,
-): boolean {
-  if (placeholder === null) return false;
-  const activeTreeId = orchestrationActive ? activeSnapTreeId : null;
-  return activeTreeId !== placeholder.treeId;
-}
-
 // THE SINGLE GATE DERIVATION (gen-2 unified gate): the held ApprovalGate2 the user is currently
 // VIEWING, or null. The root decomposition gate lives IN pendingApproval now (the gen-1 master-phase
 // keying + masterGatePlanPath + the viewingMasterGate/viewingOrchestratorGate pair are GONE) — one
@@ -469,6 +471,9 @@ export function reviewCommentCount(): number {
 
 // Test-only: clear ALL review state (pending reviews). Module state persists across tests in a
 // vitest file, so this gives each test a clean slate. Production code never calls it.
+// IMMOVABLE (SP03): stays in main — it spans multiple controllers' singletons (pendingReviews /
+// selection / orchSnapshot / runPlaceholder / pendingResume / actionInFlight), so there is no single
+// owner module to relocate it to.
 export function __resetReviewStateForTest(): void {
   pendingReviews.clear();
   // Also reset the selection: module state persists across tests in a vitest file, so a plan
@@ -698,6 +703,9 @@ export function currentCommentCount(): number {
 //
 // `viewing` is the DERIVED condition currentReviewId() !== null. `viewedCommentCount` is the OPEN
 // plan's comment count (review comments are now the plan's normal persisted comments).
+// IMMOVABLE (SP03): stays in main — derives off the module singletons pendingReviews / commentCount /
+// selection and the #review-bar DOM handle; the pure derivation already lives in src/review.ts
+// (applyReviewBarState). Only its two stray pure leaves (setHookStatus / echoCommentsText) relocated.
 function refreshReviewBar(countOverride?: number): void {
   if (!reviewBarEl) return;
   // ---- PROTOTYPE mode (Phase 4d) — precedence: pendingApproval gate > prototype gate > -------
@@ -967,23 +975,6 @@ let echoUserMessage: ((text: string) => void) | null = null;
 // live session / orchestration owns the pane (guarded inside the handle). Null until the handle exists.
 let loadPlanHistory: ((stem: Stem) => void) | null = null;
 
-// Build a STRUCTURED, human-readable echo of the plan-review comments the user submitted — one line
-// per comment showing the anchor quote and the comment text. This is what the user SEES (their own
-// words, attributed to them), NOT the wrapped buildFeedbackPrompt() output (that is the system text
-// the agent receives). A whole-pane comment (no anchor quote) shows the comment alone. Empty input
-// degrades to a bare "Requested changes" line so the bubble is never blank.
-function echoCommentsText(records: CommentRecord[]): string {
-  if (records.length === 0) return "Requested changes.";
-  const lines = records.map((rec) => {
-    const quote = rec.quote.trim();
-    const comment = rec.comment.trim();
-    if (quote && comment) return `Re: "${quote}" — ${comment}`;
-    if (quote) return `Re: "${quote}"`;
-    return comment || "(comment)";
-  });
-  return lines.join("\n");
-}
-
 // Shared review-response logic (the SINGLE place that calls respond_to_review), so the bar handlers
 // never duplicate the invoke. On success, the review is removed from pendingReviews; the plan stays
 // open + selected and its comments remain saved. The bar is then refreshed (drops to summary mode if
@@ -1111,24 +1102,6 @@ function dirOf(absPath: AbsPath): string {
   return idx > 0 ? absPath.slice(0, idx) : absPath;
 }
 
-// Human-friendly relative time for the sidebar `.plan-meta .when` slot.
-function relativeTime(mtimeMs: number): string {
-  const now = Date.now();
-  const diff = now - mtimeMs;
-  const sec = Math.floor(diff / 1000);
-  if (sec < 5) return "just now";
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} min ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  if (day === 1) return "yesterday";
-  if (day < 7) return `${day} days ago`;
-  const d = new Date(mtimeMs);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 // Decide the `.plan-src` text for a record. Precedence: backend-cached `rec.cwd` (absolute)
 // wins; otherwise consult `cwdByStem` (populated by a completed `resolve_cwds`). The two
 // states a row can be in before/after resolution:
@@ -1223,6 +1196,8 @@ function isLedgerShape(v: unknown): v is RecursiveLedger {
 // for a DIFFERENT tree must not light up), the tree already done, an orchestration already active, or
 // a coherence/scope helper that threw. Returns a verdict (resumable OR blocked) otherwise, so the
 // banner can render BOTH the resume button and the blocked message.
+// IMMOVABLE (SP03): stays in main — reads the cwd subsystem (homePath / cwdByStem) and
+// isOrchestrationActive; only its pure leaf resumeActionLabel relocated (to resume-banner.ts).
 export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | null> {
   try {
     // tree_id is required: a standalone plan (no tree) is never part of a `.plan-tree/`.
@@ -1510,43 +1485,6 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
   }
 }
 
-// The HONEST one-click action label for a resumable ResumePlan. Each kind names the concrete forward
-// action the user is about to take (the orchestrator decides HOW from the ledger; this label only
-// describes WHAT). The classic gate/resend/acceptance shapes keep the "Resume — <phaseLabel>" form;
-// the PHASE-2 kinds (restart / prototype-gate / rewind) read as their own forward actions:
-//   - restart{from:"clarify"} → re-run the clarify turn from the original request.
-//   - prototype-gate → a normal resume back into the prototype-review gate.
-//   - rewind{toGate} → wind the run back to the nearest durable gate, named per `toGate`.
-// PHASE-2 SCOPE: every label here is a NON-hazardous one-click action. The structured switch leaves
-// room for PHASE 3 to add the confirmation-gated hazardous variant (leaf/executing) as a SECONDARY
-// without reshaping this; today no hazardous resumable kind reaches the banner.
-function resumeActionLabel(plan: ResumePlan, phaseLabel: string): string {
-  switch (plan.kind) {
-    case "restart":
-      // `from` is "clarify" today (the only restart anchor).
-      return "Restart from your original request";
-    case "prototype-gate":
-      return "Resume — Prototype review";
-    case "rewind": {
-      // PHASE 3c — the HAZARDOUS executing rewind (requiresConfirm) reads as a forward "continue", NOT a
-      // "Rewind to …": the user is resuming the in-flight implementation behind a confirmation, not
-      // discarding work. The honest risk ("edits may be partially applied") is surfaced in the confirm
-      // row, not the button label.
-      if (plan.requiresConfirm) return "Continue implementation";
-      // Human-readable per `toGate`: a decomposition rewind re-presents the split's decomposition plan;
-      // a leaf / leaf-approval rewind winds back to the node's own approved leaf plan.
-      const target = plan.toGate === "decomposition" ? "decomposition plan" : "approved plan";
-      return `Rewind to ${target}`;
-    }
-    case "gate":
-    case "resend":
-    case "acceptance":
-      // The classic resumable kinds keep the "Resume — <active phase>" form (the active phase IS the
-      // forward action for these — re-present the gate / re-send the step / re-mint the acceptance bar).
-      return `Resume — ${phaseLabel}`;
-  }
-}
-
 // Render the #resume-banner from a verdict (or hide it for null). Pure DOM derivation: resumable →
 // the #resume-plan-btn labeled per-kind (see resumeActionLabel; the resume context stashed for its
 // click); blocked → a static muted "<phaseLabel> — resuming from here isn't supported yet" message,
@@ -1624,28 +1562,6 @@ async function refreshResumeBanner(path: AbsPath): Promise<void> {
   const verdict = await detectResumable(rec);
   if (openPath() !== path) return; // superseded — a newer open owns the banner.
   renderResumeBanner(verdict);
-}
-
-// THE reading-pane affordance, by precedence prototype > acceptance > review > resume
-// (at most ONE active at a time). PURE truth table: the caller passes the already-derived signals.
-// EXPORTED so the precedence is unit-tested directly (the same pattern as suppressConversationFlip /
-// shouldClearPlaceholderOnExit). "review" covers BOTH the held-gate VIEWING bar and the SUMMARY count;
-// "resume" is the lowest — the resume banner only surfaces when nothing higher occupies the bar.
-export type Affordance = "none" | "prototype" | "acceptance" | "review" | "resume";
-
-// INVARIANT[affordance-union] (precedence): at most one reading-pane affordance is active, chosen by first-match over the total order prototype > acceptance > review > resume > none.
-//   prevents: two affordances painted into the bar at once
-export function computeAffordance(signals: {
-  prototype: boolean;
-  acceptance: boolean;
-  review: boolean;
-  resume: boolean;
-}): Affordance {
-  if (signals.prototype) return "prototype";
-  if (signals.acceptance) return "acceptance";
-  if (signals.review) return "review";
-  if (signals.resume) return "resume";
-  return "none";
 }
 
 // Re-derive ALL reading-pane affordances together from the current state — the SINGLE entry point every
@@ -1746,16 +1662,6 @@ function showToast(msg: string): void {
 // set with orphans/duplicates already normalized. So `renderSidebar` walks top-to-bottom with
 // NO re-aggregation and NO flavor-fallback logic.
 
-// Apply the shared per-row classes/state and click → onOpen wiring to a `.plan` row.
-function applyRowState(row: HTMLElement, rec: PlanRecord, ctx: SidebarCtx): void {
-  row.dataset.path = rec.absolute_path;
-  if (rec.unread) row.classList.add("unread");
-  if (rec.absolute_path === ctx.openPath) row.classList.add("active");
-  row.addEventListener("click", () => {
-    ctx.onOpen(rec.absolute_path, rec.filename_stem);
-  });
-}
-
 // Build a flat row matching the documented per-row template:
 //   .plan[.active][.unread] data-path  >  .plan-row > .plan-title + .unread-dot
 //                                          .plan-src (dimmed cwd; filled by 03)
@@ -1847,164 +1753,16 @@ function buildMaster(rec: PlanRecord, ctx: SidebarCtx): { wrapper: HTMLElement; 
   return { wrapper, children };
 }
 
-// Build a compact sub row: `.plan.sub[data-path]` > `.plan-row` = `.seq`(FULL dotted nn_path,
-// e.g. "02.01") + title + unread dot ONLY (no cwd/timestamp). The seq label derives EXCLUSIVELY
-// from `nn_path` — NEVER from first-segment `nn` (labelling a "02.01" child by `nn` would render
-// a colliding duplicate "02" row). A null nn_path (legacy sub with no frontmatter nn) keeps the
-// pre-existing "00" placeholder.
-function buildSub(rec: PlanRecord, ctx: SidebarCtx): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "plan sub";
-  applyRowState(row, rec, ctx);
-
-  const planRow = document.createElement("div");
-  planRow.className = "plan-row";
-
-  const seq = document.createElement("span");
-  seq.className = "seq";
-  seq.textContent = rec.nn_path ?? "00";
-
-  const title = document.createElement("span");
-  title.className = "plan-title";
-  title.textContent = rec.filename_stem;
-
-  const dot = document.createElement("span");
-  dot.className = "unread-dot";
-
-  planRow.appendChild(seq);
-  planRow.appendChild(title);
-  planRow.appendChild(dot);
-  row.appendChild(planRow);
-
-  return row;
-}
-
-// Key for the SESSION-ONLY internal-node collapse map: tree_id + nn_path, NUL-joined so the two
-// segments can never collide with each other's content. Deliberately disjoint from the persisted
-// master collapse store (set_tree_collapsed) — internal-node collapse is never persisted.
-function subCollapseKey(treeId: string, nnPath: string): string {
-  return treeId + "\u0000" + nnPath;
-}
-
-// Build an INTERNAL sub node — a sub with nested dotted children. Mirrors buildMaster's
-// affordances on the compact sub row: a `.sub-node` wrapper holding the `.plan.sub` row (PLUS a
-// leading `.twirl` and a trailing per-node `.child-count` of its DIRECT children) and a nested
-// `.children` container. Collapse is session-only: the twirl mutates ctx.subCollapse and flips
-// the wrapper class directly (instant feedback, no backend call, no re-list).
-function buildInternalSub(
-  rec: PlanRecord,
-  directCount: number,
-  ctx: SidebarCtx,
-): { wrapper: HTMLElement; children: HTMLElement } {
-  const key = subCollapseKey(rec.tree_id ?? "", rec.nn_path ?? "");
-
-  const wrapper = document.createElement("div");
-  wrapper.className = "sub-node";
-  wrapper.dataset.nnPath = rec.nn_path ?? "";
-  if (ctx.subCollapse.get(key) ?? false) wrapper.classList.add("collapsed");
-
-  const row = buildSub(rec, ctx);
-  const planRow = row.querySelector(".plan-row") as HTMLElement;
-
-  // Disclosure twirl — its OWN listener stops propagation so toggling never also opens the sub.
-  const twirl = document.createElement("span");
-  twirl.className = "twirl";
-  twirl.textContent = "▾"; // ▾
-  twirl.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const next = !(ctx.subCollapse.get(key) ?? false);
-    ctx.subCollapse.set(key, next);
-    wrapper.classList.toggle("collapsed", next);
-  });
-  planRow.insertBefore(twirl, planRow.firstChild);
-
-  // Per-node "N sub-plans" count of DIRECT children only (singular at 1).
-  const count = document.createElement("span");
-  count.className = "child-count";
-  count.textContent = `${directCount} sub-plan${directCount === 1 ? "" : "s"}`;
-  planRow.appendChild(count);
-
-  const children = document.createElement("div");
-  children.className = "children";
-
-  wrapper.appendChild(row);
-  wrapper.appendChild(children);
-  return { wrapper, children };
-}
-
-// A parsed sub-tree node for one master's run of sub records. `kids` is filled by the
-// prefix-stack walk below; a node renders INTERNAL iff it actually accumulated kids (so a
-// duplicate dotted id whose extensions attached to a LATER duplicate stays a plain leaf).
-interface SubTreeNode {
-  rec: PlanRecord;
-  kids: SubTreeNode[];
-}
-
-// Render one parsed sub-tree into `container`: leaves via buildSub (byte-identical to the flat
-// legacy shape — affordances appear ONLY when children exist), internal nodes via buildInternalSub
-// with their kids rendered recursively into the nested `.children`.
-function renderSubTree(node: SubTreeNode, container: HTMLElement, ctx: SidebarCtx): void {
-  if (node.kids.length === 0) {
-    container.appendChild(buildSub(node.rec, ctx));
-    return;
-  }
-  const { wrapper, children } = buildInternalSub(node.rec, node.kids.length, ctx);
-  container.appendChild(wrapper);
-  for (const kid of node.kids) {
-    renderSubTree(kid, children, ctx);
-  }
-}
-
-// Build the `.plan.placeholder` row for a live run with no real sidebar row yet (Bug A fix).
-// `.plan`-shaped (so it inherits row styling) but carries data-tree-id and NO data-path: there is
-// no file to open, so openPlan's `[data-path]` selection loop structurally cannot touch it. Click
-// routes to ctx.onPlaceholderOpen (flip to the Conversation tab + select the placeholder).
-function buildPlaceholderRow(
-  ph: { treeId: string; label: string; selected: boolean },
-  ctx: SidebarCtx,
-): HTMLElement {
-  const row = document.createElement("div");
-  row.className = "plan placeholder";
-  row.dataset.treeId = ph.treeId;
-  if (ph.selected) row.classList.add("active");
-
-  const planRow = document.createElement("div");
-  planRow.className = "plan-row";
-
-  const dot = document.createElement("span");
-  dot.className = "placeholder-dot";
-
-  const title = document.createElement("span");
-  title.className = "plan-title";
-  title.textContent = ph.label;
-
-  planRow.appendChild(dot);
-  planRow.appendChild(title);
-  row.appendChild(planRow);
-
-  row.addEventListener("click", () => {
-    ctx.onPlaceholderOpen?.();
-  });
-  return row;
-}
-
-// THE SINGLE placeholder-visibility predicate (shared by renderSidebar AND applyFilterAndRender's
-// `.filter-empty` branch so the two sites cannot drift): the live-run placeholder renders only
-// while NO rendered record carries its tree_id — once the real row exists it takes over. EXPORTED
-// for unit tests.
-export function placeholderVisible(
-  ph: { treeId: string } | null,
-  records: PlanRecord[],
-): boolean {
-  return ph !== null && !records.some((r) => r.tree_id === ph.treeId);
-}
-
 // Render the full nested sidebar from pre-ordered records into `listEl`. `arrange_plans` groups
 // each master's subs contiguously in depth-first dotted order; VISUAL depth is built here from
 // `nn_path` prefixes with a prefix-keyed stack: a sub whose nn_path extends the top frame's
 // nn_path by exactly one segment nests inside it; otherwise frames pop until its parent prefix
 // matches. The stack carries SubTreeNodes (not DOM) so "internal" = actually-accumulated kids.
 // EXPORTED so the DOM logic is unit-testable.
+// IMMOVABLE (SP03): stays in main — reads the module singletons selection / collapseOverride /
+// subCollapse + the cwd subsystem + the DOM-handle let-bindings, and CONTRACT.md forbids the sidebar
+// and reading-pane domains from importing each other (they converge only here). It imports the moved
+// pure leaves (placeholderVisible / buildPlaceholderRow / renderSubTree / SubTreeNode) back.
 export function renderSidebar(listEl: HTMLElement, records: PlanRecord[], ctx: SidebarCtx): void {
   listEl.replaceChildren();
 
@@ -2459,22 +2217,6 @@ function patchDocSrc(): void {
 // pane), and `buildToc` consumes that list to populate `#toc-list`. This module never queries
 // or mutates `#reading-pane` directly — only via `extractToc` / `scrollToHeading`.
 
-// Wire tab switching: a click on a `.tab` makes it (and the matching `.tab-pane`) the only
-// active one. Toggling tabs is a pure view switch — it never rebuilds either pane's content.
-// EXPORTED so the toggle wiring is unit-testable against the real code.
-export function initTabs(tabRowEl: HTMLElement, paneEls: HTMLElement[]): void {
-  const tabs = Array.from(tabRowEl.querySelectorAll<HTMLElement>(".tab"));
-  for (const tab of tabs) {
-    tab.addEventListener("click", () => {
-      const target = tab.dataset.tab;
-      for (const t of tabs) t.classList.toggle("active", t === tab);
-      for (const pane of paneEls) {
-        pane.classList.toggle("active", pane.id === `tab-${target}`);
-      }
-    });
-  }
-}
-
 // Render a ToC into `listEl` from a plain entry list. One `.toc-item.toc-h1|.toc-h2` per entry
 // carrying `data-line`; a click smooth-scrolls the reader to that heading and flashes the
 // clicked row only (transient affordance — NOT scroll-spy). An EMPTY list renders the
@@ -2521,6 +2263,8 @@ function rebuildTocFromPane(): void {
 
 // Open a plan: read raw text into #reading-pane, mark the row active, update the header.
 // EXPORTED for testing the render-generation guard around the ToC rebuild (no behavior change).
+// IMMOVABLE (SP03): stays in main — mutates the module singletons selection / commentCount /
+// renderGuard and the reading-pane DOM-handle lets; a pure leaf cannot reassign these ES live bindings.
 export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
   if (!readingPaneEl) return;
 
@@ -2956,20 +2700,6 @@ async function handlePlanChanged(changedPath: AbsPath): Promise<void> {
   }
 }
 
-/**
- * Append `body` to a serialized promise chain and return the new tail. The `.catch` makes the
- * chain self-healing: if `body` rejects, it is logged and the returned promise still RESOLVES,
- * so the next event chained onto the tail still runs (a single failed handler can never wedge
- * the chain in a permanently-rejected state and silently drop all future events). Exported so
- * this self-healing property is unit-testable against the real code, not a copy of the pattern.
- */
-export function chainHandler(
-  pending: Promise<void>,
-  body: () => Promise<void>,
-): Promise<void> {
-  return pending.then(body).catch((e) => console.error("plan-changed handler failed", e));
-}
-
 // ---- Plan Review status line (DEPENDENCY-FREE in-DOM UX) ----
 //
 // WHY THIS REPLACES window.alert: in Tauri v2 (Wry + WKWebView on macOS) JS dialogs have no UI
@@ -2982,25 +2712,6 @@ export function chainHandler(
 // status message lingers before auto-clearing (ms). Module constants so the test can reason about them.
 const HOOK_CONFIRM_MS = 4000;
 const HOOK_STATUS_MS = 6000;
-
-// Set the in-DOM hook status line. `kind` selects success (accent) vs error (red); empty text
-// clears + hides it. EXPORTED so the status surface is directly unit-testable.
-export function setHookStatus(
-  statusEl: HTMLElement | null,
-  text: string,
-  kind: "success" | "error" = "success",
-): void {
-  if (!statusEl) return;
-  if (!text) {
-    statusEl.textContent = "";
-    statusEl.classList.add("hidden");
-    statusEl.classList.remove("error");
-    return;
-  }
-  statusEl.textContent = text;
-  statusEl.classList.toggle("error", kind === "error");
-  statusEl.classList.remove("hidden");
-}
 
 // Fire a one-shot "open in the default browser" command (open_baseline / open_prototype). This is a
 // VOID fire-once command, not a data read — there is nothing to surface on success (the OS opened the
@@ -3220,6 +2931,9 @@ window.addEventListener("DOMContentLoaded", () => {
   //   • onSnapshot — re-derive the bar after every transition (so it clears when pendingApproval
   //     becomes null after Approve).
   //   • onDone / onFatal — terminal: drop the snapshot and refresh (the bar hides).
+  // IMMOVABLE (SP03): this observer is a closure INSIDE DOMContentLoaded — it mutates the orchSnapshot
+  // singleton and the bar DOM handles, so a closure cannot be pure-relocated; only its pure predicates
+  // (suppressConversationFlip / shouldClearPlaceholderOnExit) relocated (to run-subscription.ts).
   getOrchestrator().subscribe({
     onSnapshot: (snap) => {
       orchSnapshot = snap;
