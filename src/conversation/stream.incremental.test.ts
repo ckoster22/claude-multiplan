@@ -13,7 +13,7 @@
 // block, added alongside the copy-on-write work.
 
 import { describe, it, expect } from "vitest";
-import { ConversationModel } from "./stream";
+import { ConversationModel, WAITING_INPUT_LABEL } from "./stream";
 import type {
   SystemInit,
   AssistantText,
@@ -324,5 +324,112 @@ describe("ConversationModel — incremental derive equals a from-scratch replay 
       (m) => m.appendStream(sysInit({ seq: 0 })),
       (m) => m.appendStream(text(1, "post-reset")),
     ]);
+  });
+});
+
+// The identity contract the renderer relies on: a node object is `===`-stable across derives IFF its
+// content is unchanged. These pin snapshot isolation (a held tree never mutates under the caller) and
+// that the fast path stays engaged for synthetics and reuses objects across a fallback replay.
+describe("ConversationModel — node object identity is stable iff content is unchanged", () => {
+  it("(a) a correlating tool_result yields a NEW node; a tree held from before still shows 'running'", () => {
+    const m = new ConversationModel();
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(toolUse(1, "t1", "Read"));
+    const before = m.derive();
+    const toolBefore = before.nodes.find((n) => n.type === "tool")!;
+    expect(toolBefore.type === "tool" && toolBefore.status).toBe("running");
+
+    m.appendStream(toolResult(2, "t1", "contents"));
+    const after = m.derive();
+    const toolAfter = after.nodes.find((n) => n.type === "tool")!;
+
+    // The post-correlation node is a fresh object in the "done" state...
+    expect(toolAfter.type === "tool" && toolAfter.status).toBe("done");
+    expect(toolAfter).not.toBe(toolBefore);
+    // ...and the tree held from BEFORE is untouched. FALSIFY: revert correlation to in-place mutation
+    // (Task 3 style) → toolBefore.status flips to "done" → RED.
+    expect(toolBefore.type === "tool" && toolBefore.status).toBe("running");
+    expect(before.nodes.find((n) => n.type === "tool")).toBe(toolBefore);
+  });
+
+  it("(b) appending one unrelated top-level event leaves every PRIOR TopNode ===-stable", () => {
+    const m = new ConversationModel();
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(text(1, "a"));
+    m.appendStream(toolUse(2, "t1", "Read"));
+    const first = m.derive();
+    const priorText = first.nodes.find((n) => n.type === "text")!;
+    const priorTool = first.nodes.find((n) => n.type === "tool")!;
+
+    m.appendStream(text(3, "b")); // unrelated, later, top-level
+    const second = m.derive();
+
+    // Every prior node keeps its exact object identity across the derive. FALSIFY: rebuild fresh
+    // objects every derive (no retained accumulator) → these `toBe`s go RED.
+    expect(second.nodes.find((n) => n.type === "text" && n.text === "a")).toBe(priorText);
+    expect(second.nodes.find((n) => n.type === "tool")).toBe(priorTool);
+    // The new node is genuinely new.
+    expect(second.nodes.find((n) => n.type === "text" && n.text === "b")).not.toBe(priorText);
+  });
+
+  it("(c) a synthetic permission_resolved applies on the fast path — clears the hold, no node churn", () => {
+    // NOTE on the maxProcessedSeq gate: whether a synthetic RAISES the wire-seq gate (a latent perf
+    // regression — later wire frames would needlessly fall back) is NOT observable via node identity,
+    // because a fallback reconciles identity too. So this test pins the two identity-observable
+    // properties instead: the synthetic's EFFECT is applied incrementally, and it churns no prior node.
+    const m = new ConversationModel();
+    m.appendStream(sysInit({ seq: 1 }));
+    m.appendStream(text(2, "a"));
+    m.appendPermissionRequest(permReq(3, "p1", "ExitPlanMode"));
+    const first = m.derive();
+    expect(first.working).toEqual({ label: WAITING_INPUT_LABEL }); // the hold is active
+    const priorText = first.nodes.find((n) => n.type === "text")!;
+
+    m.appendPermissionResolved("p1", SYNTH); // synthetic, seq 1e9
+    const second = m.derive();
+
+    // The synthetic took effect on the fast path (the hold cleared). FALSIFY: drop the
+    // permission_resolved handling → the waiting label sticks → RED.
+    expect(second.working).not.toEqual({ label: WAITING_INPUT_LABEL });
+    // ...and it did not churn the prior node's identity. FALSIFY: fresh-objects-per-derive → RED.
+    expect(second.nodes.find((n) => n.type === "text" && n.text === "a")).toBe(priorText);
+  });
+
+  it("(d) after a terminal-triggered fallback replay, content-unchanged nodes keep their identity", () => {
+    const m = new ConversationModel();
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(text(1, "a"));
+    m.appendStream(toolUse(2, "t1", "Read"));
+    m.appendStream(toolResult(3, "t1", "ok"));
+    const first = m.derive();
+    const priorText = first.nodes.find((n) => n.type === "text")!;
+    const priorTool = first.nodes.find((n) => n.type === "tool")!; // already "done" — result won't change it
+
+    m.appendStream(result(4)); // terminal → forces a full replayAll
+    const second = m.derive();
+
+    // The unchanged nodes are reused by object identity across the replay; only the new result node is
+    // fresh. FALSIFY: make replayAll return all-fresh objects (drop reconcileIdentity) → RED.
+    expect(second.nodes.find((n) => n.type === "text" && n.text === "a")).toBe(priorText);
+    expect(second.nodes.find((n) => n.type === "tool")).toBe(priorTool);
+    expect(second.nodes.some((n) => n.type === "result")).toBe(true);
+  });
+
+  it("(e) two no-append derives return identity-equal nodes in a FRESH array", () => {
+    const m = new ConversationModel();
+    m.appendStream(sysInit({ seq: 1 }));
+    m.appendStream(text(2, "a"));
+    m.appendStream(toolUse(3, "t1", "Read"));
+    const a = m.derive();
+    const b = m.derive();
+
+    // A fresh array wrapper each call (callers hold + mutate tree.nodes/working)...
+    expect(b.nodes).not.toBe(a.nodes);
+    // ...but the node objects inside are identical. FALSIFY: replay + all-fresh objects on every derive
+    // → the element `toBe`s go RED.
+    expect(b.nodes.length).toBe(a.nodes.length);
+    for (let i = 0; i < a.nodes.length; i++) {
+      expect(b.nodes[i]).toBe(a.nodes[i]);
+    }
   });
 });
