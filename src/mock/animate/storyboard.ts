@@ -684,16 +684,24 @@ export function modelSignature(story: ReadonlyArray<StoryFrame>, T: number): str
 //     NOT the external pending_reviews path — so it does NOT re-open the plan and the inline highlights
 //     SURVIVE alongside the bar (the c5 invariant). The gate turns OFF just before the V2 reveal.
 //
-//   Chapter "Execution" + "Done" (open_plan{null} + seq 27..49):
-//     The plan is approved and the assistant EXECUTES the four 04.* trail-detail leaves FLAT (per-leaf,
-//     no Task wrapper). The first execution frame is a SURFACE open_plan{null} (tMs 27000): it closes the
-//     reading pane (the V2 master is no longer shown) so projectSurfaceState flips activeTab "plan" →
-//     "conversation" for the whole chapter — the execution conversation owns the foreground. Each leaf is
-//     one atomic Write tool_use/tool_result pair (shared tMs, correlated by a per-leaf WRITE_*_ID), a
-//     top-level OUTPUT assistant_text, and a DEMO-AUTHORED `[context] → NN.NN: …` system_message that
-//     threads the next leaf (scripted authoring, NOT a live orchestrator). An integration wrap-up (seq
-//     48) and the terminal `result` (seq 49 / tMs 40000, "Done") close the turn — STRICTLY the highest
-//     seq AND tMs (so `working` is non-null for every mid-run T but null at duration: a finished thought).
+//   Chapter "Execution" + "Done" (open_plan{null} + seq EXEC_SEQ_BASE..TERMINAL_SEQ):
+//     The plan is approved and the assistant EXECUTES it as a SEQUENCE OF SUBAGENTS — NOT four flat
+//     per-leaf writes. buildExecution() walks EXEC_SUBPLANS (the three top-level subplans 01/02/03 PLUS
+//     the four 04.* trail-detail decomposition leaves — SEVEN entries, each its OWN spanning `Task`
+//     subagent) and, per subplan, emits: (a) the subplan's ROW appearing (a plan_changed snapshot of the
+//     tree grown so far), (b) a just-in-time PLANNING beat (narration + a spanning planning Task whose
+//     atomic recon/sizing leaves + DEFERRED tool_result ARE the subplan drafted now), (c) the EXECUTION
+//     beat (a spanning Task + its ATOMIC leaf tool pairs — a Read/Write/Edit/Bash/Grep mix, each pair
+//     sharing a tMs — an in-group summary, and a DEFERRED top-level Task tool_result that flips the
+//     spanning Task running→done and names the produced artifact), and (e) a parent-review narration
+//     queueing the next. Each subplan's narration + Task prompt reference the PRIOR subplan's produced
+//     artifact VERBATIM (the context-threading invariant), and a quota-wall scene is spliced in at the
+//     03→04 boundary. The first execution frame is a SURFACE open_plan{null} (tMs EXEC_BASE_MS): it closes
+//     the reading pane (the V2 master is no longer shown) so projectSurfaceState flips activeTab "plan" →
+//     "conversation" for the whole chapter — the execution conversation owns the foreground. An integration
+//     wrap-up and the terminal `result` (seq TERMINAL_SEQ / tMs TERMINAL_MS, "Done") close the turn —
+//     STRICTLY the highest seq AND tMs (so `working` is non-null for every mid-run T but null at duration:
+//     a finished thought).
 //
 //   PROTOTYPE-REVIEW DESIGN RATIONALE (load-bearing): in production the gate force-switches to the
 //   Plan tab (onPrototypeReview → switchToPlanTab); the review bar + reading pane live on the Plan tab
