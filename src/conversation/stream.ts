@@ -318,6 +318,86 @@ export type ModelEvent =
       frozenRemainingMs?: number;
     };
 
+// Subagent identity + task from a `subagent_started` frame, keyed by tool_use_id (= the group key =
+// the children's parent_tool_use_id). Retained on the accumulator so a frame arriving BEFORE its
+// children (seed an empty group) OR AFTER them (annotate an existing group) both resolve.
+interface SubagentMeta {
+  seq: number;
+  subagentType: string | null;
+  description: string | null;
+  prompt: string | null;
+}
+
+// A derived node plus the parent_tool_use_id it belongs under (null = top level). tool_results are
+// NOT placed (they fold into their tool); every other event that produces a node yields one Placed.
+interface Placed {
+  node: RenderNode;
+  parent: string | null;
+}
+
+// The full derivation state built by replayAll() from the event list. Holds both the correlation
+// indices (so a later event can find the node an earlier one created) and the assembled, sorted
+// top-level list. A from-scratch replay populates every field; an incremental step (later) mutates
+// it in place. Kept as a plain record (not a class) so a fresh one is a cheap object literal.
+interface DeriveAccum {
+  // Tool rows by tool_use.id, and the session segment each was consumed in (id-keyed so a
+  // correlation/demotion lookup needs only the id, never the node object).
+  toolById: Map<string, ToolNode>;
+  toolSegment: Map<string, number>;
+  subagentMeta: Map<string, SubagentMeta>;
+  // Submitted AskUserQuestion answers by request id, and the question nodes they fold onto.
+  answersById: Map<string, AskUserQuestionAnswers>;
+  questionNodesById: Map<string, QuestionRequestNode>;
+  // Subagent groups by agent_id (= parent_tool_use_id), and the assembled top-level list (sorted).
+  groupsById: Map<string, SubagentGroupNode>;
+  topNodes: TopNode[];
+  // Scalars mirroring the working-indicator / completion derivation.
+  permissionMode: string | null;
+  complete: boolean;
+  active: boolean;
+  latestStatusLabel: string | null;
+  exited: boolean;
+  // The latest turn-terminal frame as a (segment, seq) pair — the turn-end demotion scope.
+  lastTerminalSeg: number;
+  lastTerminalSeq: number;
+  // The latest UNRESOLVED interactive permission hold (agent blocked on the user), or null.
+  pendingInteractiveId: string | null;
+}
+
+function emptyAccum(): DeriveAccum {
+  return {
+    toolById: new Map(),
+    toolSegment: new Map(),
+    subagentMeta: new Map(),
+    answersById: new Map(),
+    questionNodesById: new Map(),
+    groupsById: new Map(),
+    topNodes: [],
+    permissionMode: null,
+    complete: false,
+    active: false,
+    latestStatusLabel: null,
+    exited: false,
+    lastTerminalSeg: -1,
+    lastTerminalSeq: -Infinity,
+    pendingInteractiveId: null,
+  };
+}
+
+// The working indicator: shown while active (and not exited), carrying the latest status label or
+// the generic seed before any status frame arrives; an unresolved interactive hold OVERRIDES the
+// label (the agent is blocked on the user, not "thinking…"). `exited` is belt-and-suspenders (active
+// is already cleared on exit/result/fatal-error).
+function deriveWorking(acc: DeriveAccum): WorkingState | null {
+  if (!acc.active || acc.exited) return null;
+  return {
+    label:
+      acc.pendingInteractiveId !== null
+        ? WAITING_INPUT_LABEL
+        : (acc.latestStatusLabel ?? WORKING_SEED_LABEL),
+  };
+}
+
 // The pure model. Accumulates raw events; derives the tree on demand.
 export class ConversationModel {
   private events: ModelEvent[] = [];
@@ -483,16 +563,28 @@ export class ConversationModel {
 
   // Derive the renderable tree from the accumulated events. Pure (no mutation of `events`).
   derive(): RenderTree {
-    // 1. Order strictly by seq (a stable sort on a copy — never mutate the source list).
-    const ordered = [...this.events].sort((a, b) => seqOf(a) - seqOf(b));
+    const acc = this.replayAll();
+    return {
+      nodes: acc.topNodes,
+      permissionMode: acc.permissionMode,
+      complete: acc.complete,
+      working: deriveWorking(acc),
+    };
+  }
 
-    // 1b. Assign a session SEGMENT to every event, in ARRIVAL order (NOT seq order — a resume resets
-    // the wire seq, so seq order scrambles the two sessions together). A fresh sidecar — every session
+  // Build a full DeriveAccum from scratch by replaying every accumulated event. This is the O(n)
+  // reference path: order-insensitive correlation + a stable seq sort so late-arriving frames resolve
+  // regardless of wire order.
+  private replayAll(): DeriveAccum {
+    const acc = emptyAccum();
+
+    // Assign a session SEGMENT to every event, in ARRIVAL order (NOT seq order — a resume resets the
+    // wire seq, so seq order scrambles the two sessions together). A fresh sidecar — every session
     // RESUME (quota auto-resume OR manual post-end Send) goes through a fresh `start_agent_session` —
     // emits a NEW `system_init`; the FIRST system_init opens segment 0, each SUBSEQUENT one opens the
     // next segment. Synthetic frames (exit/error/notice at synthSeq) inherit the segment current at
     // their arrival point, so a session-end exit stays in the segment it ended. Keyed on the stable
-    // event object reference so the `ordered` loop below can look each event's segment back up.
+    // event object reference so the seq-ordered consume loop can look each event's segment back up.
     // INVARIANT[segment-arrival-monotonic] (runtime-guard): each event gets a session-segment number in arrival order; each subsequent system_init opens the next segment.
     //   prevents: seq-order scrambling across a resume (which resets the wire seq)
     const segmentOf = new Map<ModelEvent, number>();
@@ -508,404 +600,383 @@ export class ConversationModel {
       }
     }
 
-    // 2. First pass: build tool nodes keyed by id and correlate results onto them.
-    const toolById = new Map<string, ToolNode>();
-    let permissionMode: string | null = null;
-    let complete = false;
-    // Working-indicator derivation: a turn is "active" once any event has arrived and stays active
-    // until a `result` lands or the session exits. The latest `status` label (if any) is shown;
-    // before the first status frame we show a generic seed so the indicator appears IMMEDIATELY on
-    // run start. `result`/`exit` clear active; an arriving status re-activates (e.g. a new turn).
-    let active = false;
-    let latestStatusLabel: string | null = null;
-    let exited = false;
-    // The LATEST turn-terminal frame seen (a `result`, an `exit`, or a FATAL error), as a
-    // (segment, seq) pair. The model is session-scoped — it persists across the orchestrator's many
-    // sequential turns AND across a session RESUME (quota auto-resume / manual post-end Send), and
-    // `complete` is set on the FIRST result and never reset — so the turn-end tool demotion (step 2c)
-    // must be SCOPED: only a tool causally BEFORE the latest terminal frame was abandoned. Within one
-    // session segment that is a plain seq compare; ACROSS a resume seqs are NOT comparable (the fresh
-    // sidecar resets its wire seqCounter to 0 while the prior session's synthetic exit sits at the
-    // controller's synthSeq ~1e9), so we compare (segment, seq) lexicographically: a prior-segment
-    // terminal frame never demotes a current-segment running tool. (`segment` is computed below in
-    // ARRIVAL order and bumped on each non-first system_init — the fresh-sidecar marker.)
-    let lastTerminalSeg = -1;
-    let lastTerminalSeq = -Infinity;
-    // Lexicographic-max update of the latest-terminal (segment, seq).
-    const noteTerminal = (seg: number, seq: number): void => {
-      if (seg > lastTerminalSeg || (seg === lastTerminalSeg && seq > lastTerminalSeq)) {
-        lastTerminalSeg = seg;
-        lastTerminalSeq = seq;
-      }
-    };
-    // The session segment each tool node belongs to (for the seq-incomparable-across-resume scoping).
-    const toolSegment = new Map<ToolNode, number>();
-    // The id of the latest UNRESOLVED interactive permission hold (the agent is blocked on the
-    // user — AskUserQuestion or ExitPlanMode). Set on a tool-permission-requested event; cleared
-    // by its resolution (question_answered / permission_resolved with a MATCHING id — id-matched
-    // so a late synthetic resolve, whose controller-assigned seq sorts after every wire frame,
-    // can never clear a NEWER hold) or by any frame proving the turn progressed (the SDK emits
-    // nothing while a canUseTool hold is pending, so any progress frame means it was released).
-    let pendingInteractiveId: string | null = null;
-
-    // We collect "placed" nodes (everything except tool_results, which fold into their tool)
-    // alongside the parent_tool_use_id they belong under (null = top level).
-    const placed: Array<{ node: RenderNode; parent: string | null }> = [];
-
-    // Subagent metadata from `subagent_started` frames, keyed by tool_use_id (= the group key =
-    // the children's parent_tool_use_id). Built in one pass so a frame arriving BEFORE its children
-    // (seed an empty group) OR AFTER them (annotate an existing group) both resolve — wire order is
-    // irrelevant. `seq` is retained so a metadata-only group sorts into the timeline at its start.
-    interface SubagentMeta {
-      seq: number;
-      subagentType: string | null;
-      description: string | null;
-      prompt: string | null;
-    }
-    const subagentMeta = new Map<string, SubagentMeta>();
-
-    // AskUserQuestion answers, keyed by request id — folded onto the matching question_request node
-    // (so a submitted card shows the chosen answers and drops its input form). Built in one pass so a
-    // late-arriving answered event still resolves regardless of wire order.
-    const answersById = new Map<string, AskUserQuestionAnswers>();
-    // The question_request nodes, by id, so we can set `.answers` after the loop.
-    const questionNodes = new Map<string, QuestionRequestNode>();
-
+    // Consume every event in seq order (a stable sort on a copy — never mutate the source list). The
+    // `placed` list (everything except tool_results, which fold into their tool) accumulates in seq
+    // order so group children come out ordered.
+    const ordered = [...this.events].sort((a, b) => seqOf(a) - seqOf(b));
+    const placed: Placed[] = [];
     for (const ev of ordered) {
-      if (isStream(ev)) {
-        // Any non-terminal stream frame implies a turn is generating → activate the indicator
-        // (the per-kind cases below de-activate on `result`). This makes the indicator appear on the
-        // first frame (system_init) before any explicit `status` arrives.
-        if (ev.kind !== "result") active = true;
-        // Any frame proving the turn progressed means the interactive hold (if any) was released —
-        // the SDK emits no frames for the turn while a canUseTool hold is pending.
-        switch (ev.kind) {
-          case "assistant_text":
-          case "tool_use":
-          case "tool_result":
-          case "status":
-          case "mode_change":
-          case "result":
-            pendingInteractiveId = null;
-            break;
-        }
-        switch (ev.kind) {
-          case "system_init":
-            permissionMode = ev.permission_mode;
-            break;
-          case "status":
-            // Label-only progress signal — update the live indicator (does NOT add a timeline node).
-            latestStatusLabel = ev.label;
-            break;
-          case "quota_exceeded":
-            // INERT here. A non-fatal quota notice that travels via agent-stream (NOT agent-error).
-            // It adds NO timeline node, does NOT flip `complete`, and does NOT clear/seed `working`
-            // or `active`. The waiting banner + auto-resume are owned by the orchestrator observer
-            // in a LATER phase — this reducer stays a pure inert pass-through so the exhaustive
-            // discriminated-union switch remains sound.
-            break;
-          case "subagent_started":
-            // Record the subagent's identity + task, keyed by its tool_use_id (= the group key). This
-            // adds NO timeline node directly — it seeds/annotates the subagent group in the grouping
-            // pass below, so the group appears (labeled) even before its first child arrives.
-            subagentMeta.set(ev.tool_use_id, {
-              seq: ev.seq,
-              subagentType: ev.subagent_type,
-              description: ev.description,
-              prompt: ev.prompt,
-            });
-            break;
-          case "assistant_text":
-            // Whitespace-only text frames render as empty bubbles (and a blank subagent child
-            // would seed an empty group via its parent_tool_use_id) — drop them entirely.
-            if (ev.text.trim() === "") break;
-            placed.push({
-              node: { type: "text", seq: ev.seq, text: ev.text },
-              parent: ev.parent_tool_use_id,
-            });
-            break;
-          case "tool_use": {
-            const node: ToolNode = {
-              type: "tool",
-              seq: ev.seq,
-              id: ev.id,
-              tool: ev.tool,
-              input: ev.input,
-              status: "running",
-              result: null,
-              isError: false,
-            };
-            toolById.set(ev.id, node);
-            toolSegment.set(node, segmentOf.get(ev) ?? 0);
-            placed.push({ node, parent: ev.parent_tool_use_id });
-            break;
-          }
-          case "tool_result": {
-            // Correlate onto the matching tool_use by id. A result with no matching tool_use
-            // is dropped (no orphan row) — the tool row is the unit of display.
-            const target = toolById.get(ev.tool_use_id);
-            if (target) {
-              target.status = ev.is_error ? "error" : "done";
-              target.result = ev.content;
-              target.isError = ev.is_error;
-            }
-            break;
-          }
-          case "mode_change":
-            permissionMode = ev.mode;
-            placed.push({
-              node: { type: "mode", seq: ev.seq, mode: ev.mode },
-              parent: null,
-            });
-            break;
-          case "result":
-            complete = true;
-            // The turn finished — the working indicator must hide. A later status frame (next turn)
-            // re-activates it; latestStatusLabel is cleared so the next turn re-seeds cleanly.
-            active = false;
-            latestStatusLabel = null;
-            noteTerminal(segmentOf.get(ev) ?? 0, ev.seq);
-            placed.push({
-              node: {
-                type: "result",
-                seq: ev.seq,
-                isError: ev.is_error,
-                result: ev.result,
-                subtype: ev.subtype,
-                // The verdict survives rebuilds ONLY because it lives on the stored frame.
-                deliberateInterrupt: ev.deliberateInterrupt ?? false,
-              },
-              parent: null,
-            });
-            break;
-          case "permission_denied":
-            placed.push({
-              node: {
-                type: "permission_denied",
-                seq: ev.seq,
-                tool: ev.tool,
-                toolUseId: ev.tool_use_id,
-                reasonType: ev.decision_reason_type,
-                message: ev.message,
-              },
-              parent: null,
-            });
-            break;
-        }
-      } else if (isPermissionRequest(ev)) {
-        active = true; // a pending permission means the turn is live (awaiting review)
-        // The agent is now blocked on the user (AskUserQuestion answers / ExitPlanMode review) —
-        // the working indicator must say so instead of repeating a stale status label.
-        pendingInteractiveId = ev.id;
-        if (ev.tool === "AskUserQuestion") {
-          // An interactive question request: render the answer card. Pull the questions array off the
-          // tool input (defensively coerced); the controller resolves it via resolve_tool_permission.
-          const input = ev.input as { questions?: unknown } | null | undefined;
-          const questions = Array.isArray(input?.questions)
-            ? (input!.questions as AskUserQuestionItem[])
-            : [];
-          const node: QuestionRequestNode = {
-            type: "question_request",
-            seq: ev.seq,
-            id: ev.id,
-            questions,
-            answers: null,
-          };
-          questionNodes.set(ev.id, node);
-          placed.push({ node, parent: null });
-        } else {
-          placed.push({
-            node: {
-              type: "permission_request",
-              seq: ev.seq,
-              id: ev.id,
-              tool: ev.tool,
-              agentId: ev.agent_id,
-            },
-            parent: null,
-          });
-        }
-      } else if (ev.__event === "question_answered") {
-        // A submitted answer set — record it; folded onto the matching question_request node below.
-        // It produces NO standalone node, so a stray answered event with no matching request is inert.
-        answersById.set(ev.id, ev.answers);
-        if (ev.id === pendingInteractiveId) pendingInteractiveId = null;
-      } else if (ev.__event === "permission_resolved") {
-        // The held permission was resolved from the frontend (ExitPlanMode approve/deny) — clear
-        // the waiting-for-input override NOW; the SDK's next frames may lag the click.
-        if (ev.id === pendingInteractiveId) pendingInteractiveId = null;
-      } else if (ev.__event === "error") {
-        // A fatal error ends the session → hide the working indicator (a non-fatal error leaves the
-        // turn running, so it does NOT deactivate).
-        if (ev.fatal) {
-          exited = true;
-          active = false;
-          noteTerminal(segmentOf.get(ev) ?? 0, ev.seq);
-        }
-        placed.push({
-          node: {
-            type: "error",
-            seq: ev.seq,
-            errorKind: ev.kind,
-            message: ev.message,
-            fatal: ev.fatal,
-          },
-          parent: null,
-        });
-      } else if (ev.__event === "notice") {
-        // A plain notice — never touches session state (no exited/active flip). Pure render row.
-        placed.push({
-          node: { type: "notice", seq: ev.seq, message: ev.message },
-          parent: null,
-        });
-      } else if (ev.__event === "user_message") {
-        // A verbatim user-message echo — a top-level bubble. Never touches session state (it is a
-        // record of what the user sent, not an agent signal); sorts into the timeline by its seq.
-        placed.push({
-          node: {
-            type: "user",
-            seq: ev.seq,
-            text: ev.text,
-            // Carry the display image URLs onto the node ONLY when present (omitted otherwise so a
-            // text-only bubble renders no thumbnail row).
-            ...(ev.images && ev.images.length ? { images: ev.images } : {}),
-          },
-          parent: null,
-        });
-      } else if (ev.__event === "system_message") {
-        // A verbatim SYSTEM-message echo (harness-injected plumbing turn) — a top-level dim bubble.
-        // Never touches session state; sorts into the timeline by its seq, exactly like user_message.
-        placed.push({
-          node: { type: "system", seq: ev.seq, text: ev.text },
-          parent: null,
-        });
-      } else if (ev.__event === "quota_banner") {
-        // The quota-banner singleton — a PURE render row. Never touches session state (no complete/
-        // active/exited flip). A "cleared" tombstone (onQuotaResumed) produces NO node, so the banner
-        // is logically removed; "waiting"/"exhausted" each derive the single banner node.
-        if (ev.state !== "cleared") {
-          placed.push({
-            node: {
-              type: "quota-banner",
-              seq: ev.seq,
-              state: ev.state,
-              resetAt: ev.resetAt,
-              remaining: ev.remaining,
-              source: ev.source,
-              // DEMO-ONLY (mock-animate) static-countdown override; undefined in production.
-              frozenRemainingMs: ev.frozenRemainingMs,
-            },
-            parent: null,
-          });
-        }
-      } else {
-        // exit — the session ended; the working indicator must hide.
-        exited = true;
-        active = false;
-        noteTerminal(segmentOf.get(ev) ?? 0, ev.seq);
-        placed.push({
-          node: { type: "exit", seq: ev.seq, code: ev.code },
-          parent: null,
-        });
-      }
+      consume(acc, placed, ev, segmentOf.get(ev) ?? 0);
     }
 
-    // 2b. Fold submitted answers onto their question_request nodes (form → chosen answers).
-    for (const [id, answers] of answersById) {
-      const node = questionNodes.get(id);
-      if (node) node.answers = answers;
-    }
-
-    // 2c. Turn-end demotion (SEGMENT- + SEQ-SCOPED): a tool_use still "running" that is causally
-    // BEFORE the latest turn-terminal frame (`result`/`exit`/fatal error) never received its
-    // tool_result before that turn ended and never will — demote it to "interrupted" so its row stops
-    // pulsing forever. The scoping is load-bearing twice over: the model is session-scoped (one model
-    // across the orchestrator's many sequential turns AND across a session resume; `complete` is set on
-    // the FIRST result and never reset), so an UNSCOPED demotion would wrongly flip a still-running
-    // turn-N tool. We compare (segment, seq) LEXICOGRAPHICALLY: a tool in a LATER segment than the
-    // latest terminal frame (a fresh resumed-session tool — the resume reset the wire seq, so a raw seq
-    // compare would misfire) is left running; within the SAME segment the plain seq compare applies, so
-    // a genuinely-abandoned tool (a terminal frame after it in its own segment) still interrupts. Only
-    // RUNNING tools are touched; done/error tools already correlated. Mutates by reference (the same
-    // node objects sit in `placed`/the groups), so the change is visible everywhere.
-    // INVARIANT[turn-end-demotion-segment-and-seq-scoped] (reducer-total): a still-running tool is demoted to interrupted iff a turn-terminal frame is causally after it, compared (segment,seq) lexicographically.
-    //   prevents: a running turn-N tool flipped by an earlier turn's terminal, or a resumed-session tool flipped by the prior session's synthetic exit
-    for (const tool of toolById.values()) {
-      if (tool.status !== "running") continue;
-      const seg = toolSegment.get(tool) ?? 0;
-      const terminalIsAfter =
-        lastTerminalSeg > seg || (lastTerminalSeg === seg && lastTerminalSeq > tool.seq);
-      if (terminalIsAfter) tool.status = "interrupted";
-    }
-
-    // 3. Group: nodes with a non-null parent fold into a subagent group keyed by that parent.
-    // The group's seq is the EARLIEST child seq so it sorts into the top-level timeline at the
-    // point its first activity appears. (Grouping key is the frozen parent_tool_use_id; NO
-    // name label is attached — none is frozen.)
-    const topNodes: TopNode[] = [];
-    const groups = new Map<string, SubagentGroupNode>();
-
-    // Create-or-fetch a subagent group for `id`, applying any known metadata. Metadata may have
-    // arrived before OR after the first child; this is order-independent because both the metadata
-    // pass (above) and the placed-node pass funnel through here.
-    const groupFor = (id: string): SubagentGroupNode => {
-      let group = groups.get(id);
-      if (!group) {
-        const meta = subagentMeta.get(id);
-        group = {
-          type: "subagent",
-          // Seed seq from metadata when present; the earliest-child fold below lowers it further.
-          seq: meta ? meta.seq : Number.MAX_SAFE_INTEGER,
-          agentId: id,
-          subagentType: meta?.subagentType ?? null,
-          description: meta?.description ?? null,
-          prompt: meta?.prompt ?? null,
-          children: [],
-        };
-        groups.set(id, group);
-        topNodes.push(group);
-      }
-      return group;
-    };
-
-    // 3a. Seed groups for every `subagent_started` frame FIRST — so a group appears (labeled) the
-    // instant the subagent starts, even before any child node has arrived.
-    for (const id of subagentMeta.keys()) {
-      groupFor(id);
-    }
-
-    for (const { node, parent } of placed) {
-      if (parent === null) {
-        topNodes.push(node);
-        continue;
-      }
-      const group = groupFor(parent);
-      group.children.push(node);
-      // The group's seq tracks the earliest child so it sorts correctly in the timeline.
-      if (node.seq < group.seq) group.seq = node.seq;
-    }
-
-    // 4. Final top-level order by seq (groups already carry their earliest-child seq); children
-    // within a group are already in seq order (placed was iterated in seq order).
-    topNodes.sort((a, b) => a.seq - b.seq);
-
-    // The working indicator: shown while active (and not exited), carrying the latest status label
-    // or the generic seed before any status frame arrives. `exited` is belt-and-suspenders (active is
-    // already cleared on exit/result/fatal-error).
-    // An unresolved interactive hold OVERRIDES the status label — the agent is blocked on the
-    // user, not "thinking…".
-    const working: WorkingState | null =
-      active && !exited
-        ? {
-            label:
-              pendingInteractiveId !== null
-                ? WAITING_INPUT_LABEL
-                : (latestStatusLabel ?? WORKING_SEED_LABEL),
-          }
-        : null;
-
-    return { nodes: topNodes, permissionMode, complete, working };
+    foldAnswers(acc);
+    demoteAbandonedTools(acc);
+    assembleTopNodes(acc, placed);
+    return acc;
   }
+}
+
+// Apply ONE event to the accumulator, with the session segment it was consumed in (arrival-order —
+// the caller supplies it). Pushes any produced render node onto `placed`; correlations and folds
+// mutate the accumulator's indices. This is the single per-event transition shared by the full
+// replay (and, later, the incremental fast path).
+function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: number): void {
+  // Lexicographic-max update of the latest turn-terminal (segment, seq) — the demotion scope.
+  const noteTerminal = (seq: number): void => {
+    if (
+      segment > acc.lastTerminalSeg ||
+      (segment === acc.lastTerminalSeg && seq > acc.lastTerminalSeq)
+    ) {
+      acc.lastTerminalSeg = segment;
+      acc.lastTerminalSeq = seq;
+    }
+  };
+
+  if (isStream(ev)) {
+    // Any non-terminal stream frame implies a turn is generating → activate the indicator (the
+    // per-kind cases below de-activate on `result`). This makes the indicator appear on the first
+    // frame (system_init) before any explicit `status` arrives.
+    if (ev.kind !== "result") acc.active = true;
+    // Any frame proving the turn progressed means the interactive hold (if any) was released — the
+    // SDK emits no frames for the turn while a canUseTool hold is pending.
+    switch (ev.kind) {
+      case "assistant_text":
+      case "tool_use":
+      case "tool_result":
+      case "status":
+      case "mode_change":
+      case "result":
+        acc.pendingInteractiveId = null;
+        break;
+    }
+    switch (ev.kind) {
+      case "system_init":
+        acc.permissionMode = ev.permission_mode;
+        break;
+      case "status":
+        // Label-only progress signal — update the live indicator (does NOT add a timeline node).
+        acc.latestStatusLabel = ev.label;
+        break;
+      case "quota_exceeded":
+        // INERT here. A non-fatal quota notice that travels via agent-stream (NOT agent-error). It
+        // adds NO timeline node, does NOT flip `complete`, and does NOT clear/seed `working` or
+        // `active`. The waiting banner + auto-resume are owned by the orchestrator observer in a
+        // LATER phase — this reducer stays a pure inert pass-through so the exhaustive
+        // discriminated-union switch remains sound.
+        break;
+      case "subagent_started":
+        // Record the subagent's identity + task, keyed by its tool_use_id (= the group key). This
+        // adds NO timeline node directly — it seeds/annotates the subagent group in the grouping
+        // pass, so the group appears (labeled) even before its first child arrives.
+        acc.subagentMeta.set(ev.tool_use_id, {
+          seq: ev.seq,
+          subagentType: ev.subagent_type,
+          description: ev.description,
+          prompt: ev.prompt,
+        });
+        break;
+      case "assistant_text":
+        // Whitespace-only text frames render as empty bubbles (and a blank subagent child would seed
+        // an empty group via its parent_tool_use_id) — drop them entirely.
+        if (ev.text.trim() === "") break;
+        placed.push({
+          node: { type: "text", seq: ev.seq, text: ev.text },
+          parent: ev.parent_tool_use_id,
+        });
+        break;
+      case "tool_use": {
+        const node: ToolNode = {
+          type: "tool",
+          seq: ev.seq,
+          id: ev.id,
+          tool: ev.tool,
+          input: ev.input,
+          status: "running",
+          result: null,
+          isError: false,
+        };
+        acc.toolById.set(ev.id, node);
+        acc.toolSegment.set(ev.id, segment);
+        placed.push({ node, parent: ev.parent_tool_use_id });
+        break;
+      }
+      case "tool_result": {
+        // Correlate onto the matching tool_use by id. A result with no matching tool_use is dropped
+        // (no orphan row) — the tool row is the unit of display.
+        const target = acc.toolById.get(ev.tool_use_id);
+        if (target) {
+          target.status = ev.is_error ? "error" : "done";
+          target.result = ev.content;
+          target.isError = ev.is_error;
+        }
+        break;
+      }
+      case "mode_change":
+        acc.permissionMode = ev.mode;
+        placed.push({
+          node: { type: "mode", seq: ev.seq, mode: ev.mode },
+          parent: null,
+        });
+        break;
+      case "result":
+        acc.complete = true;
+        // The turn finished — the working indicator must hide. A later status frame (next turn)
+        // re-activates it; latestStatusLabel is cleared so the next turn re-seeds cleanly.
+        acc.active = false;
+        acc.latestStatusLabel = null;
+        noteTerminal(ev.seq);
+        placed.push({
+          node: {
+            type: "result",
+            seq: ev.seq,
+            isError: ev.is_error,
+            result: ev.result,
+            subtype: ev.subtype,
+            // The verdict survives rebuilds ONLY because it lives on the stored frame.
+            deliberateInterrupt: ev.deliberateInterrupt ?? false,
+          },
+          parent: null,
+        });
+        break;
+      case "permission_denied":
+        placed.push({
+          node: {
+            type: "permission_denied",
+            seq: ev.seq,
+            tool: ev.tool,
+            toolUseId: ev.tool_use_id,
+            reasonType: ev.decision_reason_type,
+            message: ev.message,
+          },
+          parent: null,
+        });
+        break;
+    }
+    return;
+  }
+
+  if (isPermissionRequest(ev)) {
+    acc.active = true; // a pending permission means the turn is live (awaiting review)
+    // The agent is now blocked on the user (AskUserQuestion answers / ExitPlanMode review) — the
+    // working indicator must say so instead of repeating a stale status label.
+    acc.pendingInteractiveId = ev.id;
+    if (ev.tool === "AskUserQuestion") {
+      // An interactive question request: render the answer card. Pull the questions array off the
+      // tool input (defensively coerced); the controller resolves it via resolve_tool_permission.
+      const input = ev.input as { questions?: unknown } | null | undefined;
+      const questions = Array.isArray(input?.questions)
+        ? (input!.questions as AskUserQuestionItem[])
+        : [];
+      const node: QuestionRequestNode = {
+        type: "question_request",
+        seq: ev.seq,
+        id: ev.id,
+        questions,
+        answers: null,
+      };
+      acc.questionNodesById.set(ev.id, node);
+      placed.push({ node, parent: null });
+    } else {
+      placed.push({
+        node: {
+          type: "permission_request",
+          seq: ev.seq,
+          id: ev.id,
+          tool: ev.tool,
+          agentId: ev.agent_id,
+        },
+        parent: null,
+      });
+    }
+    return;
+  }
+
+  if (ev.__event === "question_answered") {
+    // A submitted answer set — record it; folded onto the matching question_request node later. It
+    // produces NO standalone node, so a stray answered event with no matching request is inert.
+    acc.answersById.set(ev.id, ev.answers);
+    if (ev.id === acc.pendingInteractiveId) acc.pendingInteractiveId = null;
+    return;
+  }
+
+  if (ev.__event === "permission_resolved") {
+    // The held permission was resolved from the frontend (ExitPlanMode approve/deny) — clear the
+    // waiting-for-input override NOW; the SDK's next frames may lag the click.
+    if (ev.id === acc.pendingInteractiveId) acc.pendingInteractiveId = null;
+    return;
+  }
+
+  if (ev.__event === "error") {
+    // A fatal error ends the session → hide the working indicator (a non-fatal error leaves the turn
+    // running, so it does NOT deactivate).
+    if (ev.fatal) {
+      acc.exited = true;
+      acc.active = false;
+      noteTerminal(ev.seq);
+    }
+    placed.push({
+      node: {
+        type: "error",
+        seq: ev.seq,
+        errorKind: ev.kind,
+        message: ev.message,
+        fatal: ev.fatal,
+      },
+      parent: null,
+    });
+    return;
+  }
+
+  if (ev.__event === "notice") {
+    // A plain notice — never touches session state (no exited/active flip). Pure render row.
+    placed.push({
+      node: { type: "notice", seq: ev.seq, message: ev.message },
+      parent: null,
+    });
+    return;
+  }
+
+  if (ev.__event === "user_message") {
+    // A verbatim user-message echo — a top-level bubble. Never touches session state (it is a record
+    // of what the user sent, not an agent signal); sorts into the timeline by its seq.
+    placed.push({
+      node: {
+        type: "user",
+        seq: ev.seq,
+        text: ev.text,
+        // Carry the display image URLs onto the node ONLY when present (omitted otherwise so a
+        // text-only bubble renders no thumbnail row).
+        ...(ev.images && ev.images.length ? { images: ev.images } : {}),
+      },
+      parent: null,
+    });
+    return;
+  }
+
+  if (ev.__event === "system_message") {
+    // A verbatim SYSTEM-message echo (harness-injected plumbing turn) — a top-level dim bubble. Never
+    // touches session state; sorts into the timeline by its seq, exactly like user_message.
+    placed.push({
+      node: { type: "system", seq: ev.seq, text: ev.text },
+      parent: null,
+    });
+    return;
+  }
+
+  if (ev.__event === "quota_banner") {
+    // The quota-banner singleton — a PURE render row. Never touches session state (no complete/
+    // active/exited flip). A "cleared" tombstone (onQuotaResumed) produces NO node, so the banner is
+    // logically removed; "waiting"/"exhausted" each derive the single banner node.
+    if (ev.state !== "cleared") {
+      placed.push({
+        node: {
+          type: "quota-banner",
+          seq: ev.seq,
+          state: ev.state,
+          resetAt: ev.resetAt,
+          remaining: ev.remaining,
+          source: ev.source,
+          // DEMO-ONLY (mock-animate) static-countdown override; undefined in production.
+          frozenRemainingMs: ev.frozenRemainingMs,
+        },
+        parent: null,
+      });
+    }
+    return;
+  }
+
+  // exit — the session ended; the working indicator must hide.
+  acc.exited = true;
+  acc.active = false;
+  noteTerminal(ev.seq);
+  placed.push({
+    node: { type: "exit", seq: ev.seq, code: ev.code },
+    parent: null,
+  });
+}
+
+// Fold submitted answers onto their question_request nodes (form → chosen answers).
+function foldAnswers(acc: DeriveAccum): void {
+  for (const [id, answers] of acc.answersById) {
+    const node = acc.questionNodesById.get(id);
+    if (node) node.answers = answers;
+  }
+}
+
+// Turn-end demotion (SEGMENT- + SEQ-SCOPED): a tool_use still "running" that is causally BEFORE the
+// latest turn-terminal frame (`result`/`exit`/fatal error) never received its tool_result before that
+// turn ended and never will — demote it to "interrupted" so its row stops pulsing forever. The
+// scoping is load-bearing twice over: the model is session-scoped (one model across the orchestrator's
+// many sequential turns AND across a session resume; `complete` is set on the FIRST result and never
+// reset), so an UNSCOPED demotion would wrongly flip a still-running turn-N tool. We compare
+// (segment, seq) LEXICOGRAPHICALLY: a tool in a LATER segment than the latest terminal frame (a fresh
+// resumed-session tool — the resume reset the wire seq, so a raw seq compare would misfire) is left
+// running; within the SAME segment the plain seq compare applies, so a genuinely-abandoned tool (a
+// terminal frame after it in its own segment) still interrupts. Only RUNNING tools are touched;
+// done/error tools already correlated.
+// INVARIANT[turn-end-demotion-segment-and-seq-scoped] (reducer-total): a still-running tool is demoted to interrupted iff a turn-terminal frame is causally after it, compared (segment,seq) lexicographically.
+//   prevents: a running turn-N tool flipped by an earlier turn's terminal, or a resumed-session tool flipped by the prior session's synthetic exit
+function demoteAbandonedTools(acc: DeriveAccum): void {
+  for (const tool of acc.toolById.values()) {
+    if (tool.status !== "running") continue;
+    const seg = acc.toolSegment.get(tool.id) ?? 0;
+    const terminalIsAfter =
+      acc.lastTerminalSeg > seg || (acc.lastTerminalSeg === seg && acc.lastTerminalSeq > tool.seq);
+    if (terminalIsAfter) tool.status = "interrupted";
+  }
+}
+
+// Group nodes with a non-null parent into a subagent group keyed by that parent, then order the top
+// level by seq. The group's seq is the EARLIEST child seq (seeded from `subagent_started` metadata
+// when present) so it sorts into the top-level timeline at the point its first activity appears.
+// (Grouping key is the frozen parent_tool_use_id; NO name label is attached — none is frozen.)
+// Children within a group come out in seq order because `placed` was built in seq order.
+function assembleTopNodes(acc: DeriveAccum, placed: Placed[]): void {
+  const topNodes: TopNode[] = [];
+  acc.groupsById.clear();
+
+  // Create-or-fetch a subagent group for `id`, applying any known metadata. Metadata may have arrived
+  // before OR after the first child; this is order-independent because both the metadata seeding and
+  // the placed-node pass funnel through here.
+  const groupFor = (id: string): SubagentGroupNode => {
+    let group = acc.groupsById.get(id);
+    if (!group) {
+      const meta = acc.subagentMeta.get(id);
+      group = {
+        type: "subagent",
+        // Seed seq from metadata when present; the earliest-child fold below lowers it further.
+        seq: meta ? meta.seq : Number.MAX_SAFE_INTEGER,
+        agentId: id,
+        subagentType: meta?.subagentType ?? null,
+        description: meta?.description ?? null,
+        prompt: meta?.prompt ?? null,
+        children: [],
+      };
+      acc.groupsById.set(id, group);
+      topNodes.push(group);
+    }
+    return group;
+  };
+
+  // Seed groups for every `subagent_started` frame FIRST — so a group appears (labeled) the instant
+  // the subagent starts, even before any child node has arrived.
+  for (const id of acc.subagentMeta.keys()) {
+    groupFor(id);
+  }
+
+  for (const { node, parent } of placed) {
+    if (parent === null) {
+      topNodes.push(node);
+      continue;
+    }
+    const group = groupFor(parent);
+    group.children.push(node);
+    // The group's seq tracks the earliest child so it sorts correctly in the timeline.
+    if (node.seq < group.seq) group.seq = node.seq;
+  }
+
+  topNodes.sort((a, b) => a.seq - b.seq);
+  acc.topNodes = topNodes;
 }
 
 function seqOf(ev: ModelEvent): number {
