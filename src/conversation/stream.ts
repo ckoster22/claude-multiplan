@@ -362,6 +362,15 @@ interface DeriveAccum {
   lastTerminalSeq: number;
   // The latest UNRESOLVED interactive permission hold (agent blocked on the user), or null.
   pendingInteractiveId: string | null;
+  // Ids of interactive holds that have been answered OR resolved. A request whose id is already here
+  // never re-arms the hold — so the fast path (arrival order) matches the seq-order replay even when a
+  // resolution's synthetic-seq event arrives BEFORE the wire request it resolves.
+  resolvedInteractiveIds: Set<string>;
+  // The current session segment + whether any system_init has been seen — the ARRIVAL-order segment
+  // counter (bumped on each non-first system_init). Retained so the fast path continues stamping
+  // segments where the last replay/apply left off (a full replay recomputes them and re-stores here).
+  segment: number;
+  seenSystemInit: boolean;
 }
 
 function emptyAccum(): DeriveAccum {
@@ -381,6 +390,9 @@ function emptyAccum(): DeriveAccum {
     lastTerminalSeg: -1,
     lastTerminalSeq: -Infinity,
     pendingInteractiveId: null,
+    resolvedInteractiveIds: new Set(),
+    segment: 0,
+    seenSystemInit: false,
   };
 }
 
@@ -407,6 +419,16 @@ export class ConversationModel {
   // BEFORE the next wire frame (`lastWireSeq + 1`, the agent's reply to that message). Frozen into the
   // event at append time so the placement is stable across re-derives.
   private lastWireSeq = -1;
+
+  // The retained derivation state, carried across derive() calls so a derive amortizes to O(new
+  // events). null until the first derive (or after reset()). `nextEventIndex` is how many events have
+  // been folded into `acc`; `maxProcessedSeq` is the highest WIRE seq folded in (the fast-path
+  // monotonic gate — synthetic seqs never raise it). `quotaDirty` forces a full replay because the
+  // quota-banner singleton was mutated in place (no new event marks the change).
+  private acc: DeriveAccum | null = null;
+  private nextEventIndex = 0;
+  private maxProcessedSeq = -Infinity;
+  private quotaDirty = false;
 
   // Append a committed agent-stream frame.
   appendStream(ev: AgentStream): void {
@@ -509,6 +531,9 @@ export class ConversationModel {
     // QuotaBannerNode.frozenRemainingMs.
     frozenRemainingMs?: number;
   }): void {
+    // A quota-banner change (create OR in-place update) forces the next derive to fully replay: an
+    // in-place update pushes NO new event, so the incremental fast path would never see it.
+    this.quotaDirty = true;
     if (this.quotaBanner) {
       // Update the existing singleton in place — no new event, no duplicate node.
       this.quotaBanner.state = info.state;
@@ -551,21 +576,85 @@ export class ConversationModel {
   // to "cleared" so derive() produces NO node for it (the banner is logically removed) while the event
   // stays in `events` (harmless; it contributes nothing). Idempotent / inert when no banner exists.
   clearQuotaBanner(): void {
-    if (this.quotaBanner) this.quotaBanner.state = "cleared";
+    if (this.quotaBanner) {
+      this.quotaBanner.state = "cleared";
+      // In-place mutation with no new event → force a full replay on the next derive.
+      this.quotaDirty = true;
+    }
   }
 
-  // Reset (new session).
+  // Reset (new session). Drops the retained derivation state so the next derive rebuilds from empty.
   reset(): void {
     this.events = [];
     this.lastWireSeq = -1;
     this.quotaBanner = null;
+    this.acc = null;
+    this.nextEventIndex = 0;
+    this.maxProcessedSeq = -Infinity;
+    this.quotaDirty = false;
   }
 
-  // Derive the renderable tree from the accumulated events. Pure (no mutation of `events`).
+  // Derive the renderable tree from the accumulated events, amortized O(new events) per call. New
+  // events are folded into the retained accumulator on the fast path unless one forces a full replay.
+  // Pure w.r.t. `events` (never mutates the source list).
   derive(): RenderTree {
-    const acc = this.replayAll();
+    // Decide fast path vs full replay by SCANNING the new events (no mutation): a first derive, a
+    // dirtied quota banner, a terminal frame (result/exit/fatal error), or an out-of-order WIRE frame
+    // (seq below the running max — the demotion/correlation ordering can't be patched incrementally)
+    // all force a replay. The scan tracks a running max so an out-of-order pair WITHIN this batch is
+    // caught too. Deciding before touching `acc` keeps the previous accumulator intact for
+    // reconciliation.
+    let fallback = this.acc === null || this.quotaDirty;
+    if (!fallback) {
+      let running = this.maxProcessedSeq;
+      for (let i = this.nextEventIndex; i < this.events.length; i++) {
+        const ev = this.events[i];
+        if (isTerminalEvent(ev)) {
+          fallback = true;
+          break;
+        }
+        if (isWireSeq(ev)) {
+          if (seqOf(ev) < running) {
+            fallback = true;
+            break;
+          }
+          if (seqOf(ev) > running) running = seqOf(ev);
+        }
+      }
+    }
+
+    if (fallback) {
+      this.acc = this.replayAll();
+      this.nextEventIndex = this.events.length;
+      let max = -Infinity;
+      for (const ev of this.events) {
+        if (isWireSeq(ev) && seqOf(ev) > max) max = seqOf(ev);
+      }
+      this.maxProcessedSeq = max;
+      this.quotaDirty = false;
+    } else {
+      const acc = this.acc!;
+      const sink = liveSink(acc);
+      for (let i = this.nextEventIndex; i < this.events.length; i++) {
+        const ev = this.events[i];
+        // Continue the arrival-order segment count (a non-first system_init opens the next segment)
+        // BEFORE stamping this event's segment — identical to the replay's arrival-order pass.
+        if (isStream(ev) && ev.kind === "system_init") {
+          if (acc.seenSystemInit) acc.segment++;
+          acc.seenSystemInit = true;
+        }
+        consume(acc, ev, acc.segment, sink);
+        if (isWireSeq(ev) && seqOf(ev) > this.maxProcessedSeq) this.maxProcessedSeq = seqOf(ev);
+      }
+      this.nextEventIndex = this.events.length;
+    }
+
+    const acc = this.acc!;
+    // A FRESH array wrapper + a FRESH working object each call: callers mutate `tree.working` and hold
+    // `tree.nodes`, and neither must poison the retained accumulator. The node OBJECTS are shared
+    // (their identity is the renderer's DOM-reuse signal).
     return {
-      nodes: acc.topNodes,
+      nodes: [...acc.topNodes],
       permissionMode: acc.permissionMode,
       complete: acc.complete,
       working: deriveWorking(acc),
@@ -574,8 +663,10 @@ export class ConversationModel {
 
   // Build a full DeriveAccum from scratch by replaying every accumulated event. This is the O(n)
   // reference path: order-insensitive correlation + a stable seq sort so late-arriving frames resolve
-  // regardless of wire order.
+  // regardless of wire order. Reconciles the rebuilt nodes against the PREVIOUS accumulator so
+  // content-unchanged nodes keep their object identity.
   private replayAll(): DeriveAccum {
+    const prev = this.acc;
     const acc = emptyAccum();
 
     // Assign a session SEGMENT to every event, in ARRIVAL order (NOT seq order — a resume resets the
@@ -585,6 +676,8 @@ export class ConversationModel {
     // next segment. Synthetic frames (exit/error/notice at synthSeq) inherit the segment current at
     // their arrival point, so a session-end exit stays in the segment it ended. Keyed on the stable
     // event object reference so the seq-ordered consume loop can look each event's segment back up.
+    // The final (segment, seenSystemInit) are stored on the accumulator so the fast path continues the
+    // arrival-order count from here.
     // INVARIANT[segment-arrival-monotonic] (runtime-guard): each event gets a session-segment number in arrival order; each subsequent system_init opens the next segment.
     //   prevents: seq-order scrambling across a resume (which resets the wire seq)
     const segmentOf = new Map<ModelEvent, number>();
@@ -598,6 +691,8 @@ export class ConversationModel {
         }
         segmentOf.set(ev, segment);
       }
+      acc.segment = segment;
+      acc.seenSystemInit = seenSystemInit;
     }
 
     // Consume every event in seq order (a stable sort on a copy — never mutate the source list). The
@@ -605,22 +700,37 @@ export class ConversationModel {
     // order so group children come out ordered.
     const ordered = [...this.events].sort((a, b) => seqOf(a) - seqOf(b));
     const placed: Placed[] = [];
+    const sink = batchSink(placed);
     for (const ev of ordered) {
-      consume(acc, placed, ev, segmentOf.get(ev) ?? 0);
+      consume(acc, ev, segmentOf.get(ev) ?? 0, sink);
     }
 
     foldAnswers(acc);
     demoteAbandonedTools(acc);
     assembleTopNodes(acc, placed);
+    if (prev) reconcileIdentity(acc, prev);
     return acc;
   }
 }
 
+// Where a consumed event's render output goes. The full replay collects nodes into a flat list for a
+// single sorted assembly and lets the finalize passes fold answers / annotate groups; the incremental
+// fast path instead inserts nodes into the LIVE topNodes/groups and folds/annotates in place. consume
+// stays placement-agnostic by delegating all three to the sink.
+interface DeriveSink {
+  // A produced render node + the parent_tool_use_id it belongs under (null = top level).
+  emit(node: RenderNode, parent: string | null): void;
+  // The subagent metadata for `id` was just updated (a `subagent_started` frame) — sync the group.
+  syncSubagentMeta(id: string): void;
+  // The answers for question-request `id` were just recorded — fold them onto the question node.
+  foldAnswer(id: string, answers: AskUserQuestionAnswers): void;
+}
+
 // Apply ONE event to the accumulator, with the session segment it was consumed in (arrival-order —
-// the caller supplies it). Pushes any produced render node onto `placed`; correlations and folds
-// mutate the accumulator's indices. This is the single per-event transition shared by the full
-// replay (and, later, the incremental fast path).
-function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: number): void {
+// the caller supplies it). Node placement + answer folds + group metadata sync go through `sink`;
+// scalar updates, tool correlation, and the index maps mutate the accumulator directly. This is the
+// single per-event transition shared by the full replay and the incremental fast path.
+function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: DeriveSink): void {
   // Lexicographic-max update of the latest turn-terminal (segment, seq) — the demotion scope.
   const noteTerminal = (seq: number): void => {
     if (
@@ -674,15 +784,13 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
           description: ev.description,
           prompt: ev.prompt,
         });
+        sink.syncSubagentMeta(ev.tool_use_id);
         break;
       case "assistant_text":
         // Whitespace-only text frames render as empty bubbles (and a blank subagent child would seed
         // an empty group via its parent_tool_use_id) — drop them entirely.
         if (ev.text.trim() === "") break;
-        placed.push({
-          node: { type: "text", seq: ev.seq, text: ev.text },
-          parent: ev.parent_tool_use_id,
-        });
+        sink.emit({ type: "text", seq: ev.seq, text: ev.text }, ev.parent_tool_use_id);
         break;
       case "tool_use": {
         const node: ToolNode = {
@@ -697,7 +805,7 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
         };
         acc.toolById.set(ev.id, node);
         acc.toolSegment.set(ev.id, segment);
-        placed.push({ node, parent: ev.parent_tool_use_id });
+        sink.emit(node, ev.parent_tool_use_id);
         break;
       }
       case "tool_result": {
@@ -713,10 +821,7 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
       }
       case "mode_change":
         acc.permissionMode = ev.mode;
-        placed.push({
-          node: { type: "mode", seq: ev.seq, mode: ev.mode },
-          parent: null,
-        });
+        sink.emit({ type: "mode", seq: ev.seq, mode: ev.mode }, null);
         break;
       case "result":
         acc.complete = true;
@@ -725,8 +830,8 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
         acc.active = false;
         acc.latestStatusLabel = null;
         noteTerminal(ev.seq);
-        placed.push({
-          node: {
+        sink.emit(
+          {
             type: "result",
             seq: ev.seq,
             isError: ev.is_error,
@@ -735,12 +840,12 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
             // The verdict survives rebuilds ONLY because it lives on the stored frame.
             deliberateInterrupt: ev.deliberateInterrupt ?? false,
           },
-          parent: null,
-        });
+          null,
+        );
         break;
       case "permission_denied":
-        placed.push({
-          node: {
+        sink.emit(
+          {
             type: "permission_denied",
             seq: ev.seq,
             tool: ev.tool,
@@ -748,8 +853,8 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
             reasonType: ev.decision_reason_type,
             message: ev.message,
           },
-          parent: null,
-        });
+          null,
+        );
         break;
     }
     return;
@@ -758,8 +863,10 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
   if (isPermissionRequest(ev)) {
     acc.active = true; // a pending permission means the turn is live (awaiting review)
     // The agent is now blocked on the user (AskUserQuestion answers / ExitPlanMode review) — the
-    // working indicator must say so instead of repeating a stale status label.
-    acc.pendingInteractiveId = ev.id;
+    // working indicator must say so instead of repeating a stale status label. UNLESS this hold was
+    // already answered/resolved (its resolution arrived first — arrival order is free), in which case
+    // it must not re-arm.
+    if (!acc.resolvedInteractiveIds.has(ev.id)) acc.pendingInteractiveId = ev.id;
     if (ev.tool === "AskUserQuestion") {
       // An interactive question request: render the answer card. Pull the questions array off the
       // tool input (defensively coerced); the controller resolves it via resolve_tool_permission.
@@ -772,29 +879,36 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
         seq: ev.seq,
         id: ev.id,
         questions,
-        answers: null,
+        // Seed from any answer ALREADY recorded — on the fast path the answered event can arrive
+        // before its request (its synthetic seq sorts it after in a replay, but arrival order is
+        // free), so the fold must also happen at request time, not only at answer time.
+        answers: acc.answersById.get(ev.id) ?? null,
       };
       acc.questionNodesById.set(ev.id, node);
-      placed.push({ node, parent: null });
+      sink.emit(node, null);
     } else {
-      placed.push({
-        node: {
+      sink.emit(
+        {
           type: "permission_request",
           seq: ev.seq,
           id: ev.id,
           tool: ev.tool,
           agentId: ev.agent_id,
         },
-        parent: null,
-      });
+        null,
+      );
     }
     return;
   }
 
   if (ev.__event === "question_answered") {
-    // A submitted answer set — record it; folded onto the matching question_request node later. It
-    // produces NO standalone node, so a stray answered event with no matching request is inert.
+    // A submitted answer set — record it, and fold it onto the matching question_request node (via
+    // the sink, so the fast path updates the live node; the full replay's foldAnswers pass is
+    // authoritative there). It produces NO standalone node, so a stray answered event with no
+    // matching request is inert.
     acc.answersById.set(ev.id, ev.answers);
+    acc.resolvedInteractiveIds.add(ev.id);
+    sink.foldAnswer(ev.id, ev.answers);
     if (ev.id === acc.pendingInteractiveId) acc.pendingInteractiveId = null;
     return;
   }
@@ -802,6 +916,7 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
   if (ev.__event === "permission_resolved") {
     // The held permission was resolved from the frontend (ExitPlanMode approve/deny) — clear the
     // waiting-for-input override NOW; the SDK's next frames may lag the click.
+    acc.resolvedInteractiveIds.add(ev.id);
     if (ev.id === acc.pendingInteractiveId) acc.pendingInteractiveId = null;
     return;
   }
@@ -814,33 +929,30 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
       acc.active = false;
       noteTerminal(ev.seq);
     }
-    placed.push({
-      node: {
+    sink.emit(
+      {
         type: "error",
         seq: ev.seq,
         errorKind: ev.kind,
         message: ev.message,
         fatal: ev.fatal,
       },
-      parent: null,
-    });
+      null,
+    );
     return;
   }
 
   if (ev.__event === "notice") {
     // A plain notice — never touches session state (no exited/active flip). Pure render row.
-    placed.push({
-      node: { type: "notice", seq: ev.seq, message: ev.message },
-      parent: null,
-    });
+    sink.emit({ type: "notice", seq: ev.seq, message: ev.message }, null);
     return;
   }
 
   if (ev.__event === "user_message") {
     // A verbatim user-message echo — a top-level bubble. Never touches session state (it is a record
     // of what the user sent, not an agent signal); sorts into the timeline by its seq.
-    placed.push({
-      node: {
+    sink.emit(
+      {
         type: "user",
         seq: ev.seq,
         text: ev.text,
@@ -848,18 +960,15 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
         // text-only bubble renders no thumbnail row).
         ...(ev.images && ev.images.length ? { images: ev.images } : {}),
       },
-      parent: null,
-    });
+      null,
+    );
     return;
   }
 
   if (ev.__event === "system_message") {
     // A verbatim SYSTEM-message echo (harness-injected plumbing turn) — a top-level dim bubble. Never
     // touches session state; sorts into the timeline by its seq, exactly like user_message.
-    placed.push({
-      node: { type: "system", seq: ev.seq, text: ev.text },
-      parent: null,
-    });
+    sink.emit({ type: "system", seq: ev.seq, text: ev.text }, null);
     return;
   }
 
@@ -868,8 +977,8 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
     // active/exited flip). A "cleared" tombstone (onQuotaResumed) produces NO node, so the banner is
     // logically removed; "waiting"/"exhausted" each derive the single banner node.
     if (ev.state !== "cleared") {
-      placed.push({
-        node: {
+      sink.emit(
+        {
           type: "quota-banner",
           seq: ev.seq,
           state: ev.state,
@@ -879,8 +988,8 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
           // DEMO-ONLY (mock-animate) static-countdown override; undefined in production.
           frozenRemainingMs: ev.frozenRemainingMs,
         },
-        parent: null,
-      });
+        null,
+      );
     }
     return;
   }
@@ -889,10 +998,7 @@ function consume(acc: DeriveAccum, placed: Placed[], ev: ModelEvent, segment: nu
   acc.exited = true;
   acc.active = false;
   noteTerminal(ev.seq);
-  placed.push({
-    node: { type: "exit", seq: ev.seq, code: ev.code },
-    parent: null,
-  });
+  sink.emit({ type: "exit", seq: ev.seq, code: ev.code }, null);
 }
 
 // Fold submitted answers onto their question_request nodes (form → chosen answers).
@@ -977,6 +1083,177 @@ function assembleTopNodes(acc: DeriveAccum, placed: Placed[]): void {
 
   topNodes.sort((a, b) => a.seq - b.seq);
   acc.topNodes = topNodes;
+}
+
+// The controller's synthetic-seq base (index.ts `synthSeq = 1_000_000_000`): exit / error / notice /
+// question_answered / permission_resolved carry a seq at or above this. A WIRE seq (real agent-stream
+// / permission-request frames, plus the fractional `lastWireSeq + 0.5` echoes) is strictly below it.
+// The fast path's monotonic gate tracks WIRE seqs only — a synthetic seq must never raise it (it sorts
+// after every wire frame in the session, so it can always be appended without disengaging the gate).
+const SYNTHETIC_SEQ_BASE = 1_000_000_000;
+
+function isWireSeq(ev: ModelEvent): boolean {
+  return seqOf(ev) < SYNTHETIC_SEQ_BASE;
+}
+
+// A turn-terminal event (result / exit / FATAL error). Terminals force a full replay so the turn-end
+// demotion stays a single final pass and the deliberateInterrupt payload is re-read from the stored
+// frame — decoupling the incremental path from the controller's in-place result-frame mutation.
+function isTerminalEvent(ev: ModelEvent): boolean {
+  if (isStream(ev)) return ev.kind === "result";
+  if ("__event" in ev) {
+    if (ev.__event === "exit") return true;
+    if (ev.__event === "error") return ev.fatal;
+  }
+  return false;
+}
+
+// Insert `item` into a seq-sorted list, keeping equal-seq ties in ARRIVAL order (after existing
+// equals) — matching the full replay's stable seq sort. Scans from the tail, so an item at/after the
+// current max (the fast-path common case) is an O(1) append.
+function insertSorted<T extends { seq: number }>(list: T[], item: T): void {
+  let i = list.length;
+  while (i > 0 && list[i - 1].seq > item.seq) i--;
+  list.splice(i, 0, item);
+}
+
+// Create-or-fetch the LIVE subagent group for `id`, inserting a freshly-created group into topNodes at
+// its seq. A group is created at the seq of its FIRST element (metadata seq when a `subagent_started`
+// seeded it, else the first child's `seqHint`). On the fast path every later element has a seq >= that
+// first one (the monotonic wire-seq gate), so the group's seq — the earliest element — never lowers
+// and the group never needs repositioning. (An out-of-order earlier child would fail the gate and
+// force a full replay instead.)
+function ensureLiveGroup(acc: DeriveAccum, id: string, seqHint: number): SubagentGroupNode {
+  let group = acc.groupsById.get(id);
+  if (!group) {
+    const meta = acc.subagentMeta.get(id);
+    group = {
+      type: "subagent",
+      seq: meta ? meta.seq : seqHint,
+      agentId: id,
+      subagentType: meta?.subagentType ?? null,
+      description: meta?.description ?? null,
+      prompt: meta?.prompt ?? null,
+      children: [],
+    };
+    acc.groupsById.set(id, group);
+    insertSorted(acc.topNodes, group);
+  }
+  return group;
+}
+
+// The full-replay sink: collect nodes into `placed` for a single sorted assembly; answer folds and
+// group-metadata annotation are handled authoritatively by the finalize passes (foldAnswers /
+// assembleTopNodes), so they are no-ops here.
+function batchSink(placed: Placed[]): DeriveSink {
+  return {
+    emit: (node, parent) => placed.push({ node, parent }),
+    syncSubagentMeta: () => {},
+    foldAnswer: () => {},
+  };
+}
+
+// The fast-path sink: insert nodes into the LIVE topNodes / group children, and fold answers +
+// annotate group metadata in place on the retained nodes.
+function liveSink(acc: DeriveAccum): DeriveSink {
+  return {
+    emit: (node, parent) => {
+      if (parent === null) {
+        insertSorted(acc.topNodes, node);
+        return;
+      }
+      const group = ensureLiveGroup(acc, parent, node.seq);
+      insertSorted(group.children, node);
+    },
+    syncSubagentMeta: (id) => {
+      const meta = acc.subagentMeta.get(id);
+      if (!meta) return;
+      const group = ensureLiveGroup(acc, id, meta.seq);
+      group.subagentType = meta.subagentType;
+      group.description = meta.description;
+      group.prompt = meta.prompt;
+    },
+    foldAnswer: (id, answers) => {
+      const node = acc.questionNodesById.get(id);
+      if (node) node.answers = answers;
+    },
+  };
+}
+
+// A stable identity key for reconciliation, derivable from the node alone. Nodes with a natural id
+// (tools, question / permission requests, subagent groups) key on it; the rest key on (type, seq),
+// which is unique WITHIN a session segment. Across a resume seqs repeat, so two content-IDENTICAL
+// nodes in different segments may share a key — harmless: reconciliation only ever reuses a previous
+// object when it is byte-equal to the rebuilt one, so a collision can never change observable content.
+function nodeKey(n: RenderNode | SubagentGroupNode): string {
+  switch (n.type) {
+    case "tool":
+      return `tool:${n.id}`;
+    case "question_request":
+      return `question:${n.id}`;
+    case "permission_request":
+      return `perm:${n.id}`;
+    case "subagent":
+      return `group:${n.agentId}`;
+    default:
+      return `${n.type}:${n.seq}`;
+  }
+}
+
+function jsonEq(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+// Reconcile a freshly-rebuilt accumulator against the PREVIOUS one so that a node whose content is
+// unchanged keeps its previous OBJECT IDENTITY; only changed/new nodes stay fresh objects. This makes
+// object identity a faithful "content changed" signal across a full replay (a terminal-triggered
+// fallback), so the renderer can key DOM reuse on it. Reused objects are re-linked into the fresh
+// accumulator's index maps so later lookups (correlation, folds) hit the object that is actually in
+// the tree.
+// INVARIANT[replay-reconciles-node-identity] (runtime-guard): after a full replay, a content-unchanged node keeps its previous object identity (only changed/new nodes are fresh).
+//   prevents: a full-replay fallback needlessly re-creating every node object and forcing the renderer to rebuild unchanged DOM
+function reconcileIdentity(fresh: DeriveAccum, prev: DeriveAccum): void {
+  const prevByKey = new Map<string, RenderNode | SubagentGroupNode>();
+  for (const n of prev.topNodes) {
+    prevByKey.set(nodeKey(n), n);
+    if (n.type === "subagent") {
+      for (const c of n.children) prevByKey.set(nodeKey(c), c);
+    }
+  }
+
+  // Reuse the previous object for a leaf node when byte-equal; re-link it into the index maps.
+  const reuseLeaf = (n: RenderNode): RenderNode => {
+    const p = prevByKey.get(nodeKey(n));
+    if (p && p.type === n.type && jsonEq(p, n)) {
+      relinkNode(fresh, p);
+      return p as RenderNode;
+    }
+    return n;
+  };
+
+  for (let i = 0; i < fresh.topNodes.length; i++) {
+    const n = fresh.topNodes[i];
+    if (n.type !== "subagent") {
+      fresh.topNodes[i] = reuseLeaf(n);
+      continue;
+    }
+    // Reconcile children first; then, if the whole group (with reconciled children) is byte-equal to
+    // the previous group, reuse the previous group object too.
+    for (let j = 0; j < n.children.length; j++) n.children[j] = reuseLeaf(n.children[j]);
+    const p = prevByKey.get(nodeKey(n));
+    if (p && p.type === "subagent" && jsonEq(p, n)) {
+      fresh.topNodes[i] = p;
+      fresh.groupsById.set(p.agentId, p);
+      for (const c of p.children) relinkNode(fresh, c);
+    }
+  }
+}
+
+// Point the fresh accumulator's id-keyed indices at a reused (previous) node object, so a subsequent
+// correlation / fold mutates the object that is actually in the tree.
+function relinkNode(acc: DeriveAccum, node: RenderNode | SubagentGroupNode): void {
+  if (node.type === "tool") acc.toolById.set(node.id, node);
+  else if (node.type === "question_request") acc.questionNodesById.set(node.id, node);
 }
 
 function seqOf(ev: ModelEvent): number {
