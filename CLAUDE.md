@@ -31,6 +31,20 @@ macOS desktop app (Tauri v2) that browses and live-renders Claude Code plan mark
 - **Prototype permission seam**: the host-side `"prototype"` write policy (writes allowed only under `<cwd>/.plan-tree/prototype/`) maps to SDK permissionMode `"default"`, because SDK `"plan"` mode hard-blocks `Write` at the CLI tier regardless of `canUseTool`. But in `"default"` mode the user's `~/.claude/settings.json` `permissions.allow` rules evaluate BEFORE `canUseTool` (SDK precedence: PreToolUse hooks → deny rules → mode → allow rules → `canUseTool`) — so containment is enforced at the PreToolUse hook tier (`sidecar/permissions.ts` `prototypeHookDecision` / `createPrototypePreToolUseHook`). Never rely on `canUseTool` alone for `"default"`-mode sessions.
 - The app reads two **read-only** trees under `~/.claude/`: `plans/` (rendered + watched) and `projects/` (used only for cwd resolution). It also writes to a self-owned control directory `~/.claude/plan-reader/**` (review IPC: requests/responses + an `app.alive` heartbeat, all atomic + containment-guarded) and performs a single idempotent additive merge into `~/.claude/settings.json` to install/remove the ExitPlanMode review hook. As the app becomes a standalone Claude Code replacement, it now also **writes its own agent-produced plans into `~/.claude/plans/`** via the `write_agent_plan` command (atomic temp+rename, containment-guarded to the plans dir, frontmatter-tagged with `tree_id`/`flavor`/`nn` for sidebar nesting) — `plans/` is now its canonical, single-rooted plan store, not a read-only tree. It still NEVER writes into `~/.claude/projects/`.
 
+## Comments
+
+A comment is justified for exactly TWO reasons. If a comment serves neither, delete it — and never write one that does.
+
+1. **A non-obvious "why" or "how"** — and only when the code cannot be made self-evident on its own. Always prefer restructuring, renaming, or simplifying the code so it explains itself; reach for a comment only when readable code still cannot convey the rationale or mechanism (a non-obvious constraint, an ordering requirement, a platform quirk/workaround, a subtle algorithm, an external contract). The gotchas above are the bar: each explains something the code genuinely cannot.
+2. **The invariants script** — the machine-parsed `// INVARIANT[name] (tier): …` headers and their `//   prevents:` / `//   test:` continuation lines (`scripts/gen-invariants.mjs` → `INVARIANTS.md`). These are load-bearing; `npm run gen:invariants` regenerates the catalog when they or the code around them move.
+
+Everything else is noise — remove it. In particular, NEVER write:
+- **Historical / provenance tracking**: "relocated verbatim from…", "moved from X", "formerly in…", "was previously…", "(orig lines …)", "import path shifts", changelog / PR / ticket references. Git history is the record of change; the source is not.
+- **Restating what the code plainly does**: narration a reader already gets from the names, types, and control flow.
+- **Decorative section-divider banners** and JSDoc that only echoes the signature.
+
+Prefer readable code with no comment over clever code that needs one.
+
 ## Invariants
 - **Invariants must be grounded in code, not comments.** When documenting, cataloging, or asserting that an invariant holds, its evidence MUST be an actual enforcing construct:
   - a **type / discriminated union** that makes the invalid state unconstructable, or
