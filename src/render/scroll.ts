@@ -60,7 +60,7 @@ export function computeScrollDelta(
   return currentScrollTop + (chosen.top - containerTop) - anchor.offset;
 }
 
-// ---- DOM adapters (not unit-tested; jsdom lacks layout) ----
+// DOM adapters (not unit-tested; jsdom lacks layout)
 
 /**
  * Capture the first block at/just below the container's top edge as the anchor.

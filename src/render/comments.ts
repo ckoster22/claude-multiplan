@@ -18,8 +18,6 @@
 import type { CommentRecord } from "../types";
 import { fromArray, unwrapOr, initial, type RemoteData } from "../remote-data";
 
-// ---- Injected IO (main.ts wires these to Tauri invoke calls) -------------------------------
-//
 // `save` and `clearAll` return the AUTHORITATIVE resulting array (the backend does pure
 // full-array replacement), so the frontend adopts the return value as its cache — divergence
 // between the cache and the backend is unrepresentable after any mutation.
@@ -28,8 +26,6 @@ export interface CommentsIO {
   save: (path: string, comments: CommentRecord[]) => Promise<CommentRecord[]>;
   clearAll: (path: string) => Promise<CommentRecord[]>;
 }
-
-// ---- Pure helpers --------------------------------------------------------------------------
 
 /**
  * Collapse internal whitespace runs to a single space and trim. Markdown→HTML inserts
@@ -113,8 +109,6 @@ function isExcludedContainer(node: Node, root: HTMLElement): boolean {
   return false;
 }
 
-// ---- Text-walk anchoring -------------------------------------------------------------------
-//
 // We build a normalized character map over the search root's text nodes: each output char
 // records which Text node it came from and the offset within that node. We then search the
 // normalized text for the `occurrence`-th match of the (normalized) quote and translate the
@@ -188,7 +182,6 @@ export function findRangeForRecord(root: HTMLElement | null, quote: string, occu
 
   const { text, map } = buildNormalizedMap(root);
 
-  // Find the occurrence-th match.
   let from = 0;
   let found = -1;
   for (let n = 0; n <= occurrence; n++) {
@@ -293,8 +286,6 @@ export function applyComments(paneEl: HTMLElement, records: CommentRecord[]): vo
   }
 }
 
-// ---- Popover state machine -----------------------------------------------------------------
-//
 // INVARIANT[popover-state-is-tagged-union] (type-level): The popover is a discriminated union hidden|create|view; visibility = kind!=='hidden', with no parallel boolean.
 //   prevents: visible-but-no-subject / simultaneously-create-and-view states.
 type PopoverState =
@@ -320,8 +311,6 @@ interface Capture {
   blockEndLine: number | null;
   occurrence: number;
 }
-
-// ---- Public init ---------------------------------------------------------------------------
 
 // Callbacks fired AFTER an in-pane save/clear mutation is requested (NOT on open/reload
 // re-apply). main.ts registers one via onCommentCountChanged. The callback receives the path that
@@ -378,7 +367,6 @@ export function initComments(
 
   let state: PopoverState = { kind: "hidden" };
 
-  // ---- The SOLE writer of #sel-popover.hidden / #sp-quote / #sp-text ----
   // INVARIANT[renderpopover-is-sole-dom-writer] (convention): renderPopover is the only writer of #sel-popover.hidden / #sp-quote / #sp-text; every transition routes through it (grep-verified, not compiler-enforced).
   //   prevents: the visibility class desyncing from state.kind (a visible popover with no subject, or a hidden one with live state).
   function renderPopover(next: PopoverState): void {
@@ -411,21 +399,18 @@ export function initComments(
     return unwrapOr(cache.get(path) ?? initial(), []);
   }
 
-  // ---- Cache loading ----
   async function loadCommentsFor(path: string): Promise<CommentRecord[]> {
     const recs = await io.load(path);
     cache.set(path, fromArray(recs)); // boundary parse: [] -> zeroResults, populated -> success.
     return recs;
   }
 
-  // ---- Mint a collision-free id (max existing id + 1; NOT Date.now()) ----
   function mintId(recs: CommentRecord[]): number {
     let max = -1;
     for (const r of recs) if (r.id > max) max = r.id;
     return max + 1;
   }
 
-  // ---- Add a comment: optimistic cache+wrap, save, adopt returned array, fire onChange ----
   async function addComment(path: string, capture: Capture, comment: string): Promise<void> {
     const existing = unwrapOr(cache.get(path) ?? initial(), []);
     const rec: CommentRecord = {
@@ -452,7 +437,6 @@ export function initComments(
     }
   }
 
-  // ---- Clear a single comment (view-mode): splice the record, unwrap spans, save, fire ----
   async function clearComment(path: string, id: number): Promise<void> {
     const existing = unwrapOr(cache.get(path) ?? initial(), []);
     const next = existing.filter((r) => r.id !== id);
@@ -468,7 +452,6 @@ export function initComments(
     }
   }
 
-  // ---- Clear ALL comments for a plan (feedback overlay's "Clear" action) ----
   // Remove EVERY highlight span by iterating the CACHED record ids and calling clearHighlight for
   // each — this MUST happen BEFORE clearing the cache, because io.clearAll returns [] (the ids are
   // only known from the cache). Then clearAll on the backend, adopt the returned [] into the cache,
@@ -488,7 +471,6 @@ export function initComments(
     fireCountChanged(path, 0);
   }
 
-  // ---- Capture from the current selection (returns null if it must be rejected) ----
   function captureSelection(): Capture | null {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
@@ -523,9 +505,7 @@ export function initComments(
     return { range, quote, blockLine, blockEndLine, occurrence };
   }
 
-  // ---- Listeners (the single-applier funnel: each sets state then renderPopover) ----
   paneEl.addEventListener("mouseup", () => {
-    // Defer so the selection is finalized.
     const capture = captureSelection();
     if (!capture) {
       // Don't hide on a plain click that is NOT a selection — only an explicit cancel/outside
@@ -587,7 +567,6 @@ export function initComments(
     }
   });
 
-  // Escape hides + discards.
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.kind !== "hidden") renderPopover({ kind: "hidden" });
   });
@@ -601,9 +580,6 @@ export function initComments(
     renderPopover({ kind: "hidden" });
   });
 
-  // ---- plan-owned popover invalidation (to be called by the facade at a renderInto wipe;
-  //       the caller wiring lives in the main.ts reading-pane lane and is not in place yet) ----
-  //
   // INVARIANT[popover-invalidate-discards-on-plan-change-preserves-on-reload] (runtime-guard): invalidatePopover discards the draft only on a genuine plan-path change; a same-plan live reload preserves the draft and re-anchors its Range to fresh DOM.
   //   prevents: a draft pointing at detached old-plan DOM, or the draft destroyed on every same-plan reload.
   function invalidateOrReanchor(): void {
@@ -638,8 +614,6 @@ export function initComments(
   invalidateRegistry.set(paneEl, invalidateOrReanchor);
 }
 
-// ---- Facade-level loader registry ----------------------------------------------------------
-//
 // main.ts calls `loadCommentsFor(path)` inside its guarded region. We keep the per-pane loader
 // here (closed over the cache) and expose a thin module-level lookup so the facade can re-export
 // a single `loadCommentsFor` without leaking the cache.
@@ -652,8 +626,6 @@ export function loadCommentsFor(paneEl: HTMLElement, path: string): Promise<Comm
   return loader(path);
 }
 
-// ---- Facade-level clear-all registry (mirrors loaderRegistry) -------------------------------
-//
 // main.ts calls `clearAllComments(paneEl, path)` from the feedback overlay's "Clear" action. The
 // per-pane closure (registered in initComments, closed over the cache) removes every highlight by
 // cached id, clears the backend, adopts [] into the cache, and fires onCountChanged. We expose a
@@ -668,8 +640,6 @@ export function clearAllComments(paneEl: HTMLElement, path: string): Promise<voi
   return clear(path);
 }
 
-// ---- Facade-level popover-invalidation registry (mirrors clearAllRegistry) ----------
-//
 // renderPopover is closure-private inside initComments, so we expose the invalidate seam through
 // the same module-level per-pane lookup pattern rather than letting the facade toggle `.hidden`
 // directly (which would break the "renderPopover is the SOLE writer of #sel-popover.hidden"
@@ -690,8 +660,6 @@ export function invalidatePopover(paneEl: HTMLElement): void {
   const fn = invalidateRegistry.get(paneEl);
   if (fn) fn();
 }
-
-// ---- Small pure helpers (snippet clamp + occurrence-before counting) -----------------------
 
 /** Clamp a quote to a short snippet for the popover header (display only). */
 function clampSnippet(s: string): string {
@@ -734,8 +702,6 @@ function countOccurrencesBefore(root: HTMLElement | null, quote: string, range: 
   return count;
 }
 
-// ---- Positioning (UN-UNIT-TESTED DOM adapter) ----------------------------------------------
-//
 // jsdom has no layout, so getBoundingClientRect() returns zeros — positioning is carved into
 // this adapter that unit tests do NOT assert against (consistent with scroll.ts's convention).
 function positionPopover(popEl: HTMLElement, range: Range): void {

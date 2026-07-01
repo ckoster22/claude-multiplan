@@ -78,9 +78,8 @@ export async function resolveLocalImages(
       // Fold the awaited one-shot read. `initial`/`fetching` cannot fire for a
       // settled success/failure read, so they are genuine NO-OPS — a no-op is
       // correct-if-somehow-reached, unlike a spurious empty error marker that
-      // would flag a perfectly good image as broken. Per-image isolation is
-      // unchanged — this fold replaces the prior try/catch, so one failing image
-      // still leaves the batch intact.
+      // would flag a perfectly good image as broken. Per-image isolation: one
+      // failing image still leaves the batch intact.
       const fail = (message: string) => {
         img.alt = img.alt || `image not found: ${orig}`;
         img.dataset.error = message;

@@ -1,5 +1,3 @@
-// ---- Sidebar filter — pure, testable core -----------------------------------------
-//
 // The sidebar filter narrows the Plans list by a free-text query that ORs across each plan's
 // TITLE (filename_stem), its working DIR (cwd), and its H1 HEADINGS (h1s, sourced from the
 // backend). This module is pure: it takes records + a query and returns the filtered list, and
@@ -14,7 +12,7 @@ import type { PlanRecord } from "./types";
 // or ANY of the plan's H1 headings.
 export function matchesQuery(record: PlanRecord, query: string): boolean {
   const q = query.trim().toLowerCase();
-  if (q === "") return true; // empty query ⇒ everything matches
+  if (q === "") return true;
 
   const title = String(record.filename_stem).toLowerCase();
   if (title.includes(q)) return true;

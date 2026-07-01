@@ -72,7 +72,7 @@ export interface ConversationElements {
   // The #conversation-minimap right-margin gutter (sibling of `stream`). Optional — when absent the
   // minimap controller is a no-op, so the rest of the controller can call minimap.rebuild() freely.
   minimap?: HTMLElement | null;
-  // ---- Conversation-tab session controls (the 3-state machine) ----
+  // Conversation-tab session controls (the 3-state machine)
   // Stop: full-stop (interrupt the turn AND end the session) → state none. Enabled ⇔ active|idle.
   // `cancelBtn` is the legacy name for this exact control (today's Cancel = full-stop), kept as an
   // alias so existing wiring/tests compile; `stopBtn` is the canonical name. When both are present
@@ -86,13 +86,13 @@ export interface ConversationElements {
   // The titlebar "+ New plan" button. Disabled while a session is live so the composer can't be opened
   // mid-run. Optional so older callers/tests compile.
   newPlanBtn?: HTMLButtonElement | null;
-  // ---- Free-text message composer (human-in-the-loop) ----
+  // Free-text message composer (human-in-the-loop)
   // A persistent input + Send button at the bottom of the Conversation tab. Enabled ⇔ a session is
   // live (active OR idle); disabled when none. Sending pushes a user turn via send_agent_message.
   // Optional so older callers/tests compile.
   messageInput?: HTMLTextAreaElement | null;
   sendBtn?: HTMLButtonElement | null;
-  // ---- Multimodal image input for the in-conversation follow-up surface ----
+  // Multimodal image input for the in-conversation follow-up surface
   // Optional so older callers/tests compile. When attachStrip is present an image-attachment
   // controller is wired onto the messageInput (paste/drop) + attachBtn/fileInput (file-pick); chips
   // render into attachStrip and attach-time rejections show in attachError.
@@ -163,7 +163,7 @@ export async function initConversation(
   // question-answered).
   let synthSeq = 1_000_000_000;
 
-  // ---- PaneSource: the SINGLE discriminated source of truth for what the pane renders ----
+  // PaneSource: the SINGLE discriminated source of truth for what the pane renders
   //
   // The pane can never mix live + history: it is driven by EXACTLY ONE of these at a time.
   //   "live"    — the live `model` above drives the pane (default; the live agent-run stream).
@@ -221,12 +221,12 @@ export async function initConversation(
     rerender();
   };
 
-  // ---- SessionState: the SINGLE source of truth for session liveness ----
+  // SessionState: the SINGLE source of truth for session liveness
   //
   // "none"   — no backend agent session is live (never started / ended / fully stopped).
   // "active" — a backend session is live AND a turn is generating (streaming / awaiting a permission).
   // "idle"   — a backend session is live but NO turn is active (after a `result`, or after Pause).
-  // "paused" — QUOTA WALL (Phase 6): the sidecar hit a usage limit and gracefulExit(0)ed, but the
+  // "paused" — QUOTA WALL: the sidecar hit a usage limit and gracefulExit(0)ed, but the
   //            ORCHESTRATOR is auto-resume-armed and owns the run (active stays true on its side). The
   //            backend SDK session is GONE (the child exited), yet the run is NOT torn down — the
   //            orchestrator will respawn a session at the reset time. Treated as "live" so New-plan
@@ -243,7 +243,7 @@ export async function initConversation(
   type SessionState = "none" | "active" | "idle" | "paused";
   let session: SessionState = "none";
 
-  // ---- DispatchState: a SEPARATE dimension from SessionState — is a send/resume round-trip in flight? --
+  // DispatchState: a SEPARATE dimension from SessionState — is a send/resume round-trip in flight?
   //
   // SessionState answers "does a backend session exist and is a turn generating?"; DispatchState answers
   // "have we fired a send/resume whose round-trip has not settled?". They are ORTHOGONAL (deliberately
@@ -264,7 +264,7 @@ export async function initConversation(
   // the type-level invariants live with it there. `dispatch` resolves to that single definition.
   let dispatch: DispatchState = { t: "idle" };
 
-  // PHASE 6 — SYNCHRONOUS QUOTA-PAUSE RACE FLAG (DA-C1). The orchestrator's QUOTA_PAUSED dispatch
+  // SYNCHRONOUS QUOTA-PAUSE RACE FLAG. The orchestrator's QUOTA_PAUSED dispatch
   // runs in a LATER microtask (via enqueueIngest) than the agent-stream listener's fire-and-forget
   // `void ingestStream(...)`, and the sidecar's agent-exit can land in the SAME tick as the
   // quota_exceeded frame. So at agent-exit time the queue-deferred `quotaPaused()` probe is NOT yet
@@ -452,7 +452,7 @@ export async function initConversation(
       ? createMinimap(els.stream, els.minimap)
       : { rebuild: (): void => {}, destroy: (): void => {} };
 
-  // ---- Multimodal: in-conversation image-attachment controller ----
+  // Multimodal: in-conversation image-attachment controller
   // Bound to the follow-up textarea (paste/drop) + attach button / hidden file input (file-pick).
   // Null when the surface has no attach elements (older callers / tests) — sendMessage then forwards
   // no images. Per-instance closure state in the controller keeps it disjoint from the composer's.
@@ -476,7 +476,7 @@ export async function initConversation(
     // scrollHeight, which would otherwise make the "at bottom" test read against the new geometry.
     const wasAtBottom = isAtBottom(els.stream);
 
-    // ---- Source-select: derive the pane from the active PaneSource (live | history | empty) ----
+    // Source-select: derive the pane from the active PaneSource (live | history | empty)
     // "empty": paint a single explicit empty-state row and stop (no model derive, no working seed).
     if (paneSource.kind === "empty") {
       const div = document.createElement("div");
@@ -536,7 +536,7 @@ export async function initConversation(
     minimap.rebuild();
   };
 
-  // ---- event subscriptions (the five frozen events) ----
+  // event subscriptions (the five frozen events)
   const unlisteners: UnlistenFn[] = [];
 
   unlisteners.push(
@@ -550,14 +550,14 @@ export async function initConversation(
       if (e.payload.kind === "system_init" || e.payload.kind === "result") {
         if (e.payload.session_id) lastSessionId = e.payload.session_id;
       }
-      // PHASE 6 RACE FIX (DA-C1): a quota_exceeded frame means the sidecar is about to gracefulExit(0)
+      // Race fix: a quota_exceeded frame means the sidecar is about to gracefulExit(0)
       // and an agent-exit will follow — possibly in the SAME tick. Set the SYNCHRONOUS pause flag NOW,
       // BEFORE the fire-and-forget `void ingestStream(...)` below schedules the orchestrator's
       // (microtask-deferred) QUOTA_PAUSED dispatch. The agent-exit listener reads THIS flag (not the
       // not-yet-true `quotaPaused()` probe) to land "paused" instead of tearing down to "none".
       if (e.payload.kind === "quota_exceeded") {
         quotaPausePending = true;
-        // DA-I5 (integration fix): ALSO promote the pending state onto the orchestrator handle so the
+        // ALSO promote the pending state onto the orchestrator handle so the
         // OTHER agent-exit listener (main.ts, which guards its destructive purgeInprocReviews() +
         // placeholder clear) shares ONE synchronously-correct quotaPaused() probe. main.ts cannot read
         // THIS closure flag; markQuotaPausePending() makes quotaPaused() true the same tick, so a
@@ -591,10 +591,9 @@ export async function initConversation(
       // live bridge: forward the frame to the orchestrator's turn-completion sequencer so
       // a `result` advances the run. Only while an orchestration owns the seam (otherwise the legacy
       // single-shot path is untouched). Fired AFTER rendering so the Conversation tab still shows it.
-      // DIAGNOSTIC (minecraft-clone halt investigation): on a `result` frame, log whether the bridge
-      // gate is open and the frame is forwarded to ingestStream. If a recon `result` arrives with
-      // orchActive=false, the result renders "Run complete" but never advances the orchestrator — the
-      // halt. Log-only; remove after the root cause is confirmed.
+      // DIAGNOSTIC: on a `result` frame, log whether the bridge gate is open and the frame is
+      // forwarded to ingestStream. If a recon `result` arrives with orchActive=false, the result
+      // renders "Run complete" but never advances the orchestrator — the halt.
       if (e.payload.kind === "result") {
         const orchActive = isOrchestrationActive();
         // Route the gate decision to the dev terminal via diag_log (the console.log only reaches the
@@ -658,7 +657,7 @@ export async function initConversation(
 
   unlisteners.push(
     await listen<AgentExit>("agent-exit", (e) => {
-      // PHASE 6 (DA-C1 race + notifyAgentExit wiring). A quota wall makes the sidecar gracefulExit(0),
+      // A quota wall makes the sidecar gracefulExit(0),
       // so this agent-exit can be a QUOTA PAUSE exit, NOT a genuine end-of-run. Two things must happen
       // and the order matters:
       //
@@ -701,8 +700,8 @@ export async function initConversation(
     }),
   );
 
-  // ---- Quota auto-resume banner (Phase 5) ----
-  // Subscribe to the orchestrator's quota observer callbacks (fired by the Phase 4 timer/auto-resume
+  // Quota auto-resume banner
+  // Subscribe to the orchestrator's quota observer callbacks (fired by the timer/auto-resume
   // machinery) and drive the SINGLE quota-banner node. We CONSUME these callbacks verbatim — we never
   // re-derive the quota state from the inert `quota_exceeded` stream frame. The banner is a pure render
   // row: none of these touch session/complete state (the orchestrator already owns liveness during a
@@ -713,7 +712,7 @@ export async function initConversation(
     onQuotaPaused: ({ resetAt, remaining, source }) => {
       model.appendQuotaBanner({ state: "waiting", resetAt, remaining, source });
       rerender();
-      // Phase 8 — desktop notification (scenario 1: usage limit reached). Fire-and-forget; the
+      // Desktop notification (scenario 1: usage limit reached). Fire-and-forget; the
       // wrapper degrades silently if notifications are unavailable/denied, so it can never disturb
       // the banner/auto-resume flow.
       notifyQuotaPaused(resetAt);
@@ -723,7 +722,7 @@ export async function initConversation(
     onQuotaExhausted: ({ resetAt, source }) => {
       model.updateQuotaBanner({ state: "exhausted", resetAt, remaining: 0, source });
       rerender();
-      // Phase 8 — desktop notification (scenario 1: usage limit reached, exhausted variant).
+      // Desktop notification (scenario 1: usage limit reached, exhausted variant).
       // Fire-and-forget; silent degradation.
       notifyQuotaExhausted(resetAt);
     },
@@ -740,13 +739,13 @@ export async function initConversation(
       // and the pill leaves the paused face.
       applySessionState("active");
       rerender();
-      // Phase 8 — desktop notification (scenario 2: conversation auto-resumed). Fire-and-forget;
+      // Desktop notification (scenario 2: conversation auto-resumed). Fire-and-forget;
       // silent degradation.
       notifyQuotaResumed();
     },
   });
 
-  // ---- Stop (full-stop: interrupt the turn AND end the session) ----
+  // Stop (full-stop: interrupt the turn AND end the session)
   // Stop is the today's-Cancel behavior: it interrupts the in-flight turn AND kills the child so the
   // one-session slot is released and a new plan can start (the reported bug was leaving the sidecar
   // alive). Steps:
@@ -762,7 +761,7 @@ export async function initConversation(
   // a no-op unless a session is live, so it never calls cancel_agent_run with no session.
   const stopSession = (): void => {
     if (!isLive(session)) return;
-    // PHASE 6: a Cancel from the quota-paused state ends the run for good — drop the synchronous pause
+    // A Cancel from the quota-paused state ends the run for good — drop the synchronous pause
     // flag so the (already-seen / future) agent-exit is not mis-read as a still-pending pause.
     quotaPausePending = false;
     applySessionState("none");
@@ -783,7 +782,7 @@ export async function initConversation(
   const stopEl = els.stopBtn ?? els.cancelBtn;
   stopEl?.addEventListener("click", stopSession);
 
-  // ---- Pause (interrupt the turn ONLY — session stays alive) ----
+  // Pause (interrupt the turn ONLY — session stays alive)
   // Pause interrupts the generating turn WITHOUT ending the session, leaving it idle so the user can
   // Resume. It calls ONLY cancel_agent_run (never end_agent_session — that distinction IS the Pause
   // vs Stop contract). Gated: a no-op unless a turn is actively generating.
@@ -797,7 +796,7 @@ export async function initConversation(
     void invoke("cancel_agent_run").catch((err) => console.error("cancel_agent_run failed", err));
   });
 
-  // ---- Resume (push a "Continue." user turn into the idle session) ----
+  // Resume (push a "Continue." user turn into the idle session)
   // Resume pushes a fresh user turn into the live (idle) session and goes active. It calls ONLY
   // send_agent_message (the session is already alive — never start a new one). Gated: a no-op unless
   // the session is idle.
@@ -815,7 +814,7 @@ export async function initConversation(
     // INVARIANT[resume-reverts-on-reject] (runtime-guard): the optimistic flip to active is pending-until-confirmed — a rejected dispatch reverts to the captured prior state.
     //   prevents: a phantom stuck 'Working…' with Resume disabled forever
     const prev = session; // "idle"
-    // C1: wrap the marker→sync-work→invoke in a SYNCHRONOUS-throw guard. The marker is set non-idle
+    // Wrap the marker→sync-work→invoke in a SYNCHRONOUS-throw guard. The marker is set non-idle
     // BEFORE the invoke; if any of these statements (incl. invoke throwing before it returns a promise)
     // throws synchronously, the async .catch never runs and `dispatch` would latch non-idle forever — a
     // permanent Send/Resume lockout. The catch recovers exactly like the async reject path (mirrors the
@@ -842,7 +841,7 @@ export async function initConversation(
           rerender();
         });
     } catch (err) {
-      // C1: a synchronous throw — recover so the dispatch marker can't lock out the session.
+      // A synchronous throw — recover so the dispatch marker can't lock out the session.
       console.error("resume dispatch threw synchronously", err);
       dispatch = { t: "idle" };
       applySessionState(prev);
@@ -851,7 +850,7 @@ export async function initConversation(
     }
   });
 
-  // ---- Free-text composer (human-in-the-loop): send an additional user turn ----
+  // Free-text composer (human-in-the-loop): send an additional user turn
   // Send the textarea contents as a user turn via send_agent_message, then clear the field. Gated: a
   // no-op unless a session is live (active OR idle) and the trimmed text is non-empty. Sending mid-run
   // is allowed — the SDK queues additional user turns. This covers the case where the agent did not use
@@ -879,7 +878,7 @@ export async function initConversation(
     // text-only echo stays appendUserMessage(text) exactly.
     const displayImages = images.length > 0 ? imagesToDataUrls(images) : undefined;
 
-    // C2: restore the typed text + attached images after a FAILED dispatch — but ONLY when the user did
+    // Restore the typed text + attached images after a FAILED dispatch — but ONLY when the user did
     // not retype / re-attach during the round-trip (mirrors the field-clear-if-empty rule; never clobber
     // newer input). Both the field AND the chips were cleared SYNCHRONOUSLY at fire time, so without the
     // image half a transient failure (e.g. the drain-race "try again" notice) would silently drop the
@@ -902,7 +901,7 @@ export async function initConversation(
       // launch). Leave the field intact; nothing to dispatch (dispatch stays idle).
       if (lastCwd === null) return;
       const prev = session; // "none" — reverted to on a failed re-open.
-      // C1: wrap the marker→sync-work→invoke in a SYNCHRONOUS-throw guard (see the Resume button). The
+      // Wrap the marker→sync-work→invoke in a SYNCHRONOUS-throw guard (see the Resume button). The
       // marker is set non-idle BEFORE the invoke; a synchronous throw (incl. invoke throwing before it
       // returns a promise) would otherwise latch `dispatch` non-idle forever — a permanent lockout.
       try {
@@ -956,13 +955,13 @@ export async function initConversation(
             dispatch = { t: "idle" };
             applySessionState(prev);
             refreshDispatchControls();
-            // C2: restore the typed text AND the attached images (if the user did not retype/re-attach),
+            // Restore the typed text AND the attached images (if the user did not retype/re-attach),
             // so a transient drain-race failure hands the whole message back for a one-click retry.
             restoreInput();
             rerender();
           });
       } catch (err) {
-        // C1: a synchronous throw — recover so the dispatch marker can't lock out the session.
+        // A synchronous throw — recover so the dispatch marker can't lock out the session.
         console.error("resume dispatch threw synchronously", err);
         dispatch = { t: "idle" };
         applySessionState(prev);
@@ -979,7 +978,7 @@ export async function initConversation(
     // round-trip is never wiped. On resolve → echo the bubble (no orphan: a bubble is added only on a
     // dispatched-and-resolved turn) + drop the marker. On reject → drop the marker and restore the input
     // (text + images) ONLY IF the field/tray are still empty (never clobber newer input typed/attached
-    // mid-round-trip). C1: the whole marker→sync-work→invoke is wrapped so a SYNCHRONOUS throw can't
+    // mid-round-trip). The whole marker→sync-work→invoke is wrapped so a SYNCHRONOUS throw can't
     // latch `dispatch` non-idle into a permanent lockout (the async .catch never runs on a sync throw).
     try {
       // INVARIANT[synchronous-clear-once] (runtime-guard): the field/chips clear synchronously at fire time and are never re-cleared on resolve.
@@ -1007,11 +1006,11 @@ export async function initConversation(
           model.appendNotice("Couldn't send your message — try again.", synthSeq++);
           dispatch = { t: "idle" };
           refreshDispatchControls();
-          restoreInput(); // C2: hand text + images back (only if not retyped/re-attached).
+          restoreInput(); // hand text + images back (only if not retyped/re-attached).
           rerender();
         });
     } catch (err) {
-      // C1: a synchronous throw — recover so the dispatch marker can't lock out the session. The live
+      // A synchronous throw — recover so the dispatch marker can't lock out the session. The live
       // path makes no optimistic session change, so re-derive the controls from the (unchanged) state.
       console.error("live send dispatch threw synchronously", err);
       dispatch = { t: "idle" };

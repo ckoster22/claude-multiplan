@@ -1,6 +1,5 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 
-// --- plan-sizer -------------------------------------------------------------
 // Frontmatter: model: opus → kept on the capable model (decomposition sizing is
 // a high-stakes judgment call; the bias-toward-split convention needs strong
 // reasoning).

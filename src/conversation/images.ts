@@ -149,8 +149,6 @@ export function extractImageFiles(dt: DataTransfer | null): File[] {
   return out;
 }
 
-// --- internals -------------------------------------------------------------
-
 // FileReader.readAsDataURL wrapped as a promise. Isolated so tests can construct a real
 // Blob/File and assert prefix-stripping (jsdom provides FileReader).
 function readAsDataURL(file: Blob): Promise<string> {

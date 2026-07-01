@@ -1,4 +1,4 @@
-// Desktop notifications (Phase 8) — a thin, ALWAYS-SILENT-ON-FAILURE wrapper around
+// Desktop notifications — a thin, ALWAYS-SILENT-ON-FAILURE wrapper around
 // `@tauri-apps/plugin-notification`.
 //
 // Notifications fire in EXACTLY two scenarios, both driven from the quota observer block in

@@ -10,7 +10,6 @@ import type { AgentAuthStatus } from "./types";
 
 export type SdkStatus = "ready" | "building" | "auth" | "error";
 
-// Human label per pill state.
 const STATUS_LABEL: Record<SdkStatus, string> = {
   ready: "SDK ready",
   building: "building",
@@ -36,7 +35,7 @@ export function nextStatus(input: {
   return "ready";
 }
 
-// Map a status to its pill label. EXPORTED for tests.
+// EXPORTED for tests.
 export function statusLabel(status: SdkStatus): string {
   return STATUS_LABEL[status];
 }

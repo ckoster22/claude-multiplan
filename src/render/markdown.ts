@@ -20,7 +20,6 @@ import type Token from "markdown-it/lib/token.mjs";
 import hljs from "highlight.js";
 import { isExternalHref } from "./links";
 
-// Build the singleton.
 function buildMd(): MarkdownIt {
   const md = new MarkdownIt({
     html: false,
@@ -34,7 +33,6 @@ function buildMd(): MarkdownIt {
 
   const esc = md.utils.escapeHtml;
 
-  // ---- fence rule (code blocks ```lang ... ```) ----
   md.renderer.rules.fence = (tokens, idx) => {
     const token = tokens[idx];
     const info = token.info ? token.info.trim() : "";
@@ -75,7 +73,6 @@ function buildMd(): MarkdownIt {
     );
   };
 
-  // ---- image rule ----
   // markdown-it render is synchronous; we cannot await invoke() here. Remote /
   // data: srcs are emitted directly; everything else becomes a placeholder that
   // assets.ts resolves asynchronously after the HTML is inserted.
@@ -96,7 +93,7 @@ function buildMd(): MarkdownIt {
         // src so the browser doesn't try to fetch a non-existent file.
         token.attrSet("data-resolve", "1");
         token.attrSet("data-local-src", src);
-        token.attrs[srcIdx][1] = ""; // blank src placeholder
+        token.attrs[srcIdx][1] = "";
       }
     }
     return defaultImage
@@ -104,7 +101,6 @@ function buildMd(): MarkdownIt {
       : self.renderToken(tokens, idx, options);
   };
 
-  // ---- link_open rule ----
   const defaultLinkOpen = md.renderer.rules.link_open;
   md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
     const token = tokens[idx];
@@ -121,7 +117,6 @@ function buildMd(): MarkdownIt {
       : self.renderToken(tokens, idx, options);
   };
 
-  // ---- source-line stamping ----
   // Wrap renderToken so every top-level block-open token with a `.map` gets a
   // data-source-line attribute. fence handles its own stamping above (it does
   // not go through renderToken), so this covers headings, paragraphs, lists,
@@ -150,7 +145,6 @@ function buildMd(): MarkdownIt {
     return defaultRenderToken(tokens, idx, options);
   };
 
-  // ---- GFM task lists ----
   // A core rule that runs after block+inline parsing. For each list item whose
   // first inline content starts with `[ ]`, `[x]`, or `[X]`, strip that marker
   // and prepend a DISABLED checkbox <input> (read-only viewer — the user must

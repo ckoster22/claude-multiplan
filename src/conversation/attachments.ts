@@ -143,8 +143,6 @@ export function createImageAttachments(opts: CreateImageAttachmentsOptions): Ima
     if (added) render();
   }
 
-  // --- event bindings ------------------------------------------------------
-
   inputEl.addEventListener("paste", (e) => {
     const dt = (e as ClipboardEvent).clipboardData;
     const files = extractImageFiles(dt);

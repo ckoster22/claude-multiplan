@@ -35,42 +35,42 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a comment anchored in a diagram/code re-anchoring wrong (or not at all) across reloads.
 
-**Anchor:** `src/render/comments.ts:96` — `function isExcludedContainer(node: Node, root: HTMLElement): boolean {`
+**Anchor:** `src/render/comments.ts:92` — `function isExcludedContainer(node: Node, root: HTMLElement): boolean {`
 
 ### popover-state-is-tagged-union
 **`type-level`** — The popover is a discriminated union hidden|create|view; visibility = kind!=='hidden', with no parallel boolean.
 
 **Prevents:** visible-but-no-subject / simultaneously-create-and-view states.
 
-**Anchor:** `src/render/comments.ts:300` — `type PopoverState =`
+**Anchor:** `src/render/comments.ts:291` — `type PopoverState =`
 
 ### popover-owned-by-capturing-plan
 **`runtime-guard`** — A create/view popover records the plan path open at capture; the saveEl guard makes Save a no-op when the current plan differs (the Save guard, comparing the recorded planPath to the current plan, is the enforcer).
 
 **Prevents:** a draft captured on plan A being persisted/anchored onto plan B after a mid-draft switch.
 
-**Anchor:** `src/render/comments.ts:311` — `planPath: string | null;`
+**Anchor:** `src/render/comments.ts:302` — `planPath: string | null;`
 
 ### renderpopover-is-sole-dom-writer
 **`convention`** — renderPopover is the only writer of #sel-popover.hidden / #sp-quote / #sp-text; every transition routes through it (grep-verified, not compiler-enforced).
 
 **Prevents:** the visibility class desyncing from state.kind (a visible popover with no subject, or a hidden one with live state).
 
-**Anchor:** `src/render/comments.ts:384` — `function renderPopover(next: PopoverState): void {`
+**Anchor:** `src/render/comments.ts:372` — `function renderPopover(next: PopoverState): void {`
 
 ### popover-invalidate-discards-on-plan-change-preserves-on-reload
 **`runtime-guard`** — invalidatePopover discards the draft only on a genuine plan-path change; a same-plan live reload preserves the draft and re-anchors its Range to fresh DOM.
 
 **Prevents:** a draft pointing at detached old-plan DOM, or the draft destroyed on every same-plan reload.
 
-**Anchor:** `src/render/comments.ts:609` — `function invalidateOrReanchor(): void {`
+**Anchor:** `src/render/comments.ts:585` — `function invalidateOrReanchor(): void {`
 
 ### invalidate-via-registry-preserves-sole-writer
 **`convention`** — The facade invalidates only via a per-pane WeakMap callback into the closure; it never toggles .hidden directly.
 
 **Prevents:** the facade flipping popover DOM out-of-band, breaking the renderPopover sole-writer invariant.
 
-**Anchor:** `src/render/comments.ts:689` — `export function invalidatePopover(paneEl: HTMLElement): void {`
+**Anchor:** `src/render/comments.ts:659` — `export function invalidatePopover(paneEl: HTMLElement): void {`
 
 ### renderinto-is-pure-sync-transform
 **`convention`** — renderInto does only the synchronous markdown→HTML transform; it starts no async asset/highlight work.
@@ -98,7 +98,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** diagram source being syntax-highlighted as code instead of rendered as a diagram.
 
-**Anchor:** `src/render/markdown.ts:47` — `if (lang === "mermaid") {`
+**Anchor:** `src/render/markdown.ts:45` — `if (lang === "mermaid") {`
 
 ### foreignobject-html-integration-survives-sanitization
 **`sanitization`** — The sanitize config preserves <foreignObject> + HTML-namespaced children (multi-line labels) while stripping <script>/on* handlers.
@@ -170,21 +170,21 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** shared-reference mutation between controller and the captured sending-state images
 
-**Anchor:** `src/conversation/attachments.ts:192` — `setImages: (imgs) => {`
+**Anchor:** `src/conversation/attachments.ts:190` — `setImages: (imgs) => {`
 
 ### composer-single-start
 **`runtime-guard`** — a rapid double-click/double-Enter on Start dispatches exactly one run.
 
 **Prevents:** double session-start
 
-**Anchor:** `src/conversation/composer.ts:236` — `if (this.starting) return;`
+**Anchor:** `src/conversation/composer.ts:234` — `if (this.starting) return;`
 
 ### validate-before-arm
 **`convention`** — input validation runs before arming `this.starting`, so a validation failure never latches Start disabled.
 
 **Prevents:** a latched-disabled Start after a recoverable validation error
 
-**Anchor:** `src/conversation/composer.ts:243` — `if (!text) {`
+**Anchor:** `src/conversation/composer.ts:241` — `if (!text) {`
 
 ### dispatch-dimension-orthogonal
 **`type-level`** — a send/resume round-trip in flight is its own dimension, exactly idle|sending|resuming — separate from SessionState.
@@ -219,42 +219,42 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a phantom stuck 'Working…' with Resume disabled forever
 
-**Anchor:** `src/conversation/index.ts:817` — `const prev = session; // "idle"`
+**Anchor:** `src/conversation/index.ts:816` — `const prev = session; // "idle"`
 
 ### sync-throw-no-lockout
 **`runtime-guard`** — a synchronous throw in the marker→sync-work→invoke sequence recovers dispatch to idle.
 
 **Prevents:** a permanent Send/Resume lockout (the async .catch never runs on a sync throw)
 
-**Anchor:** `src/conversation/index.ts:825` — `try {`
+**Anchor:** `src/conversation/index.ts:824` — `try {`
 
 ### single-dispatch-under-double-fire
 **`runtime-guard`** — a second Send/Resume/Enter before the first round-trip settles dispatches exactly once.
 
 **Prevents:** double send_agent_message / double session-open
 
-**Anchor:** `src/conversation/index.ts:873` — `if (dispatch.t !== "idle") return;`
+**Anchor:** `src/conversation/index.ts:872` — `if (dispatch.t !== "idle") return;`
 
 ### restore-only-if-not-retyped
 **`runtime-guard`** — a failed dispatch restores captured text/images only if the field/tray is still empty.
 
 **Prevents:** clobbering newer input typed during the round-trip
 
-**Anchor:** `src/conversation/index.ts:889` — `const restoreInput = (): void => {`
+**Anchor:** `src/conversation/index.ts:888` — `const restoreInput = (): void => {`
 
 ### synchronous-clear-once
 **`runtime-guard`** — the field/chips clear synchronously at fire time and are never re-cleared on resolve.
 
 **Prevents:** text typed during an open round-trip wiped when the first send resolves
 
-**Anchor:** `src/conversation/index.ts:987` — `dispatch = { t: "sending", text, images };`
+**Anchor:** `src/conversation/index.ts:986` — `dispatch = { t: "sending", text, images };`
 
 ### no-orphan-bubble
 **`runtime-guard`** — a user bubble is appended only on a dispatched-and-resolved turn; a failed send adds a notice, no bubble.
 
 **Prevents:** an orphan bubble implying the agent got a message it never did
 
-**Anchor:** `src/conversation/index.ts:994` — `.then(() => {`
+**Anchor:** `src/conversation/index.ts:993` — `.then(() => {`
 
 ### awaiting-exactly-one-armed-step
 **`type-level`** — at most one sequencer step is armed — `run.awaiting` is exactly one tagged variant; a result while idle is swallowed.
@@ -580,21 +580,21 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a prototype gate and an approval gate both driving the bar
 
-**Anchor:** `src/prototype.ts:115` — `if (snap.pendingApproval != null) return null; // approval gate takes precedence`
+**Anchor:** `src/prototype.ts:115` — `if (snap.pendingApproval != null) return null;`
 
 ### approval-and-prototype-beat-acceptance
 **`precedence`** — both a held pendingApproval and a held pendingPrototype short-circuit to null, outranking the forced-acceptance gate.
 
 **Prevents:** the post-completion acceptance bar co-existing with a mid-run hold
 
-**Anchor:** `src/prototype.ts:151` — `if (snap.pendingApproval != null) return null; // approval gate takes precedence`
+**Anchor:** `src/prototype.ts:149` — `if (snap.pendingApproval != null) return null;`
 
 ### acceptance-refine-targets-from-root-children
 **`runtime-guard`** — refine targets are the root's direct children only, and [] unless the root is split — empty for a single-leaf run.
 
 **Prevents:** offering refine targets that don't exist on a leaf-only tree
 
-**Anchor:** `src/prototype.ts:189` — `if (root.state.stage !== "split") return [];`
+**Anchor:** `src/prototype.ts:187` — `if (root.state.stage !== "split") return [];`
 
 ### review-bar-mode-union
 **`type-level`** — the bar's mode is exactly one of hidden | viewing | summary | submitting (a single union field).
@@ -608,28 +608,28 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a bar showing with nothing pending
 
-**Anchor:** `src/review.ts:77` — `if (input.pendingCount === 0) {`
+**Anchor:** `src/review.ts:76` — `if (input.pendingCount === 0) {`
 
 ### submitInFlight-meaningful-only-while-viewing
 **`runtime-guard`** — the submitInFlight → "submitting" refinement is checked only inside this VIEWING branch.
 
 **Prevents:** a leaked in-flight flag forcing "submitting" while the bar should be hidden / summary
 
-**Anchor:** `src/review.ts:92` — `if (input.viewing) {`
+**Anchor:** `src/review.ts:91` — `if (input.viewing) {`
 
 ### submit-disabled-at-zero-comments
 **`runtime-guard`** — in VIEWING, Submit is visible but disabled until there is >=1 comment.
 
 **Prevents:** an empty-feedback deny
 
-**Anchor:** `src/review.ts:118` — `submitDisabled: n === 0,`
+**Anchor:** `src/review.ts:117` — `submitDisabled: n === 0,`
 
 ### approve-is-a-viewing-only-in-process-affordance
 **`runtime-guard`** — Approve & Build is visible only while VIEWING an in-process review/gate (approveVisible === inProcess inside the viewing branch).
 
 **Prevents:** an Approve & Build button where there is no held in-process seam
 
-**Anchor:** `src/review.ts:125` — `approveVisible: inProcess,`
+**Anchor:** `src/review.ts:123` — `approveVisible: inProcess,`
 
 ## Sidecar / agent-driver
 
@@ -652,91 +652,91 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** echo>file / rm / sed -i / git mutating the tree during planning.
 
-**Anchor:** `sidecar/permissions.ts:103` — `export const BASH_WRITE_DENY_PATTERNS: ReadonlyArray<RegExp> = [`
+**Anchor:** `sidecar/permissions.ts:101` — `export const BASH_WRITE_DENY_PATTERNS: ReadonlyArray<RegExp> = [`
 
 ### dual-tier-no-drift
 **`runtime-guard`** — the PreToolUse hook and the canUseTool gate apply the same prototype/plan decision via one shared bashDecisionFor.
 
 **Prevents:** a Bash/path allowed at one tier but denied at the other.
 
-**Anchor:** `sidecar/permissions.ts:261` — `export function bashDecisionFor(policy: HostPolicy, command: unknown): string | null {`
+**Anchor:** `sidecar/permissions.ts:257` — `export function bashDecisionFor(policy: HostPolicy, command: unknown): string | null {`
 
 ### prototype-bash-failclosed-allowlist
 **`runtime-guard`** — under prototype, Bash runs only when every segment is provably read-only and there's no command/process substitution; unrecognized denies.
 
 **Prevents:** an obfuscated Bash command writing during the prototype phase.
 
-**Anchor:** `sidecar/permissions.ts:271` — `if (typeof command !== "string" || command.trim().length === 0) {`
+**Anchor:** `sidecar/permissions.ts:267` — `if (typeof command !== "string" || command.trim().length === 0) {`
 
 ### hostpolicy-failclosed-mapping
 **`runtime-guard`** — only acceptEdits and prototype widen the host policy; every other value (incl. malformed) maps to plan — via the function's final default branch (`return "plan"`), not the type.
 
 **Prevents:** an unknown/spoofed wire mode disabling write protection.
 
-**Anchor:** `sidecar/permissions.ts:307` — `export function hostPolicyForMode(mode: unknown): HostPolicy {`
+**Anchor:** `sidecar/permissions.ts:303` — `export function hostPolicyForMode(mode: unknown): HostPolicy {`
 
 ### sdk-never-receives-host-only-prototype
 **`type-level`** — the SDK is only ever handed plan|acceptEdits|default; host-only prototype maps to default.
 
 **Prevents:** passing 'prototype' to the SDK (not in its union) or using SDK plan mode (which hard-blocks Write).
 
-**Anchor:** `sidecar/permissions.ts:321` — `export function sdkPermissionMode(mode: unknown): "plan" | "acceptEdits" | "default" {`
+**Anchor:** `sidecar/permissions.ts:317` — `export function sdkPermissionMode(mode: unknown): "plan" | "acceptEdits" | "default" {`
 
 ### prototype-write-containment
 **`containment`** — under prototype policy a mutating tool is allowed only when its target resolves strictly under <cwd>/.plan-tree/prototype/.
 
 **Prevents:** a prototype-phase agent writing outside the scratch dir.
 
-**Anchor:** `sidecar/permissions.ts:346` — `export function isPrototypeWritePath(cwd: string, filePath: unknown): boolean {`
+**Anchor:** `sidecar/permissions.ts:342` — `export function isPrototypeWritePath(cwd: string, filePath: unknown): boolean {`
 
 ### prototype-traversal-rejection
 **`containment`** — any `..` segment rejects the write — checked on raw input and resolved segments; `..` is never collapsed.
 
 **Prevents:** path-traversal laundering escaping containment.
 
-**Anchor:** `sidecar/permissions.ts:352` — `if (filePath.split("/").includes("..")) return false;`
+**Anchor:** `sidecar/permissions.ts:348` — `if (filePath.split("/").includes("..")) return false;`
 
 ### prototype-strict-subpath-no-prefix-sibling
 **`containment`** — the resolved path must be strictly longer than the prototype root and match segment-for-segment.
 
 **Prevents:** a .plan-tree/prototype-evil/ sibling passing a string-prefix check.
 
-**Anchor:** `sidecar/permissions.ts:362` — `if (resolved.length <= root.length) return false;`
+**Anchor:** `sidecar/permissions.ts:358` — `if (resolved.length <= root.length) return false;`
 
 ### pretooluse-precedes-allow-rules
 **`containment`** — prototype containment is enforced at the PreToolUse hook tier, which precedes SDK allow-rules.
 
 **Prevents:** a user permissions.allow rule bypassing containment in default mode.
 
-**Anchor:** `sidecar/permissions.ts:416` — `export function createPrototypePreToolUseHook(`
+**Anchor:** `sidecar/permissions.ts:410` — `export function createPrototypePreToolUseHook(`
 
 ### interactive-hold-serialization
 **`runtime-guard`** — at most one interactive hold (ExitPlanMode/AskUserQuestion) is live; a second is denied immediately.
 
 **Prevents:** two concurrent approval cards colliding so a hold resolves against the wrong tool-use id.
 
-**Anchor:** `sidecar/permissions.ts:462` — `export function shouldDenyConcurrentInteractive(`
+**Anchor:** `sidecar/permissions.ts:454` — `export function shouldDenyConcurrentInteractive(`
 
 ### allow-result-carries-updatedinput
 **`convention`** — allowResult is the sole 'allow' constructor and always sets updatedInput.
 
 **Prevents:** a bare {behavior:'allow'} failing the SDK's runtime validator.
 
-**Anchor:** `sidecar/permissions.ts:476` — `export function allowResult(input: Record<string, unknown>): PermissionResult {`
+**Anchor:** `sidecar/permissions.ts:468` — `export function allowResult(input: Record<string, unknown>): PermissionResult {`
 
 ### plan-policy-mutating-deny
 **`runtime-guard`** — while host policy is plan, the four mutating tools are denied in-process regardless of the SDK's believed mode.
 
 **Prevents:** writes sailing through after the SDK self-flips out of plan on ExitPlanMode approval.
 
-**Anchor:** `sidecar/permissions.ts:565` — `if (MUTATING_TOOLS.has(toolName) && getHostPolicy() === "plan") {`
+**Anchor:** `sidecar/permissions.ts:555` — `if (MUTATING_TOOLS.has(toolName) && getHostPolicy() === "plan") {`
 
 ### null-cwd-fails-closed
 **`runtime-guard`** — a null/empty session cwd denies all mutating tools under prototype policy.
 
 **Prevents:** an unset cwd silently widening writes to the whole filesystem.
 
-**Anchor:** `sidecar/permissions.ts:578` — `if (cwd === null || !isPrototypeWritePath(cwd, target)) {`
+**Anchor:** `sidecar/permissions.ts:568` — `if (cwd === null || !isPrototypeWritePath(cwd, target)) {`
 
 ### quota-epoch-ms-canonical
 **`runtime-guard`** — every reset time is epoch-ms (seconds-vs-ms disambiguated at the 1e12 boundary).
@@ -764,7 +764,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a wrong-early resume time that resumes straight back into the wall.
 
-**Anchor:** `sidecar/quota.ts:203` — `export function parseClockTimeInTz(text: unknown, nowMs: number = Date.now()): number | null {`
+**Anchor:** `sidecar/quota.ts:199` — `export function parseClockTimeInTz(text: unknown, nowMs: number = Date.now()): number | null {`
 
 ### setpermissionmode-gated-to-live
 **`type-level`** — `q` exists only on the live Session variant, so setPermissionMode is unreachable on idle/dead/draining at compile time.
@@ -801,7 +801,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a consumer routed through match()/matchScalar() silently ignoring the loading/empty/error states — stale data mid-fetch or a missing empty-state UI — and a collection read mis-routed through the scalar fold turning a legitimate empty result into a false error. (It does NOT prevent swallowed errors at leaf reads: unwrapOr is the sanctioned escape hatch that deliberately collapses error→fallback.)
 
-**Anchor:** `src/remote-data.ts:10` — `export type RemoteData<T> =`
+**Anchor:** `src/remote-data.ts:8` — `export type RemoteData<T> =`
 
 ### affordance-union
 **`precedence`** — at most one reading-pane affordance is active, chosen by first-match over the total order prototype > acceptance > review > resume > none.

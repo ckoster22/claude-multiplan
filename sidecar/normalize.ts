@@ -40,7 +40,6 @@ export interface Normalizer {
   normalize(msg: SDKMessage): Array<Record<string, unknown>>;
 }
 
-// ---------------------------------------------------------------------------
 // OVERLOAD (HTTP 529) detection — pure predicate.
 //
 // The Anthropic SDK retries a 529 "Overloaded" INTERNALLY (≤8s, not configurable) and then —
@@ -86,7 +85,6 @@ export function isOverloadedMessage(msg: SDKMessage): boolean {
   return false;
 }
 
-// ---------------------------------------------------------------------------
 // MID-TURN-529 GRACEFUL TURN-BOUNDARY FRAME — pure builder.
 //
 // When a 529 overload surfaces AFTER this attempt already emitted rendered output, index.ts ends the
@@ -123,7 +121,7 @@ function contentBlocks(content: unknown): Array<Record<string, unknown>> {
 export function createNormalizer(deps: NormalizerDeps): Normalizer {
   const { seq, logErr } = deps;
 
-  // PHASE 1 — the most-recent `SDKRateLimitInfo` seen on a `rate_limit_event`, retained across
+  // The most-recent `SDKRateLimitInfo` seen on a `rate_limit_event`, retained across
   // messages. The result-carrier quota path (a usage-limit `result` with no structured field of its
   // own) reuses a recent structured `resetsAt` from here via decideResultQuota → extractResetAt.
   // Stored for ALL statuses; reuse is gated on `status === "rejected"` inside extractResetAt (which
@@ -264,7 +262,7 @@ export function createNormalizer(deps: NormalizerDeps): Normalizer {
         // (NOT by narrowing on `subtype === "success"`, which would BLIND quota detection on the
         // is_error path) and reuse the same value for BOTH the quota check and the normal frame.
         const resultText = "result" in msg ? msg.result : undefined;
-        // PHASE 1 — RESULT-CARRIER QUOTA DETECTION. A usage/session limit has NO dedicated subtype:
+        // RESULT-CARRIER QUOTA DETECTION. A usage/session limit has NO dedicated subtype:
         // it arrives as an `is_error:true` result whose only payload is the human limit string. When
         // this result IS that wall, DROP the plain result (Decision B) and emit a `quota_exceeded`
         // frame instead — driving the same pause + auto-resume + gracefulExit(0) path the
@@ -297,7 +295,7 @@ export function createNormalizer(deps: NormalizerDeps): Normalizer {
         // would pin the OAuth-bearing `claude` grandchild). Otherwise (allowed / allowed_warning /
         // rejected-but-no-reset) keep TODAY's label-only `status` behavior unchanged.
         const info = msg.rate_limit_info;
-        // PHASE 1 — retain the latest info so a following result-carrier quota can reuse its
+        // Retain the latest info so a following result-carrier quota can reuse its
         // structured `resetsAt`. Stored for ALL statuses; reuse is gated on status==="rejected" in
         // extractResetAt.
         lastRateLimitInfo = info;

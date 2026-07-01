@@ -1,6 +1,5 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 
-// --- scope-recon ------------------------------------------------------------
 // Frontmatter: NO model declared. Ambiently it inherited the SESSION model
 // (default opus-4-8 per src/model-picker.ts), so this is NOT a free relocation:
 // we INTENTIONALLY pin it DOWN to 'sonnet' as a deliberate, labeled cost

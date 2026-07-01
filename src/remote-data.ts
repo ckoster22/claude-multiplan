@@ -1,5 +1,3 @@
-// ---- RemoteData: a five-state model for an asynchronous read ----------------------------------
-//
 // Replaces the classic `{ loading: bool; data: T | null; error: string | null }` bag — which is
 // representable in 8 ways (2³) but only 4 of those combinations are coherent — with a tagged union
 // whose ONLY inhabitable states are the legal ones. "Empty result" is promoted to its own state
@@ -20,8 +18,6 @@ export type RemoteData<T> =
 // cannot be bypassed.
 export type ScalarRemoteData<T> = Exclude<RemoteData<T>, { kind: "zeroResults" }>;
 
-// ---- Constructors -----------------------------------------------------------------------------
-//
 // Each constructor returns its EXACT singleton variant (not the whole union). That keeps the result
 // assignable to `RemoteData<T>` (it is one of its members) AND — for the four non-empty variants —
 // to `ScalarRemoteData<T>`, so `initial()`/`fetching()`/`success()`/`failure()` flow into
@@ -36,8 +32,6 @@ export const failure = (message: string): { kind: "error"; message: string } => 
   message,
 });
 
-// ---- Boundary producers -----------------------------------------------------------------------
-//
 // The ONLY emitters of `zeroResults`. Parse at the boundary (a collection read / a nullable read)
 // into the five-state model so internal code never re-checks `.length === 0` or `=== null`.
 // `fromArray` keeps the array MUTABLE (`T[]`, not `readonly T[]`) so downstream collection consumers
@@ -51,8 +45,6 @@ export function fromArray<T>(xs: T[]): RemoteData<T[]> {
 export const fromNullable = <T>(x: T | null | undefined): RemoteData<T> =>
   x === null || x === undefined ? zeroResults() : success(x);
 
-// ---- Exhaustiveness sentinel ------------------------------------------------------------------
-//
 // Reached only if a discriminated-union case is missing from a fold's switch. Because every case
 // `return`s, a missing branch leaves the discriminant non-`never` at this call — a compile-time
 // error — and, defensively at runtime, throws. (Mirrors the orchestrator's `assertNever`; defined
@@ -61,8 +53,6 @@ function assertNever(x: never): never {
   throw new Error(`unreachable RemoteData state: ${String(x)}`);
 }
 
-// ---- Exhaustive match -------------------------------------------------------------------------
-//
 // All five handler keys are REQUIRED — there is no `default`/optional arm. A missing case is a
 // compile error (the cases object is not assignable); a future sixth state breaks the switch's
 // exhaustiveness, failing `assertNever`.
@@ -91,8 +81,6 @@ export function match<T, R>(rd: RemoteData<T>, cases: RemoteCases<T, R>): R {
   }
 }
 
-// ---- Scalar match -----------------------------------------------------------------------------
-//
 // For reads whose producer never emits `zeroResults` (a scalar/single-value read, not a collection
 // or nullable). Its input is `ScalarRemoteData<T>`, so the empty state is excluded BY TYPE: a
 // possibly-empty source cannot be routed here at all (it fails to compile) — there is no runtime
@@ -120,16 +108,12 @@ export function matchScalar<T, R>(rd: ScalarRemoteData<T>, cases: ScalarCases<T,
   }
 }
 
-// ---- Transform --------------------------------------------------------------------------------
-//
 // Maps over the `success` payload only; the other four states pass through unchanged (and, being
 // payload-free or T-independent, are reference-identical on the way out).
 export function mapData<T, U>(rd: RemoteData<T>, f: (data: T) => U): RemoteData<U> {
   return rd.kind === "success" ? { kind: "success", data: f(rd.data) } : rd;
 }
 
-// ---- Unwrap -----------------------------------------------------------------------------------
-//
 // Returns the `success` payload, or `fallback` for every other state (initial/fetching/zeroResults/
 // error). A leaf escape hatch out of the model — prefer `match`/`matchScalar` where a state-specific
 // response is needed.
@@ -137,8 +121,6 @@ export function unwrapOr<T>(rd: RemoteData<T>, fallback: T): T {
   return rd.kind === "success" ? rd.data : fallback;
 }
 
-// ---- Type guards ------------------------------------------------------------------------------
-//
 // All five are type predicates: a truthy guard narrows `rd` to the matching variant at the call
 // site (the success/error guards additionally surface `.data`/`.message`).
 export const isInitial = <T>(rd: RemoteData<T>): rd is { kind: "initial" } => rd.kind === "initial";

@@ -8,7 +8,7 @@
 // reviewed plan is a real file under `~/.claude/plans/`, so opening it selects its sidebar row,
 // persists comments with the plan, and live-reloads. There is no synthetic comment store — review
 // comments ARE the normal persisted comments of the opened plan. This pure helper derives the
-// #review-bar state (the old titlebar Prompt Feedback button + overlay have been removed).
+// #review-bar state.
 
 /**
  * The pure, derived state of the persistent #review-bar. Four modes:
@@ -34,7 +34,6 @@ export interface ReviewBarState {
   // comment, so a reviewer always has a discoverable way to wipe their comments mid-review. Hidden
   // in summary/hidden modes and when there are 0 comments (nothing to clear).
   clearVisible: boolean;
-  // ---- source-aware affordances (additive) -------------------------------------
   // The dedicated "Approve & Build" button (#review-approve). It exists ONLY for in-process reviews
   // (a plan held at the in-process canUseTool seam): one click allows the plan and begins execution.
   // External reviews carry a blocking PreToolUse hook that cannot be auto-approved in-app, so this
@@ -119,7 +118,6 @@ export function applyReviewBarState(input: {
       resumeVisible: false,
       // Manual clear is offered only when there is something to clear.
       clearVisible: n > 0,
-      // Approve & Build exists ONLY while viewing an in-process review.
       // INVARIANT[approve-is-a-viewing-only-in-process-affordance] (runtime-guard): Approve & Build is visible only while VIEWING an in-process review/gate (approveVisible === inProcess inside the viewing branch).
       //   prevents: an Approve & Build button where there is no held in-process seam
       approveVisible: inProcess,

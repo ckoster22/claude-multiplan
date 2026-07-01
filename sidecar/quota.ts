@@ -128,14 +128,12 @@ export function decideRateLimitFrame(info: unknown): RateLimitDecision {
   return { quota: true, resetAt, source: "rate_limit_event" };
 }
 
-// ---------------------------------------------------------------------------
-// PHASE 1 — result-carrier detection.
+// Result-carrier detection.
 //
 // A usage/session limit has NO dedicated result `subtype`: it arrives as a `result` with
 // `is_error:true` whose ONLY payload is the human string
 //   "You've hit your {session|weekly|Opus|…} limit · resets <h[:mm]><am|pm> (<IANA tz>)".
 // `isUsageLimitText` is the anchored classifier the `result` branch uses to recognize that family.
-// ---------------------------------------------------------------------------
 
 // Anchored on the WHOLE "you've hit your … limit" phrase so it matches the family (session/weekly/
 // Opus/usage/overage) WITHOUT matching ordinary errors that merely mention "limit" (e.g. "rate limit
@@ -148,8 +146,7 @@ export function isUsageLimitText(text: unknown): boolean {
   return USAGE_LIMIT_RE.test(text);
 }
 
-// ---------------------------------------------------------------------------
-// PHASE 2 — wall-clock-in-named-tz reset-time parser.
+// Wall-clock-in-named-tz reset-time parser.
 //
 // The human string carries the reset time as "resets <h[:mm]><am|pm> (<IANA tz>)" where the tz is the
 // machine's LOCAL tz. We MUST resolve that wall-clock-in-the-NAMED-tz to an absolute epoch-ms WITHOUT
@@ -160,7 +157,6 @@ export function isUsageLimitText(text: unknown): boolean {
 // ASYMMETRY RULE (load-bearing): ANY uncertainty (no match, unknown tz, Intl throws) returns null,
 // which the caller degrades to the EXHAUSTED path. A wrong-EARLY time would resume back into the wall
 // (a new loop), so null is always safer than a guess.
-// ---------------------------------------------------------------------------
 
 // "resets <hour>[:<min>] <am|pm> (<IANA tz>)" — am/pm and a parenthesized tz are BOTH required (their
 // absence means we cannot resolve a real instant → null).

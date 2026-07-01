@@ -10,7 +10,7 @@
 //   - Links in a bubble (DOMPurify keeps `href`; markdown-it linkify makes bare URLs live) must
 //     NEVER navigate the single WebView. The SHARED `attachLinkHandler` policy — external → openUrl,
 //     `#frag` → in-pane scroll, everything else → inert no-op — is attached ONCE to the persistent
-//     stream container in renderTree (INV-5). The reading and conversation panes stay disjoint
+//     stream container in renderTree. The reading and conversation panes stay disjoint
 //     domains; we reuse the one link policy rather than couple them via a shared renderer.
 //   - Tool input / result / Bash output are code/text — rendered via textContent (never raw
 //     innerHTML), so no markup in them can ever execute.
@@ -240,7 +240,7 @@ function renderQuestionCard(
   card.className = "conv-question";
   card.dataset.requestId = node.id;
 
-  // ---- Answered state: render the chosen answers read-only (no form). ----
+  // Answered state: render the chosen answers read-only (no form).
   if (node.answers !== null) {
     card.classList.add("conv-question-answered");
     for (const q of node.questions) {
@@ -269,7 +269,7 @@ function renderQuestionCard(
     return card;
   }
 
-  // ---- Pending state: the interactive form. ----
+  // Pending state: the interactive form.
   const sections: HTMLElement[] = [];
 
   for (let qi = 0; qi < node.questions.length; qi++) {
@@ -319,7 +319,7 @@ function renderQuestionCard(
       section.appendChild(optLabel);
     }
 
-    // ---- Synthetic "Other…" row (free-text affordance, every section). ----
+    // Synthetic "Other…" row (free-text affordance, every section).
     // The toggle shares the SAME group name as the predefined options, so for single-select
     // (radio) selecting a predefined option auto-clears "Other" and vice-versa. The real value
     // is carried by the sibling text input (the toggle's value="" is filtered out of answers by
@@ -509,8 +509,6 @@ function renderTextBubble(
   return bubble;
 }
 
-// ---- Quota-banner countdown: a SINGLE live wall-clock interval (leak-guarded) ----------------
-//
 // The countdown is driven by ONE module-level setInterval that, every tick, recomputes the TRUE
 // remaining time as `resetAt - Date.now()` (wall-clock — NOT a stored decrementing counter, which
 // would freeze/drift while the WebView is occluded/suspended and resume from a stale value). Each
@@ -631,7 +629,7 @@ function renderQuotaBanner(node: QuotaBannerNode, handlers?: RenderHandlers): HT
     pill.textContent = `⟳ Auto-resume armed · ${n} attempt${n === 1 ? "" : "s"} left this session`;
     banner.appendChild(pill);
 
-    // ---- Arm the SINGLE wall-clock countdown interval + visibilitychange recompute. ----
+    // Arm the SINGLE wall-clock countdown interval + visibilitychange recompute.
     // (renderTree already cleared any prior interval before calling us, so this is the only live one.)
     // DEMO-ONLY seam: a frozen countdown is static (a pure f(T)) — arm NOTHING. Production omits
     // frozenRemainingMs, so this guard is a no-op there and the live wall-clock behavior is unchanged.
@@ -886,7 +884,7 @@ export function renderTree(
     container.appendChild(working);
   }
 
-  // INV-5 — govern this pane's links with the ONE shared policy. The container is the persistent
+  // govern this pane's links with the ONE shared policy. The container is the persistent
   // #conversation-stream element (stable across the per-frame replaceChildren() above), and the
   // listener is DELEGATED on it, so attaching here every frame is safe: attachLinkHandler is
   // idempotent (WeakSet-keyed on the container), so repeat calls are a no-op — a single delegated

@@ -6,14 +6,12 @@
 // transport-free: the orchestrator/Rust/sidecar wiring and the DOM live
 // elsewhere. Dependency-injected storage keeps it unit-testable in jsdom.
 
-// localStorage key for the persisted preset id.
 export const MODEL_PRESET_KEY = "plan-reader-model-preset";
 
 // The three preset ids, in display order. `as const` makes this the source of
 // truth for both the runtime membership check and the ModelPreset union.
 export const MODEL_PRESETS = ["opus-4-8", "fable-5", "sonnet-4-6"] as const;
 
-// Union of the three preset ids.
 export type ModelPreset = (typeof MODEL_PRESETS)[number];
 
 // localStorage key for the user's global Opus reasoning-effort choice. Separate
@@ -29,11 +27,9 @@ export const EFFORT_KEY = "plan-reader-opus-effort";
 // frontend graph). A test-only drift-guard keeps the two whitelists in sync.
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
-// Union of the five effort levels.
 export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
-// The Opus effort used when nothing valid is persisted (supersedes the prior
-// static `effort:"medium"`).
+// The Opus effort used when nothing valid is persisted.
 export const DEFAULT_EFFORT: EffortLevel = "high";
 
 // The concrete agent options a preset resolves to. `effort` is optional so the
@@ -54,7 +50,6 @@ export const PRESET_OPTIONS: Readonly<Record<ModelPreset, ModelOptions>> = {
   "sonnet-4-6": { model: "claude-sonnet-4-6", effort: "medium" },
 };
 
-// The preset used when nothing valid is persisted.
 export const DEFAULT_PRESET: ModelPreset = "opus-4-8";
 
 // Build a ModelOptions object that applies the key-omission rule: when `effort`
@@ -67,7 +62,6 @@ export function buildOptions(model: string, effort?: string): ModelOptions {
   return options;
 }
 
-// Type guard: is `value` one of the known preset ids?
 function isModelPreset(value: unknown): value is ModelPreset {
   return (
     typeof value === "string" &&
@@ -75,7 +69,7 @@ function isModelPreset(value: unknown): value is ModelPreset {
   );
 }
 
-// Type guard: is `value` one of the known effort levels? Mirrors isModelPreset.
+// Mirrors isModelPreset.
 // A test-only drift-guard pins this frontend whitelist against the sidecar's
 // SDK-derived isEffortLevel.
 export function isEffortLevel(value: unknown): value is EffortLevel {

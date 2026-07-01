@@ -6,11 +6,11 @@
 //   - no subagent-`name` field (none committed; the visible name is deferred to live smoke),
 //   - no `skill_use` kind / skill-discriminator (skills surface as ordinary `tool_use`),
 //   - the normalized error discriminator is `kind` (NOT `error_kind` — the sidecar's internal
-//     `error_kind` is lifted into `kind` and dropped at the Rust seam, commit 84a3700).
+//     `error_kind` is lifted into `kind` and dropped at the Rust seam).
 //
 // These interfaces are a written statement of the contract, not an observation of the wire.
 
-// ---- agent-stream kinds (the committed `agent-stream` vocabulary) -------------------------
+// agent-stream kinds (the committed `agent-stream` vocabulary)
 // Every frame carries a monotonic `seq` and a `kind`. The seven committed kinds:
 
 export interface SystemInit {
@@ -115,10 +115,10 @@ export interface SubagentStarted {
   prompt: string | null;
 }
 
-// `resume_fallback` — emitted by the sidecar (Phase 4) when a session resume was
+// `resume_fallback` — emitted by the sidecar when a session resume was
 // requested but the SDK transcript was missing/expired (getSessionInfo pre-flight
 // failed). NON-fatal: the sidecar drops the `resume` option and runs the current
-// step fresh. The host surfaces a non-blocking notice (Phase 5's toast). Carries
+// step fresh. The host surfaces a non-blocking notice. Carries
 // only a short reason string.
 export interface ResumeFallback {
   seq: number;
@@ -126,7 +126,7 @@ export interface ResumeFallback {
   reason: string;
 }
 
-// `quota_exceeded` — emitted by the sidecar (Phase 1) when the SDK reports the usage/rate-limit
+// `quota_exceeded` — emitted by the sidecar when the SDK reports the usage/rate-limit
 // quota was hit, either via a rate-limit progress event or a thrown quota error. NON-fatal: it
 // travels via `agent-stream` (NEVER `agent-error`), so the session is NOT torn down — a later
 // phase's orchestrator owns the waiting banner + auto-resume when the quota resets.
@@ -140,7 +140,6 @@ export interface QuotaExceeded {
   source: "rate_limit_event" | "thrown_error" | "result_error";
 }
 
-// The discriminated union of every committed agent-stream kind.
 export type AgentStream =
   | SystemInit
   | AssistantText
@@ -154,7 +153,7 @@ export type AgentStream =
   | ResumeFallback
   | QuotaExceeded;
 
-// ---- the other four Tauri events (not agent-stream) ---------------------------------------
+// the other four Tauri events (not agent-stream)
 
 // `tool-permission-requested` — the canUseTool seam, RENDERED as a marker but
 // never resolved here (resolution is a later policy).
@@ -169,8 +168,6 @@ export interface ToolPermissionRequested {
   agent_id: string | null;
 }
 
-// ---- AskUserQuestion tool input shape (the built-in question tool) ------------------------
-//
 // AskUserQuestion is an INTERACTIVE tool (like ExitPlanMode): the sidecar holds it and round-trips
 // a `tool-permission-requested` event carrying `tool: "AskUserQuestion"` and this `input`. The host
 // renders a question card, collects the user's selections, and resolves with `updatedInput` of shape
@@ -217,8 +214,6 @@ export interface AgentExit {
 
 // `agent-auth-required` — emitted when start is attempted with no stored token.
 export type AgentAuthRequired = Record<string, never>;
-
-// ---- command arg/result shapes -------------------------------------------------------------
 
 // start_agent_session({ cwd, permissionMode })
 export interface StartAgentSessionArgs {

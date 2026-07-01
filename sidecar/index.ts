@@ -52,9 +52,7 @@ import binPath from "@anthropic-ai/claude-agent-sdk-darwin-arm64/claude" with { 
 
 import { createInterface } from "node:readline";
 
-// ---------------------------------------------------------------------------
 // stdout framing — the ONE writer of fd 1. Honors the serialization invariant.
-// ---------------------------------------------------------------------------
 
 function emit(obj: unknown): void {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -65,14 +63,12 @@ function logErr(...parts: unknown[]): void {
   process.stderr.write(parts.map(String).join(" ") + "\n");
 }
 
-// ---------------------------------------------------------------------------
-// 529 "Overloaded" backoff — net-new abort infra.
+// 529 "Overloaded" backoff.
 //
 // There is NO AbortController anywhere else in the sidecar today. This single module-level one is
 // aborted at the VERY TOP of graceful shutdown (wired into makeGracefulExit's onBeforeDrain below)
 // so a SIGTERM/SIGINT/`end` arriving DURING a multi-minute 529 backoff sleep aborts the wait
 // immediately instead of hanging the teardown for up to ~30 minutes.
-// ---------------------------------------------------------------------------
 const backoffAbort = new AbortController();
 
 /** Sleep `ms`, resolving early (rejecting with the abort reason) if `backoffAbort` fires. ALWAYS
@@ -105,7 +101,6 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
 // re-pushes the CURRENT turn, never a stale prior one.
 let pendingTurn: SDKUserMessage[] = [];
 
-// ---------------------------------------------------------------------------
 // Push-queue AsyncIterable<SDKUserMessage> — streaming-input mode.
 //
 // QUEUE LIFECYCLE INVARIANT (load-bearing): the iterator PARKS when empty
@@ -114,7 +109,6 @@ let pendingTurn: SDKUserMessage[] = [];
 // terminate the session after turn 1. We use an unbounded internal buffer plus
 // a `notify` promise re-armed after each park — not an ad-hoc promise swap,
 // which can drop a turn under a feed/consume race.
-// ---------------------------------------------------------------------------
 
 class MessageQueue implements AsyncIterable<SDKUserMessage> {
   private buffer: SDKUserMessage[] = [];
@@ -156,7 +150,6 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Interactive permission gate — owns the pending-hold registry (toolUseID → hold) and
 // the canUseTool seam. We RETAIN the tool `input` alongside the resolver because the
 // SDK's runtime Zod validator REQUIRES `updatedInput` on an `allow` PermissionResult
@@ -166,7 +159,6 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
 // at most one ExitPlanMode/AskUserQuestion hold may be live at a time (a second is denied
 // immediately so a held approval can never collide with a held clarify). The injected
 // `emit` wrapper stamps the frame with the running `seq`.
-// ---------------------------------------------------------------------------
 
 // HOST-ASSERTED policy backstop. The host (frontend orchestrator) is the authority on the
 // flow's phase; this variable is updated ONLY by the `set-permission-mode` command handler.
@@ -206,7 +198,6 @@ const prototypePreToolUseHook = createPrototypePreToolUseHook(
   () => sessionCwd,
 );
 
-// ---------------------------------------------------------------------------
 // Wire → SDKUserMessage lift. `parent_tool_use_id` is NON-OPTIONAL; we set it
 // to null explicitly rather than relying on a lenient SDK accepting `{type,text}`.
 //
@@ -215,11 +206,10 @@ const prototypePreToolUseHook = createPrototypePreToolUseHook(
 // happens HERE (the single authoritative point — see the cross-layer contract).
 // With no images the content stays the BARE STRING (byte-identical to text-only
 // today). The pure builders below are EXPORTED as the load-bearing test seam.
-// ---------------------------------------------------------------------------
 
 // The pure multimodal builders live in their own SDK-free module so they can be
 // unit-tested without importing this entry (which embeds the `claude` binary). The
-// load-bearing test seam (DA #6) is `user-content.ts`; re-exported here for callers.
+// load-bearing test seam is `user-content.ts`; re-exported here for callers.
 // Value `import` (NOT a pure `export ... from`) so `buildUserContent` is a REAL
 // local binding usable by `liftUserMessage` below. A pure re-export does NOT
 // create a local binding: `tsc`/vitest accept the bare call, but `bun build
@@ -249,11 +239,9 @@ function liftUserMessage(text: string, images?: InboundImage[]): SDKUserMessage 
   };
 }
 
-// ---------------------------------------------------------------------------
 // Normalizer — SDKMessage → committed agent-stream kinds. Returns the wire
 // object(s) to emit (a single assistant message can carry several text/tool_use
 // blocks → several frames). Unknown subtypes return [] (dropped + logged).
-// ---------------------------------------------------------------------------
 
 // The normalizer body lives in its own SDK-message-only module (`normalize.ts`) so it can be
 // unit-tested WITHOUT importing THIS entry (which embeds the `claude` binary AND installs a
@@ -262,7 +250,6 @@ function liftUserMessage(text: string, images?: InboundImage[]): SDKUserMessage 
 // out-of-band emit sites stay one monotonic sequence) and the `logErr` sink.
 const { normalize } = createNormalizer({ seq: seqCounter, logErr });
 
-// ---------------------------------------------------------------------------
 // canUseTool — the interactive permission seam. The full logic lives in the gate
 // (createInteractivePermissionGate, sidecar/permissions.ts) so its register / serialize
 // / free behavior is unit-testable without importing this side-effecting module.
@@ -286,14 +273,11 @@ const { normalize } = createNormalizer({ seq: seqCounter, logErr });
 // resolve round-trips line up; `agent_id` maps from `options.agentID`. The gate races the resolver
 // against the abort signal (from `interrupt`): a cancel mid-permission resolves to a
 // deny("interrupted") and frees the slot, so it can never deadlock.
-// ---------------------------------------------------------------------------
 
 const canUseTool = permissionGate.canUseTool;
 
-// ---------------------------------------------------------------------------
 // Boot — read the `start` command, build options, launch query, run the
 // normalize loop. One session per process (Rust enforces one process/launch).
-// ---------------------------------------------------------------------------
 
 let q: Query | null = null;
 
@@ -303,10 +287,10 @@ interface StartCmd {
   // The WIRE mode — may carry host-only values (e.g. "prototype") that the SDK's
   // PermissionMode union does not include; sdkPermissionMode() maps it before the SDK sees it.
   permissionMode: string;
-  // Header-picker selection (Phase 1). Optional: null/absent/empty == not set.
+  // Header-picker selection. Optional: null/absent/empty == not set.
   model?: string;
   effort?: string;
-  // SDK session id to resume (Phase 4). Optional: absent/empty == fresh start.
+  // SDK session id to resume. Optional: absent/empty == fresh start.
   // When set, buildOptions adds the SDK `resume` option and runSession pre-flights
   // getSessionInfo, dropping it with a `resume_fallback` frame if the transcript is gone.
   resume?: string;
@@ -372,7 +356,7 @@ function buildOptions(start: StartCmd) {
     hooks: {
       PreToolUse: [{ hooks: [prototypePreToolUseHook] }],
     },
-    // Resume an in-progress SDK conversation (Phase 4) by session id. KEY-OMISSION:
+    // Resume an in-progress SDK conversation by session id. KEY-OMISSION:
     // the `resume` key is present ONLY when the host supplied a resume id — a fresh
     // start omits it entirely (never `resume: undefined`). runSession pre-flights the
     // transcript and rebuilds options WITHOUT this when it is missing/expired. The
@@ -402,13 +386,13 @@ async function runSession(start: StartCmd): Promise<void> {
   // FIRST, SYNCHRONOUSLY (before ANY await): allocate attempt 0's MessageQueue and point
   // `userQueue` at it. The resume pre-flight below `await`s getSessionInfo; on a resume start a
   // `user` stdin line can arrive DURING that await, and if `userQueue` were still null it would hit
-  // the `case "user"` drop guard and be lost. Assigning here (the original ordering, restored) means
+  // the `case "user"` drop guard and be lost. Assigning here means
   // the very first user message always lands in attempt 0's queue regardless of the resume probe.
   // The retry loop REUSES this queue for attempt 0 and only allocates a fresh one for attempt > 0.
   const initialQueue = new MessageQueue();
   userQueue = initialQueue;
 
-  // Resume pre-flight (Phase 4): if a resume id was requested, probe the transcript
+  // Resume pre-flight: if a resume id was requested, probe the transcript
   // BEFORE building options. SINGLE fallback — we decide once here; we never retry.
   // Computed ONCE here (outside the 529 retry loop): a retry re-issues with the SAME options.
   let effectiveStart = start;
@@ -434,7 +418,6 @@ async function runSession(start: StartCmd): Promise<void> {
     process.exit(1);
   }
 
-  // ---------------------------------------------------------------------------
   // 529 "Overloaded" in-band exponential-backoff retry loop.
   //
   // The HAPPY PATH (no overload) runs this loop exactly ONCE and is byte-identical to before: a
@@ -449,7 +432,6 @@ async function runSession(start: StartCmd): Promise<void> {
   // seeded the queue, so we do NOT re-push (that would double the turn). The previous `q`/queue are
   // drained (interrupt → close → end, the same teardown gracefulExit uses) BEFORE the next query()
   // so the prior `claude` subprocess is not orphaned by the re-issue.
-  // ---------------------------------------------------------------------------
   let retry = 0; // 0 → 6; PRE-incremented per backoff decision (decideBackoff is 1-based).
   let attempt = 0; // 0-based attempt index; attempt 0 is the original, >0 are 529 retries.
 
@@ -486,7 +468,7 @@ async function runSession(start: StartCmd): Promise<void> {
 
     try {
       for await (const msg of q) {
-        // PHASE 0 — RAW-FRAME TRACE (GATE A capture). With AGENT_TRACE set, log every raw SDK message
+        // RAW-FRAME TRACE. With AGENT_TRACE set, log every raw SDK message
         // verbatim to STDERR (logErr — off the fd-1 JSON-lines `emit` channel, so it never corrupts the
         // host's frame stream). Used to capture the exact shape of a real usage-limit `result` /
         // `rate_limit_event` before building quota detection. No file writes.
@@ -617,7 +599,6 @@ async function runSession(start: StartCmd): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // stdin command handling — JSON-lines.
 //   { type: "start", cwd, permissionMode }
 //   { type: "user", text }
@@ -625,13 +606,12 @@ async function runSession(start: StartCmd): Promise<void> {
 //   { type: "set-permission-mode", mode }
 //   { type: "interrupt" }
 //   { type: "end" }
-// ---------------------------------------------------------------------------
 
 let userQueue: MessageQueue | null = null;
 let started = false;
 // Session-lifecycle flags read ONLY by currentSession() (below) to project the loose module state
-// (started/q) into the Session union. They gate a late `set-permission-mode` away from the SDK call
-// (#11): set when the session is ending/ended so `q.setPermissionMode` is never invoked on a
+// (started/q) into the Session union. They gate a late `set-permission-mode` away from the SDK
+// call, set when the session is ending/ended so `q.setPermissionMode` is never invoked on a
 // stale/closing query (which throws and crashes the process).
 //   sessionDraining — graceful shutdown began (set at gracefulExit's onBeforeDrain, BEFORE the drain
 //                     await, so a command processed during the drain race window sees "draining").
@@ -640,7 +620,7 @@ let started = false;
 let sessionDraining = false;
 let sessionDead = false;
 
-// The ONE graceful teardown drain (INV-4). ALL FOUR exit triggers route here — the
+// The ONE graceful teardown drain. ALL FOUR exit triggers route here — the
 // `end` command (the host's PRIMARY app-quit path), SIGTERM/SIGINT, and a bare
 // stdin-close — so each aborts the in-flight turn, closes the SDK query (which
 // drives the SDK's own `claude`-grandchild reaper), ends the parked queue, and
@@ -654,7 +634,7 @@ const gracefulExit = makeGracefulExit({
   logErr,
   exit: (code) => process.exit(code),
   // VERY FIRST thing on any teardown trigger: mark the session draining (so a `set-permission-mode`
-  // processed during the drain await sees "draining" → drop-ended, never a call on a closing q, #11)
+  // processed during the drain await sees "draining" → drop-ended, never a call on a closing q)
   // and abort an in-flight 529 backoff sleep so the wait (up to ~30m) cannot stall the drain. The
   // latch in makeGracefulExit makes repeat triggers safe; AbortController.abort() is itself idempotent.
   onBeforeDrain: () => {
@@ -709,7 +689,7 @@ async function handleCommand(line: string): Promise<void> {
       sessionCwd = typeof cmd.cwd === "string" && cmd.cwd.length > 0 ? cmd.cwd : null;
       // Fire-and-forget: runSession drives the stream until end/exit. On a NATURAL resolve (turn(s)
       // done + iterator end, no teardown trigger) mark the session dead so a late `set-permission-mode`
-      // (#11) is dropped, not applied to the now-stale `q`. (The teardown paths set sessionDraining via
+      // is dropped, not applied to the now-stale `q`. (The teardown paths set sessionDraining via
       // onBeforeDrain and process.exit before this settles, so this only fires on the natural end.)
       void runSession({
         type: "start",
@@ -778,7 +758,7 @@ async function handleCommand(line: string): Promise<void> {
       // `q` behind their own `if (!q)` + try/catch and are deliberately NOT routed through the union.
       // decideSessionCommand models the session lifecycle as a union so `apply` (the only branch that
       // touches `q`) is returned ONLY for a `live` session; a command arriving on a known-dead/draining
-      // session (#11) takes a drop branch. The union is a PRE-FILTER + diagnostics, NOT itself the
+      // session takes a drop branch. The union is a PRE-FILTER + diagnostics, NOT itself the
       // crash fix — the try/catch on the await below is the load-bearing guard (see there). The ONLY
       // writer of hostPolicy (the gate's backstop): rewritten UNCONDITIONALLY from the decision on
       // every branch, even the drops — the policy is host state, not SDK session state. Anything but
@@ -791,7 +771,7 @@ async function handleCommand(line: string): Promise<void> {
           // `apply` is returned ONLY for the `live` variant, which carries `q`; narrow to it. NEVER
           // the raw wire mode: "prototype" is host-only (the SDK's PermissionMode union does not
           // include it) and maps to SDK "default"; the host-policy gate enforces the prototype
-          // containment. The try/catch is the LOAD-BEARING crash fix for #11 — do NOT remove it: the
+          // containment. The try/catch is the LOAD-BEARING crash fix — do NOT remove it: the
           // union only pre-filters a session ALREADY known dead/draining, but the session can still end
           // in the TOCTOU window between currentSession() above and this await, so a reject from
           // setPermissionMode must be logged, never crash the process (same guard as the `interrupt`
@@ -841,7 +821,7 @@ async function handleCommand(line: string): Promise<void> {
       // The host's PRIMARY app-quit path. Route through the SAME awaited drain as
       // the signal handlers (interrupt → close → queue-end, THEN exit) — the old
       // synchronous `process.exit(0)` could cut the SDK's async child teardown off
-      // and orphan the `claude` grandchild (INV-4). `await` so a fast follow-up
+      // and orphan the `claude` grandchild. `await` so a fast follow-up
       // signal cannot exit ahead of this drain; the latch makes that second trigger
       // a no-op regardless.
       await gracefulExit("end command", 0);
@@ -854,9 +834,7 @@ async function handleCommand(line: string): Promise<void> {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Main — line-buffered stdin reader.
-// ---------------------------------------------------------------------------
 
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
