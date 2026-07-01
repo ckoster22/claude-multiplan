@@ -1,17 +1,14 @@
 // Multiplan orchestration — PURE prompt builders, parsers, and constants (leaf).
-// Relocated verbatim from the former single-file orchestrator.ts (only import paths shifted).
 
 import { pathKey, parseNn, PlanValidationError } from "../plan-tree";
 import type { NodePath, Nn, PrototypeInfo } from "../plan-tree";
 import type { Mandate } from "./types";
 
 
-// ---- prompt templates (faithful to /multiplan; subagents resolve via settingSources) --------
-//
 // The per-step prompts the driver sends over the single SDK session, naming the user-level subagents
 // (scope-recon / plan-sizer / devils-advocate-reviewer) /multiplan relies on. Each is sent right
-// before the driver arms the matching `awaiting` variant. Node ids render via pathKey — at depth 1
-// ("01", "02", …) byte-identical to the gen-1 pad2 rendering (the golden oracle pins this).
+// before the driver arms the matching `awaiting` variant. Node ids render via pathKey (at depth 1:
+// "01", "02", …).
 
 // Intent clarification: the GENESIS turn. The MAIN agent (this session) owns the user interaction; it
 // invokes the intent-clarifier subagent ONLY to ASSESS the request. The subagent returns a STRICT
@@ -24,10 +21,10 @@ import type { Mandate } from "./types";
 // "AskUserQuestion is not available inside subagents" — why ownership lives here). The MAIN agent's
 // FINAL message is the confirmed INTENT as CLEAN PROSE (never the raw JSON), captured by the driver
 // (→ INTENT.md) and threaded into recon. The prompt mirrors the clarifier's HARD-MANDATED contract
-// ("Return EXACTLY ONE JSON object on stdout. No prose, no markdown") — an earlier prose version
-// captured the raw JSON buffer as the intent and ignored the ambiguity signal.
+// ("Return EXACTLY ONE JSON object on stdout. No prose, no markdown") — a prose contract would
+// capture the raw JSON buffer as the intent and lose the ambiguity signal.
 //
-// VISUAL-PROTOTYPE MODE (the /multiplan "visual intent loop", ported in-driver): the spawn prompt
+// VISUAL-PROTOTYPE MODE (the /multiplan "visual intent loop"): the spawn prompt
 // carries the `---VISUAL-MODE---` directive, so the clarifier builds a rapid throwaway visual under
 // .plan-tree/prototype/ (the "prototype" write policy confines writes there) and the main agent's
 // final message carries the clarifier's `prototype` JSON back via the trailing ---PROTOTYPE--- block
@@ -180,8 +177,6 @@ export function refinePrototypePrompt(feedback: string): string {
   ].join("\n");
 }
 
-// ---- the trailing prototype-block parser (pure) ----------------------------------------------
-
 // Parse the visual-mode FINALIZE contract out of the intent turn's buffered final text.
 // TRAILING-ANCHORED: the ---PROTOTYPE--- block (or the NO-PROTOTYPE line) must be the LAST content
 // (modulo trailing whitespace) — mid-text delimiters never mis-parse, and when several blocks exist
@@ -278,8 +273,6 @@ export function parsePrototypeBlock(text: string): {
   return { intentText: lines.slice(0, open).join("\n").replace(/\s+$/, ""), prototype };
 }
 
-// ---- INTENT.md composition (pure) -------------------------------------------------------------
-
 // Compose the INTENT.md contents PROTOTYPE_APPROVED writes: the confirmed-intent prose, then (when a
 // prototype exists) the SKILL-exact "## Embeddable visual (for plan embedding)" block so later plan
 // drafts can embed the approved visual. screenshot_abs is absolutized HERE in TS (the driver knows
@@ -338,7 +331,7 @@ export const WORKDIR_SCOPE_GUARD = [
   "subagent you spawn.",
 ].join("\n");
 
-// BASELINE FRAMING (Phase 3): the wording threaded into any prompt referencing the frozen
+// BASELINE FRAMING: the wording threaded into any prompt referencing the frozen
 // working-reference baseline. The baseline is a FLOOR on the outcome dimensions in INTENT.md — the
 // minimum bar to clear — NOT a behavioral match-target; improvements ABOVE the floor are good.
 // Exported so later prompts reuse the identical constant (a contains-pin catches a silent drop).
@@ -415,7 +408,7 @@ export function sizerPrompt(): string {
   ].join("\n");
 }
 
-// PHASE 4 (R4) — the top-level acceptance-criterion block injected into the MASTER draft prompt ONLY
+// The top-level acceptance-criterion block injected into the MASTER draft prompt ONLY
 // when a frozen working-reference baseline exists. Anchors on BASELINE_FRAMING and states the
 // acceptance bar in OUTCOME terms — never "match the prototype", never pinned to its exact
 // numbers/behavior; intentional justified divergences ABOVE the floor are permitted. Returns [] when
@@ -441,7 +434,7 @@ function baselineAcceptanceLines(hasBaseline: boolean): string[] {
 // Decomposition draft (root: the master plan): draft the decomposition, self-review, then hold via
 // ExitPlanMode. A confirmed `intent` threads in as a labeled context block above the instructions;
 // null/empty yields the pre-feature prompt (feedback threading is independent — both may coexist).
-// PHASE 4 (R4): `hasBaseline` true injects the top-level OUTCOME-bar acceptance criterion
+// `hasBaseline` true injects the top-level OUTCOME-bar acceptance criterion
 // (baselineAcceptanceLines). Default false ⇒ byte-unchanged.
 export function masterDraftPrompt(
   request: string,
@@ -481,7 +474,7 @@ export function masterDraftPrompt(
 // Render a Mandate into the prompt lines shared by node recon and node draft: the header line, the
 // decomposition section body, and (when present) the preamble as shared context. Empty/whitespace
 // parts are omitted so degenerate-single mandates (no decomposition plan exists) stay minimal.
-// The node id is rendered via pathKey — depth-1 byte-identical to gen-1's pad2.
+// The node id is rendered via pathKey.
 function mandateLines(path: NodePath, mandate: Mandate): string[] {
   const lines = [`### Sub-Plan ${pathKey(path)}: ${mandate.title}`];
   if (mandate.sectionBody.trim()) lines.push("", mandate.sectionBody.trim());
@@ -496,7 +489,7 @@ function mandateLines(path: NodePath, mandate: Mandate): string[] {
   return lines;
 }
 
-// PHASE 5 — the labeled adjustment-note block threaded into the NEXT sibling's recon AND draft
+// The labeled adjustment-note block threaded into the NEXT sibling's recon AND draft
 // prompts after a parent review answered `ADJUST: <note>`. Returns [] when the note is null/empty
 // so those prompts stay BYTE-IDENTICAL to their note-free form (pinned by parent-review.test.ts).
 // Callers spread these lines directly after the mandate lines.
@@ -507,8 +500,8 @@ function adjustNoteLines(note?: string | null): string[] {
 }
 
 // Node recon: reconnaissance scoped to one node's mandate, threading prior sibling summaries forward.
-// PHASE 5: `adjustNote` (the parent review's ADJUST note for THIS node) injects as a labeled block;
-// null/empty yields the exact pre-Phase-5 prompt. Exported so the byte-identical pin is testable.
+// `adjustNote` (the parent review's ADJUST note for THIS node) injects as a labeled block;
+// null/empty yields the note-free prompt. Exported so the byte-identical pin is testable.
 export function subReconPrompt(
   path: NodePath,
   mandate: Mandate,
@@ -531,12 +524,11 @@ export function subReconPrompt(
   return lines.join("\n");
 }
 
-// PHASE 4 (R5) — the behavioral-envelope-test mandate injected into the sub-plan DRAFT and SUMMARY
+// The behavioral-envelope-test mandate injected into the sub-plan DRAFT and SUMMARY
 // prompts ONLY when a frozen working-reference baseline exists, GATED on the sub-plan producing a
 // runnable artifact. The bound is INTENT-tied (the INTENDED envelope in INTENT.md), NOT the
 // prototype's exact numbers. Returns [] when no baseline exists so the no-baseline prompts stay
-// BYTE-IDENTICAL (pinned by golden-depth1 + sub/summary contains-tests). The three clauses map to
-// R5 (a)/(b)/(c).
+// BYTE-IDENTICAL (pinned by golden-depth1 + sub/summary contains-tests).
 function baselineEnvelopeTestLines(hasBaseline: boolean): string[] {
   if (!hasBaseline) return [];
   return [
@@ -555,9 +547,9 @@ function baselineEnvelopeTestLines(hasBaseline: boolean): string[] {
 }
 
 // Node draft: draft this node's plan, self-review, then hold via ExitPlanMode. Threads prior
-// summaries. PHASE 5: threads the parent review's ADJUST note like subReconPrompt (the note lands in
-// BOTH of the next sibling's prompts). Exported for the byte-identical pin.
-// PHASE 4 (R5): `hasBaseline` true injects the runnable-artifact envelope-test mandate
+// summaries and the parent review's ADJUST note like subReconPrompt (the note lands in BOTH of the
+// next sibling's prompts). Exported for the byte-identical pin.
+// `hasBaseline` true injects the runnable-artifact envelope-test mandate
 // (baselineEnvelopeTestLines). Default false ⇒ byte-unchanged.
 export function subDraftPrompt(
   path: NodePath,
@@ -581,9 +573,9 @@ export function subDraftPrompt(
 }
 
 // Summary: after a node executes, produce its structured summary (threaded into later siblings).
-// PHASE 4 (R5): `hasBaseline` true injects the same runnable-artifact envelope-test mandate so the
+// `hasBaseline` true injects the same runnable-artifact envelope-test mandate so the
 // summary reports whether the behavioral-envelope test + its falsifiability proof landed. Default
-// false ⇒ byte-unchanged. Exported so the Phase-4 gated-both-directions pin is testable.
+// false ⇒ byte-unchanged. Exported so the gated-both-directions pin is testable.
 export function summaryPrompt(path: NodePath, hasBaseline = false): string {
   return [
     `Sub-plan ${pathKey(path)} has finished executing. Output a concise summary with these sections:`,
@@ -597,7 +589,7 @@ export function summaryPrompt(path: NodePath, hasBaseline = false): string {
   ].join("\n");
 }
 
-// RESUME (Phase 3) — the LEAF-approval continuation prompt. On a RESUMED leaf gate the live
+// The LEAF-approval continuation prompt. On a RESUMED leaf gate the live
 // ExitPlanMode resolver is dead, so approving can't "resume the same turn into execution". Instead
 // the driver instructs the resumed conversation to implement the already-approved plan — NAMING the
 // plan file and FORBIDDING re-output (re-drafting would burn a turn and risk diverging from the
@@ -609,7 +601,7 @@ export function resumedLeafApprovalPrompt(planPath: string): string {
   ].join("\n");
 }
 
-// RESUME (Phase 3b) — the LEAF EXECUTING continuation prompt (the AUDIT-AND-CONTINUE variant). A
+// The LEAF EXECUTING continuation prompt (the AUDIT-AND-CONTINUE variant). A
 // leaf/executing node was killed MID-implementation: its plan is approved AND some edits may already
 // be on disk (the executing turn may have partially applied). Unlike resumedLeafApprovalPrompt (which
 // would restart from scratch and re-apply on-disk edits), this instructs the model to FIRST inspect
@@ -626,7 +618,7 @@ export function resumedLeafContinuePrompt(planPath: string): string {
   ].join("\n");
 }
 
-// RESUME (Phase 3) — the LEAF request-changes continuation prompt. On a RESUMED leaf gate a live
+// The LEAF request-changes continuation prompt. On a RESUMED leaf gate a live
 // deny (which would resume the held turn to re-draft) is impossible, so the driver sends the user's
 // feedback explicitly and asks for a fresh re-draft held via ExitPlanMode (the next signal is that
 // re-draft's ExitPlanMode hold, exactly as the live redraft path produces).
@@ -640,7 +632,7 @@ export function resumedLeafChangesPrompt(feedback: string): string {
   ].join("\n");
 }
 
-// RESUME (Phase 3) — the DECOMPOSITION request-changes continuation prompt. Mirrors
+// The DECOMPOSITION request-changes continuation prompt. Mirrors
 // resumedLeafChangesPrompt but for a held decomposition/master gate: re-draft the DECOMPOSITION with
 // the same `### Sub-Plan NN:` header contract and hold it via ExitPlanMode.
 export function resumedDecompositionChangesPrompt(feedback: string): string {
@@ -655,7 +647,7 @@ export function resumedDecompositionChangesPrompt(feedback: string): string {
   ].join("\n");
 }
 
-// QUOTA RESUME (Phase 7) — the note prepended to EVERY auto-resume prompt re-issued after a quota
+// QUOTA RESUME — the note prepended to EVERY auto-resume prompt re-issued after a quota
 // pause refreshed. Exported so the per-variant quotaResumePrompt tests pin it (a silent drop is
 // caught). RE-EMISSION CONTRACT: the interrupted turn's PARTIAL buffer is DISCARDED, not continued
 // (fireResume re-arms the captured variant with `buffer: ""`), so the resumed turn must produce the
@@ -669,7 +661,7 @@ export const QUOTA_RESUME_NOTE = [
   "re-emission. The full instructions for the turn follow.",
 ].join("\n");
 
-// QUOTA RESUME (Phase 7) — the generic fallback used when no clean per-variant turn was captured
+// QUOTA RESUME — the generic fallback used when no clean per-variant turn was captured
 // (the pause hit while `idle`/`resuming`): there is no specific artifact to re-emit, so just nudge
 // the conversation to produce the complete result for whatever step it was on.
 export const QUOTA_RESUME_GENERIC = [
@@ -678,7 +670,7 @@ export const QUOTA_RESUME_GENERIC = [
   "you left off and produce the complete result for the current step.",
 ].join("\n");
 
-// QUOTA RESUME (Phase 7) — wrap an original per-variant turn prompt with the re-emission note above.
+// QUOTA RESUME — wrap an original per-variant turn prompt with the re-emission note above.
 // Exported + pure so per-variant assertions can build the EXACT expected string from each builder's
 // output. The driver-local quotaResumePrompt threads its closure context into the matching builder,
 // then calls this to attach the note.
@@ -686,12 +678,12 @@ export function quotaResumeWrap(originalTurnPrompt: string): string {
   return [QUOTA_RESUME_NOTE, "", originalTurnPrompt].join("\n");
 }
 
-// PHASE 4 — nested decomposition draft: a NON-ROOT split node drafts its own decomposition, scoped
+// Nested decomposition draft: a NON-ROOT split node drafts its own decomposition, scoped
 // to its mandate (the nested-master preamble travels with it), then holds via ExitPlanMode like the
 // root's master draft. Child headers are PER-LEVEL `### Sub-Plan NN:` numbers (the full dotted id
 // derives from nesting: <pathKey>.NN) — parseSubPlanHeaders is reused verbatim, so the 1-99
 // validation (deny-for-redraft on overflow) is identical at every depth.
-// PHASE 4 (R4): `hasBaseline` true injects the same top-level OUTCOME-bar acceptance criterion the
+// `hasBaseline` true injects the same top-level OUTCOME-bar acceptance criterion the
 // root master draft does (baselineAcceptanceLines), so a baseline'd tree decomposing a sub-plan
 // further keeps the outcome-bar reminder. Default false ⇒ byte-unchanged.
 export function nestedDecompositionDraftPrompt(
@@ -726,7 +718,7 @@ export function nestedDecompositionDraftPrompt(
   return lines.join("\n");
 }
 
-// PHASE 4 — roll-up summary: after a non-root split node's LAST child summarizes, the parent gets
+// Roll-up summary: after a non-root split node's LAST child summarizes, the parent gets
 // its own summary turn synthesizing the children's summaries (so every completed sibling — leaf or
 // split — contributes exactly ONE summary to per-level threading). The ROOT never gets this turn
 // (it writes no roll-up; done is derived).
@@ -750,7 +742,7 @@ export function rollupSummaryPrompt(path: NodePath, childSummaries: string[]): s
   return lines.join("\n");
 }
 
-// PHASE 5 — the parent-review prompt: a NO-TOOLS turn the parent runs after a non-final child's
+// The parent-review prompt: a NO-TOOLS turn the parent runs after a non-final child's
 // summary lands. Carries the reviewed child's summary VERBATIM plus the remaining siblings'
 // mandates (titles + section bodies — FROZEN: the review may only pass one adjustment note, never
 // re-decompose) and the strict ADJUST/NONE output protocol parseParentReview consumes.
@@ -790,7 +782,7 @@ export function parentReviewPrompt(
   return lines.join("\n");
 }
 
-// PHASE 5 — parse the parent-review turn's ADJUST/NONE protocol from the buffered assistant text.
+// Parse the parent-review turn's ADJUST/NONE protocol from the buffered assistant text.
 // Scans every line; the LAST matching line wins (avoids a stray echo earlier in the turn).
 //   `ADJUST: <note>` (non-empty note) → { note }   |   `NONE` → { note: null }
 // Returns null when NO line matches (including a bare/empty `ADJUST:`) — the DRIVER coerces that
@@ -835,7 +827,7 @@ export function parseSubPlanHeaders(plan: string): ParsedMasterPlan {
   while ((m = re.exec(plan)) !== null) {
     raw.push({ nnText: m[1], title: m[2].trim(), start: m.index, bodyStart: m.index + m[0].length });
   }
-  // INV-2: ZERO headers is a RECOVERABLE validation failure (the header-less draft), same typed class
+  // ZERO headers is a RECOVERABLE validation failure (the header-less draft), same typed class
   // as the nn>99 case below. Throwing HERE — before the empty array reaches the CHILDREN_PARSED
   // reducer's nonEmpty boundary — lets the orchestrator's `instanceof PlanValidationError` catch deny
   // the held ExitPlanMode for a redraft (run stays active) instead of FATALing.
@@ -859,7 +851,7 @@ export function parseSubPlanHeaders(plan: string): ParsedMasterPlan {
     const bodyEnd = i + 1 < raw.length ? raw[i + 1].start : plan.length;
     return { nn, title: h.title, body: plan.slice(h.bodyStart, bodyEnd).trim() };
   });
-  // INV-2: SIBLING-nn UNIQUENESS. Two headers parsing to the SAME nn (e.g. "Sub-Plan 1" and
+  // SIBLING-nn UNIQUENESS. Two headers parsing to the SAME nn (e.g. "Sub-Plan 1" and
   // "Sub-Plan 01") mint duplicate-nn siblings — and every navigation primitive resolves nn to the
   // FIRST match, so the run executes one twin while later events alias back to the other, wedging
   // mid-run. Reject HERE (the parse boundary), same typed class as the empty/out-of-range cases, so

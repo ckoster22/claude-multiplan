@@ -1,7 +1,3 @@
-// Review-bar PURE leaves — DOM status-setter + comments-text formatter.
-// Side-effect-free at import time. `setHookStatus` takes its element as a parameter (no closure).
-// main.ts re-exports `setHookStatus` so its `./main` importers keep resolving unchanged; `echoCommentsText` is imported back directly.
-
 import type { CommentRecord } from "./types";
 
 // Human-readable echo of submitted comments (what the user SEES), NOT the wrapped buildFeedbackPrompt() output
@@ -19,7 +15,7 @@ export function echoCommentsText(records: CommentRecord[]): string {
 }
 
 // Set the in-DOM hook status line. `kind` selects success (accent) vs error (red); empty text
-// clears + hides it. EXPORTED so the status surface is directly unit-testable.
+// clears + hides it.
 export function setHookStatus(
   statusEl: HTMLElement | null,
   text: string,

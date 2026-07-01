@@ -1,11 +1,10 @@
 // Multiplan orchestration package — BARREL.
 //
-// Re-exports the public surface of the former single-file `orchestrator.ts` so consumers keep
-// importing `./conversation/orchestrator` unchanged. Explicit named re-exports ONLY — NO `export *`
+// Re-exports the package's public surface so consumers keep importing
+// `./conversation/orchestrator` unchanged. Explicit named re-exports ONLY — NO `export *`
 // (isolatedModules splits values/types into `export {}` / `export type {}`, and a cross-leaf
 // collision under `export *` could silently drop a symbol).
 
-// ---- values — orchestrator-owned ----
 export {
   isOrchestrationActive,
   isOrchestratorResuming,
@@ -45,14 +44,11 @@ export {
   QUOTA_RESUME_GENERIC,
 } from "./prompts";
 export { defaultDeps } from "./deps";
-// ---- values — re-exported from plan-tree (preserve the orchestrator surface UI consumers rely on) ----
 export { pathKey, parsePathKey, PlanValidationError } from "../plan-tree";
 
-// ---- types — orchestrator-owned ----
 export type { ParsedMasterPlan } from "./prompts";
 export type { OrchestratorDeps } from "./deps";
 export type { Mandate, OrchestratorObserver, OrchestratorHandle } from "./types";
-// ---- types — re-exported from plan-tree ----
 export type {
   PlanTreeSnapshot2,
   ApprovalGate2,

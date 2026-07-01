@@ -1,10 +1,6 @@
-// IPC event-chain helper — PURE, dependency-free.
-// Side-effect-free at import time (single function declaration). main.ts re-exports `chainHandler` so `src/chain.test.ts`'s `import { chainHandler } from "./main"` keeps resolving unchanged.
-
 /**
- * Append `body` to the chain and return the new tail. `.catch` makes it self-healing: rejections
- * are logged but the promise RESOLVES so subsequent events still run (no wedged chain). Exported
- * for unit-testability against the real self-healing property.
+ * `.catch` makes the chain self-healing: a rejected `body` is logged but the returned promise still
+ * RESOLVES, so subsequent events keep running instead of wedging the chain.
  */
 export function chainHandler(
   pending: Promise<void>,

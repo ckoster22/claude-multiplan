@@ -84,10 +84,7 @@ import type {
   ReviewCancelled,
 } from "./types";
 import { asAbsPath, asStem, cwdState, type AbsPath, type Stem } from "./types";
-// ---- Composition-root controllers (SP03) — pure, side-effect-free leaf modules -----------------
-// main.ts is the composition root: wires pure leaf controllers to the module-level singletons /
-// DOM handles / closures that STAY here. Imports are one-directional (main → controller; controllers
-// never import ./main). Re-export shims below keep main's 24-symbol export surface byte-stable.
+// Imports are one-directional: main → controller; controllers never import ./main.
 import {
   applyRowState,
   relativeTime,
@@ -102,8 +99,7 @@ import { suppressConversationFlip, shouldClearPlaceholderOnExit } from "./run-su
 import { setHookStatus, echoCommentsText } from "./review-bar";
 import { chainHandler } from "./ipc";
 
-// Re-export shims — `export ... from` introduces no local binding (symbols are also plain-imported
-// above). Keeps main's 24-symbol export surface byte-stable for test importers.
+// Re-exported so `./main` importers (tests) keep resolving; `export ... from` adds no local binding.
 export { placeholderVisible, initTabs } from "./sidebar";
 export { computeAffordance } from "./resume-banner";
 export type { Affordance } from "./resume-banner";
@@ -148,7 +144,7 @@ let reviewClearEl: HTMLButtonElement | null;
 let reviewResumeEl: HTMLButtonElement | null;
 // dedicated "Approve & Build" button — shown only while VIEWING an in-process review.
 let reviewApproveEl: HTMLButtonElement | null;
-// PHASE 6 — forced-acceptance REFINE button + its sub-plan picker — shown ONLY in ACCEPTANCE mode.
+// Forced-acceptance REFINE button + its sub-plan picker — shown ONLY in ACCEPTANCE mode.
 let reviewRefineEl: HTMLButtonElement | null = null;
 let reviewRefineTargetEl: HTMLSelectElement | null = null;
 // External Submit button's label captured at wire-time so in-process relabels can be reverted.
@@ -292,7 +288,7 @@ function currentReviewId(): string | null {
 // Holds the active node's pendingApproval gate while the user reviews.
 let orchSnapshot: PlanTreeSnapshot2 | null = null;
 
-// ---- Live-run placeholder sidebar row (Bug A fix) -----------------------------------------------
+// ---- Live-run placeholder sidebar row -----------------------------------------------
 // A running orchestration has no sidebar row until list_plans picks up the plan file. `runPlaceholder`
 // (treeId + label) is rendered as a `.plan.placeholder` row when no real record has its treeId.
 // ORTHOGONAL to `selection`: the row can be visible while a DIFFERENT plan is selected.
@@ -365,22 +361,19 @@ function pendingSurfaces(): PendingSurface[] {
   return surfaces;
 }
 
-// Test-only: the open plan's comment count (kept under the old name for existing assertions).
+// Test-only: the open plan's comment count.
 export function reviewCommentCount(): number {
   return currentReviewId() === null ? 0 : unwrapOr(commentCount, 0);
 }
 
-// Test-only: clear all review state. IMMOVABLE (SP03) — spans pendingReviews / selection /
-// orchSnapshot / runPlaceholder / pendingResume / actionInFlight.
+// Test-only: clear all review state.
 export function __resetReviewStateForTest(): void {
   pendingReviews.clear();
   // Reset selection to clear stale openPath/currentReviewId() for the next test.
   selection = { k: "none" };
-  // Drop leaked orchestrator gate snapshot.
   orchSnapshot = null;
   // Drop leaked placeholder (selection=none above already clears placeholder-selected state).
   runPlaceholder = null;
-  // Drop leaked resume context.
   pendingResume = null;
   // Clear leaked in-flight lock so the next test's Submit isn't stuck disabled.
   actionInFlight = "none";
@@ -463,7 +456,7 @@ function applyCommentCount(path: AbsPath, count: number): void {
 
 // Cold-read the open plan's comment count (used on OPEN/RELOAD). Latest-wins seq guard applies.
 // After an in-session save/clear the count arrives via onCommentCountChanged → applyCommentCount
-// instead (backend write may not be observed yet). EXPORTED for unit tests.
+// instead (backend write may not be observed yet).
 export async function refreshCommentCount(): Promise<void> {
   // Short-circuit: nothing open ⇒ count is known to be 0 (no await needed; no stale landing to guard).
   const op = openPath();
@@ -507,7 +500,7 @@ export function currentCommentCount(): number {
 //   • VIEWING  — the open plan is a pending review: Submit (enabled with ≥1 comment). In-process
 //                reviews also show Approve & Build.
 //   • SUMMARY  — reviews pending but user is browsing elsewhere: count + Resume only.
-// IMMOVABLE (SP03): derives off pendingReviews / commentCount / selection and the #review-bar DOM.
+// Derives off pendingReviews / commentCount / selection and the #review-bar DOM.
 function refreshReviewBar(countOverride?: number): void {
   if (!reviewBarEl) return;
   // PROTOTYPE mode — pendingApproval outranks prototype (activePrototypeGate() yields null while
@@ -532,7 +525,7 @@ function refreshReviewBar(countOverride?: number): void {
   prototypeFeedbackEl?.classList.add("hidden");
   prototypeOpenEl?.classList.add("hidden");
   prototypeWorkingRefLabelEl?.classList.add("hidden");
-  // PHASE 6 — the REFINE button + its picker are ACCEPTANCE-mode-only; hide on every other mode.
+  // The REFINE button + its picker are ACCEPTANCE-mode-only; hide on every other mode.
   reviewRefineEl?.classList.add("hidden");
   reviewRefineTargetEl?.classList.add("hidden");
   if (reviewApproveEl) reviewApproveEl.textContent = REVIEW_APPROVE_DEFAULT_LABEL;
@@ -582,7 +575,7 @@ function refreshReviewBar(countOverride?: number): void {
   if (reviewResumeEl) reviewResumeEl.classList.toggle("hidden", !state.resumeVisible);
 }
 
-// The bar's PROTOTYPE mode (Phase 4d). Shown while a visual-prototype gate is held (and no
+// The bar's PROTOTYPE mode. Shown while a visual-prototype gate is held (and no
 // approval gate outranks it — see refreshReviewBar's precedence). Affordances:
 //   • label — `Visual prototype — round N of 3` (pure prototypeBarLabel; rounds are 1-based,
 //     display-clamped to 3).
@@ -622,7 +615,7 @@ function applyPrototypeBar(gate: PrototypeGate): void {
     reviewClearDisarm?.();
   }
   reviewResumeEl?.classList.add("hidden");
-  // PHASE 6 — the REFINE button + its picker are ACCEPTANCE-mode-only; keep hidden in PROTOTYPE mode.
+  // The REFINE button + its picker are ACCEPTANCE-mode-only; keep hidden in PROTOTYPE mode.
   reviewRefineEl?.classList.add("hidden");
   reviewRefineTargetEl?.classList.add("hidden");
   if (prototypeFeedbackEl) {
@@ -639,7 +632,7 @@ function applyPrototypeBar(gate: PrototypeGate): void {
   prototypeWorkingRefLabelEl?.classList.remove("hidden");
 }
 
-// The bar's ACCEPTANCE mode (Phase 5 — the forced acceptance gate). Shown while a held
+// The bar's ACCEPTANCE mode (the forced acceptance gate). Shown while a held
 // AcceptanceGate is the highest-precedence pending surface (a held approval/prototype gate outranks
 // it — see refreshReviewBar's precedence). The run is built; the user must record a verdict against
 // the frozen working-reference baseline before it is reported done. Reuses the prototype bar's
@@ -668,7 +661,7 @@ function applyAcceptanceBar(_gate: AcceptanceGate): void {
     reviewApproveEl.classList.remove("hidden");
     reviewApproveEl.textContent = acceptanceApproveLabel(); // always enabled — the floor is met
   }
-  // PHASE 6 — the REFINE action (re-plan a sub-plan) is the THIRD acceptance action, shown ONLY in
+  // The REFINE action (re-plan a sub-plan) is the THIRD acceptance action, shown ONLY in
   // ACCEPTANCE mode and only when there is at least one refinable sub-plan (a split root). The picker
   // (#review-refine-target) is the target-selection step; the button routes the picked target into
   // refineAcceptance. Populate the picker from the snapshot (DERIVED — acceptanceRefineTargets), then
@@ -734,8 +727,8 @@ async function renderPrototypePreview(gate: PrototypeGate): Promise<void> {
 // lifecycle cleanup. On agent-exit / fatal agent-error / user cancel, any in-process
 // pending review describes a DEAD SDK seam: its held canUseTool promise is gone, so an Approve would
 // resolve nothing (and must be impossible). Drop every in-process pending review (external reviews are
-// untouched — they ride the independent file-IPC substrate) and refresh the bar. EXPORTED so the purge
-// is directly unit-testable. Returns the count purged.
+// untouched — they ride the independent file-IPC substrate) and refresh the bar. Returns the count
+// purged.
 export function purgeInprocReviews(): number {
   let purged = 0;
   for (const [id, r] of Array.from(pendingReviews.entries())) {
@@ -925,7 +918,7 @@ function planSrcText(rec: PlanRecord): string {
   }
 }
 
-// ---- Synthetic "resume" sidebar rows (Phase 4) ------------------------------------------------
+// ---- Synthetic "resume" sidebar rows ------------------------------------------------
 //
 // `list_plans` synthesizes a `PlanRecord` for a mid-decompose plan-tree that has NO real plan `.md`
 // file yet, so the tree is still visible + its resume banner reachable (see CONTRACT.md §"Amendment
@@ -947,7 +940,7 @@ function resumeSentinelTreeId(path: string): string {
   return path.slice(RESUME_SENTINEL_SCHEME.length);
 }
 
-// ---- Resume detection (Phase 5) ---------------------------------------------------------------
+// ---- Resume detection ---------------------------------------------------------------
 //
 // Resolve a plan record's originating cwd for the resume read path. Mirrors planSrcText's
 // precedence (backend-cached absolute cwd wins; else the resolved cwdByStem path) but returns the
@@ -995,8 +988,7 @@ function isLedgerShape(v: unknown): v is RecursiveLedger {
 // for a DIFFERENT tree must not light up), the tree already done, an orchestration already active, or
 // a coherence/scope helper that threw. Returns a verdict (resumable OR blocked) otherwise, so the
 // banner can render BOTH the resume button and the blocked message.
-// IMMOVABLE (SP03): stays in main — reads the cwd subsystem (homePath / cwdByStem) and
-// isOrchestrationActive; only its pure leaf resumeActionLabel relocated (to resume-banner.ts).
+// Reads the cwd subsystem (homePath / cwdByStem) and isOrchestrationActive.
 export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | null> {
   try {
     // tree_id is required: a standalone plan (no tree) is never part of a `.plan-tree/`.
@@ -1125,7 +1117,7 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
         diag(`detectResumable: tree_id=${rec.tree_id} treeIsDone=true → no banner`);
         return null; // a completed tree is not resumable.
       }
-      // Pass the ledger so the PHASE-5 acceptance window (a baseline-bearing root parked awaiting a
+      // Pass the ledger so the acceptance window (a baseline-bearing root parked awaiting a
       // verdict) classifies as resumable rather than blocked, and the disk-probe predicate so
       // open/decomposing is classified gate-vs-resend identically to the engine.
       scope = resumeScopeForRoot(root, ledger, decompositionArtifactExists);
@@ -1154,7 +1146,7 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
     //     under `.plan-tree/` — verified through `read_plan_tree_file`.
     // Missing artifact → degrade to a BLOCKED verdict (banner shows the message, not a button).
     // Resend scopes need no artifact (the prompt is re-sent fresh).
-    // PHASE 5 — the forced acceptance window: the build is COMPLETE; the only thing missing is the
+    // The forced acceptance window: the build is COMPLETE; the only thing missing is the
     // user's verdict against the frozen baseline. There is NO plan artifact to verify (no model turn
     // resumes — the driver re-mints the acceptance gate and surfaces the bar). Surface it as a
     // resumable banner so reopening the app shows the acceptance bar, not the blocked message.
@@ -1219,7 +1211,7 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
       return { ...scope, cwd, ledger };
     }
 
-    // PHASE 2 NEW KINDS (restart / prototype-gate / rewind): the pure scope is now RESUMABLE and the
+    // New kinds (restart / prototype-gate / rewind): the pure scope is now RESUMABLE and the
     // banner offers them as real one-click FORWARD actions. The orchestrator decides the concrete
     // action from the ledger (resume keys off cwd+ledger), so the banner only triggers resume.
     //   - restart{from:"clarify"} / prototype-gate: NO artifact verification — `restart` re-runs the
@@ -1393,7 +1385,7 @@ function refreshAffordances(): void {
 // Conversation tab up front (matching the composer start) and hide the banner on success.
 async function resumeFromBanner(): Promise<void> {
   if (pendingResume === null) return;
-  // PHASE 3c — HAZARDOUS gate: a verdict whose plan requiresConfirm (leaf/executing — edits may be
+  // HAZARDOUS gate: a verdict whose plan requiresConfirm (leaf/executing — edits may be
   // partially applied) must NOT resume on this first click. Reveal the inline confirm row and return;
   // resume() fires ONLY from the subsequent #resume-confirm-btn click (executeResume). Non-hazardous
   // verdicts fall through and fire immediately, exactly as before.
@@ -1557,15 +1549,13 @@ function buildMaster(rec: PlanRecord, ctx: SidebarCtx): { wrapper: HTMLElement; 
 // `nn_path` prefixes with a prefix-keyed stack: a sub whose nn_path extends the top frame's
 // nn_path by exactly one segment nests inside it; otherwise frames pop until its parent prefix
 // matches. The stack carries SubTreeNodes (not DOM) so "internal" = actually-accumulated kids.
-// EXPORTED so the DOM logic is unit-testable.
-// IMMOVABLE (SP03): stays in main — reads the module singletons selection / collapseOverride /
-// subCollapse + the cwd subsystem + the DOM-handle let-bindings, and CONTRACT.md forbids the sidebar
-// and reading-pane domains from importing each other (they converge only here). It imports the moved
-// pure leaves (placeholderVisible / buildPlaceholderRow / renderSubTree / SubTreeNode) back.
+// Reads the module singletons selection / collapseOverride / subCollapse + the cwd subsystem + the
+// DOM-handle let-bindings; CONTRACT.md forbids the sidebar and reading-pane domains from importing
+// each other, so they converge only here.
 export function renderSidebar(listEl: HTMLElement, records: PlanRecord[], ctx: SidebarCtx): void {
   listEl.replaceChildren();
 
-  // Live-run placeholder (Bug A fix): when the ctx carries one AND no rendered record has its
+  // Live-run placeholder: when the ctx carries one AND no rendered record has its
   // tree_id (the agent hasn't written its plan file yet, or list_plans lags the write), prepend
   // the `.plan.placeholder` row as the FIRST entry. Once the real row exists the placeholder is
   // omitted — the real row takes over.
@@ -1738,9 +1728,7 @@ async function refreshList(): Promise<void> {
     // list (the old behavior) would flow into resolveSelection's collapse path — prevRecords still
     // holds the open plan, records=[] ⇒ "vanished" — and blank the pane the user is reading + drop the
     // selection to `none` (non-self-healing; refreshList fires on every plan-changed). Bail without
-    // touching listState/selection/pane; the next successful refresh repaints. (Pre-Phase-D a
-    // failure also left openPath untouched — this preserves the last-good sidebar rather than blanking
-    // it, which is strictly more self-healing.)
+    // touching listState/selection/pane; the next successful refresh repaints.
     // RemoteData error arm: when ANY last-good result exists — a populated `success` OR a
     // successful-but-EMPTY `zeroResults` — we keep it untouched (a TRUE no-op preserving the rendered
     // list/empty-state). Only a failure with NO last-good at all (a rejected load before any result
@@ -1781,7 +1769,7 @@ async function refreshList(): Promise<void> {
     applyFilterAndRender();
   }
 
-  // Stale-sentinel cleanup (Phase 4 DA Concern 1): if the OPEN row is a resume sentinel that no longer
+  // Stale-sentinel cleanup: if the OPEN row is a resume sentinel that no longer
   // appears in the fresh records (the tree finished elsewhere, or a real row replaced the synthetic
   // one via a NON-resume path), its placeholder pane + resume banner would otherwise stay painted over
   // a dangling openPath with no matching `.active` row. Reset to the empty state so nothing stale
@@ -1874,7 +1862,7 @@ function makeSidebarCtx(): SidebarCtx {
 // while filtering (N = shown files, M = total files), or the plain "M file(s)" form when the
 // query is empty. An empty result under a non-empty query shows the `.filter-empty` affordance.
 // After rendering, matched substrings are highlighted in the visible `.plan-title` / `.plan-src`
-// (a heading-only match still shows its row, un-highlighted). EXPORTED for unit tests.
+// (a heading-only match still shows its row, un-highlighted).
 export function applyFilterAndRender(): void {
   if (!planListEl) return;
   // Collapse the sidebar plan-list RemoteData to the records to render. Only `success` carries rows; the
@@ -2022,7 +2010,6 @@ function patchDocSrc(): void {
 // `.toc-empty` "No headings" affordance (caller only passes [] when a plan IS open — the
 // nothing-open state clears the list instead). MUST NOT touch any `.tab`/`.tab-pane` `.active`
 // class: the active tab is preserved across both open and live reload (no auto-switch).
-// EXPORTED so the DOM logic + click wiring are unit-testable.
 export function buildToc(listEl: HTMLElement, entries: TocEntry[]): void {
   listEl.replaceChildren();
   if (entries.length === 0) {
@@ -2061,9 +2048,8 @@ function rebuildTocFromPane(): void {
 }
 
 // Open a plan: read raw text into #reading-pane, mark the row active, update the header.
-// EXPORTED for testing the render-generation guard around the ToC rebuild (no behavior change).
-// IMMOVABLE (SP03): stays in main — mutates the module singletons selection / commentCount /
-// renderGuard and the reading-pane DOM-handle lets; a pure leaf cannot reassign these ES live bindings.
+// Mutates the module singletons selection / commentCount / renderGuard and the reading-pane
+// DOM-handle lets.
 export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
   if (!readingPaneEl) return;
 
@@ -2286,7 +2272,6 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
 // capture the anchored block BEFORE re-render, apply the delta once after the
 // synchronous text lands, then re-apply after settle() so mermaid/image height
 // shifts don't drift the viewport.
-// EXPORTED for testing the render-generation guard around the ToC rebuild (no behavior change).
 export async function reloadOpenPlan(): Promise<void> {
   const path = openPath();
   if (!readingPaneEl || !readerScrollEl || path === null) return;
@@ -2550,13 +2535,13 @@ window.addEventListener("DOMContentLoaded", () => {
   reviewClearEl = document.querySelector("#review-clear");
   reviewResumeEl = document.querySelector("#review-resume");
   reviewApproveEl = document.querySelector("#review-approve");
-  // PHASE 6 — forced-acceptance REFINE button + sub-plan picker (ACCEPTANCE mode only).
+  // Forced-acceptance REFINE button + sub-plan picker (ACCEPTANCE mode only).
   reviewRefineEl = document.querySelector("#review-refine");
   reviewRefineTargetEl = document.querySelector("#review-refine-target");
-  // PROTOTYPE-mode controls (Phase 4d): feedback textarea + open-in-browser button.
+  // PROTOTYPE-mode controls: feedback textarea + open-in-browser button.
   prototypeFeedbackEl = document.querySelector("#prototype-feedback");
   prototypeOpenEl = document.querySelector("#prototype-open");
-  // Working-reference checkbox (Phase 3): classifies the prototype approval (sketch vs floor).
+  // Working-reference checkbox: classifies the prototype approval (sketch vs floor).
   prototypeWorkingRefEl = document.querySelector("#prototype-working-ref");
   prototypeWorkingRefLabelEl = document.querySelector("#prototype-working-ref-label");
   // Capture the external Submit button's descriptive label so an in-process relabel can be reverted
@@ -2566,7 +2551,7 @@ window.addEventListener("DOMContentLoaded", () => {
   if (reviewApproveEl?.textContent) REVIEW_APPROVE_DEFAULT_LABEL = reviewApproveEl.textContent;
   hookStatusEl = document.querySelector("#hook-status");
 
-  // Resume banner (Phase 5): resolve its handles + wire the resume button. A separate surface from the
+  // Resume banner: resolve its handles + wire the resume button. A separate surface from the
   // review bar, but the LOWEST affordance (precedence — refreshAffordances suppresses it
   // while the bar shows a higher one). The button reads `pendingResume` (set by renderResumeBanner) and
   // drives getOrchestrator().resume(). The toast element is the resume_fallback notice target.
@@ -2574,7 +2559,7 @@ window.addEventListener("DOMContentLoaded", () => {
   resumeBannerMsgEl = document.querySelector("#resume-banner-msg");
   resumePlanBtnEl = document.querySelector("#resume-plan-btn");
   resumePlanBtnEl?.addEventListener("click", () => void resumeFromBanner());
-  // PHASE 3c — the HAZARDOUS-resume inline confirm row (hazard text + Confirm/Cancel). The primary
+  // The HAZARDOUS-resume inline confirm row (hazard text + Confirm/Cancel). The primary
   // button reveals it (resumeFromBanner) for a requiresConfirm verdict; Confirm fires resume()
   // (executeResume), Cancel collapses back to the one-click button (cancelResumeConfirm).
   resumeConfirmRowEl = document.querySelector("#resume-confirm");
@@ -2685,7 +2670,7 @@ window.addEventListener("DOMContentLoaded", () => {
         attachStrip: document.querySelector<HTMLElement>("#composer-attachments"),
         attachBtn: document.querySelector<HTMLElement>("#composer-attach"),
         fileInput: document.querySelector<HTMLInputElement>("#composer-file-input"),
-        // Auto-resume-after-quota select (Phase 6). The composer self-persists its value on change;
+        // Auto-resume-after-quota select. The composer self-persists its value on change;
         // the chosen budget is read at Start by the orchestrator's defaultDeps adapter.
         autoResume: document.querySelector<HTMLSelectElement>("#composer-auto-resume"),
       },
@@ -2699,7 +2684,7 @@ window.addEventListener("DOMContentLoaded", () => {
         error: document.querySelector<HTMLElement>("#composer-error"),
       },
     },
-    // onActivity (Bug B fix): every non-result stream frame fires this. While an approval gate is
+    // onActivity: every non-result stream frame fires this. While an approval gate is
     // held (snapshot.pendingApproval set), the flip is SUPPRESSED so streaming frames cannot steal
     // the tab from the Plan view the gate handler just opened. pendingClarify deliberately does NOT
     // suppress — AskUserQuestion cards render in the Conversation tab and need the flip.
@@ -2723,16 +2708,15 @@ window.addEventListener("DOMContentLoaded", () => {
     .catch((e) => console.error("initConversation failed", e));
 
   // ---- approval-gate controller (observer-driven) -------------------------------
-  // Subscribe to the SHARED orchestrator instance (the same handle 03's composer-entry drives). We
+  // Subscribe to the SHARED orchestrator instance. We
   // hold the latest snapshot in `orchSnapshot` and drive the approval bar off it:
   //   • onAwaitingApproval(gate) — a sub-plan is awaiting approval: open its plan file via the NORMAL
   //     plan flow, flip to the Plan tab, and refresh the bar (mirrors openReviewPlanFile + switchToPlanTab).
   //   • onSnapshot — re-derive the bar after every transition (so it clears when pendingApproval
   //     becomes null after Approve).
   //   • onDone / onFatal — terminal: drop the snapshot and refresh (the bar hides).
-  // IMMOVABLE (SP03): this observer is a closure INSIDE DOMContentLoaded — it mutates the orchSnapshot
-  // singleton and the bar DOM handles, so a closure cannot be pure-relocated; only its pure predicates
-  // (suppressConversationFlip / shouldClearPlaceholderOnExit) relocated (to run-subscription.ts).
+  // This observer is a closure inside DOMContentLoaded that mutates the orchSnapshot singleton and the
+  // bar DOM handles.
   getOrchestrator().subscribe({
     onSnapshot: (snap) => {
       orchSnapshot = snap;
@@ -2741,11 +2725,11 @@ window.addEventListener("DOMContentLoaded", () => {
       // pendingPrototype is held, tell the conversation facade to keep showing "Waiting for your
       // input…" in the idle state. Derived STRICTLY from the snapshot, so it self-clears:
       // approve/refine null pendingPrototype in the reducer and the very next snapshot turns it off.
-      // PHASE 5 — also keep the idle-waiting hint up while the forced acceptance gate is held (it is
+      // Also keep the idle-waiting hint up while the forced acceptance gate is held (it is
       // turn-completion signaled like the prototype gate: the run is built and the session is idle,
       // so the facade must not read "done" while the user owes a verdict).
       conversationHandle?.setIdleWaitingHint(snap.pendingPrototype != null || snap.pendingAcceptance != null);
-      // Live-run placeholder (Bug A fix): the FIRST snapshot of each run (keyed by treeId) mints a
+      // Live-run placeholder: the FIRST snapshot of each run (keyed by treeId) mints a
       // placeholder sidebar row — the run has no real row until its plan file lands.
       if (
         isOrchestrationActive() &&
@@ -2768,12 +2752,12 @@ window.addEventListener("DOMContentLoaded", () => {
       refreshAffordances();
     },
     onAwaitingApproval: (gate) => {
-      // GEN-2 UNIFIED GATE: decomposition (root included) and leaf gates arrive through the SAME
+      // UNIFIED GATE: decomposition (root included) and leaf gates arrive through the SAME
       // observer hook carrying the SAME ApprovalGate2 shape — no master sentinel, no side-channel
       // path capture. Open the gate's plan file via the NORMAL plan flow; viewingGate() matches the
       // open plan against snapshot.pendingApproval.planPath.
       //
-      // ORDER MATTERS (Bug B fix): flip to the Plan tab SYNCHRONOUSLY FIRST — before any await —
+      // ORDER MATTERS: flip to the Plan tab SYNCHRONOUSLY FIRST — before any await —
       // so the user sees the plan view the instant the gate arrives. While the awaits below run,
       // stream frames keep firing onActivity; suppressConversationFlip (keyed on pendingApproval,
       // already set in the snapshot by the time this observer hook fires) keeps them from stealing
@@ -2792,7 +2776,7 @@ window.addEventListener("DOMContentLoaded", () => {
       })();
     },
     onPrototypeReview: (gate) => {
-      // Visual-prototype gate (Phase 4d): flip to the Plan tab and render the preview DETACHED
+      // Visual-prototype gate: flip to the Plan tab and render the preview DETACHED
       // into the reading pane (openPath untouched — the next openPlan replaces it), then derive
       // the bar's PROTOTYPE mode. The gate itself is NOT stashed here: the bar derives it from
       // orchSnapshot.pendingPrototype (activePrototypeGate), so it self-clears when a later
@@ -2803,7 +2787,7 @@ window.addEventListener("DOMContentLoaded", () => {
       refreshReviewBar();
     },
     onAcceptanceReview: (gate) => {
-      // PHASE 5 — the forced acceptance gate arrived: the run is built and the user must record a
+      // The forced acceptance gate arrived: the run is built and the user must record a
       // verdict against the frozen baseline. The driver has already opened the baseline. Flip to the
       // Plan tab and derive the bar's ACCEPTANCE mode. Like the prototype gate, the gate is NOT
       // stashed here — the bar derives it from orchSnapshot.pendingAcceptance (activeAcceptanceGate),
@@ -2905,7 +2889,7 @@ window.addEventListener("DOMContentLoaded", () => {
       // INVARIANT[exactly-once-action-dispatch] (runtime-guard): the top-of-handler early-return bails whenever a sibling action is already dispatching, before any branch runs.
       //   prevents: a fast double-click on Submit/Approve, or a cross-click, starting a second dispatch
       if (actionInFlight !== "none") return;
-      // GEN-2 UNIFIED GATE: "Request changes" on the orchestrator's held gate — decomposition (root
+      // UNIFIED GATE: "Request changes" on the orchestrator's held gate — decomposition (root
       // included) OR leaf — routes into the ONE handle method requestChanges(pathKey, feedback). The
       // kind-routing (deny-resumes-the-decomposition-turn vs re-draft-the-leaf-in-place) lives in the
       // orchestrator's exhaustive gate.kind switch, NOT here. Build the feedback from the OPEN plan's
@@ -2951,7 +2935,7 @@ window.addEventListener("DOMContentLoaded", () => {
         })();
         return;
       }
-      // PROTOTYPE mode (Phase 4d): "Request changes" on the held visual-prototype gate requires
+      // PROTOTYPE mode: "Request changes" on the held visual-prototype gate requires
       // non-empty feedback (#prototype-feedback) and routes into refinePrototype(feedback) — the
       // driver loops the root back to clarifying-intent and sends the refine prompt. The textarea
       // clears AFTER a successful dispatch (the feedback was consumed into the prompt).
@@ -2980,7 +2964,7 @@ window.addEventListener("DOMContentLoaded", () => {
         })();
         return;
       }
-      // ACCEPTANCE mode (Phase 5): "Accept divergence…" on the held acceptance gate requires a
+      // ACCEPTANCE mode: "Accept divergence…" on the held acceptance gate requires a
       // non-empty REASON (#prototype-feedback, reused) and routes into divergeAcceptance(reason) —
       // the run finalizes (notifyDone) AND the reason is persisted as the audit trail for the waived
       // floor. The textarea clears AFTER a successful dispatch.
@@ -3053,7 +3037,7 @@ window.addEventListener("DOMContentLoaded", () => {
       // click after Submit — cannot start a second dispatch. Mirrors the submit handler's guard;
       // approve is correctness-only (no visual change), so the flag is NOT fed into the bar derivation.
       if (actionInFlight !== "none") return;
-      // GEN-2 UNIFIED GATE: ONE Approve button, ONE handle method — approve(pathKey(gate.path)). The
+      // UNIFIED GATE: ONE Approve button, ONE handle method — approve(pathKey(gate.path)). The
       // dangerous routing (a decomposition approval arms the resuming hold + interrupts; a leaf
       // approval resolves + arms exec and never interrupts) lives in the orchestrator's exhaustive
       // gate.kind switch, NOT here. Flip to the Conversation tab so the next turn streams in place.
@@ -3075,7 +3059,7 @@ window.addEventListener("DOMContentLoaded", () => {
         })();
         return;
       }
-      // PROTOTYPE mode (Phase 4d): approve the held visual prototype — always enabled ("Approve
+      // PROTOTYPE mode: approve the held visual prototype — always enabled ("Approve
       // visual"; "Proceed as-is" from round 3). approvePrototype() composes + writes INTENT.md and
       // continues into recon; the next snapshot (pendingPrototype nulled) reverts the bar. Flip to
       // the Conversation tab so the recon turn streams in place (mirrors the approval-gate flow).
@@ -3087,7 +3071,7 @@ window.addEventListener("DOMContentLoaded", () => {
         // feedback, then the driver auto-advances to recon WITHOUT another review round. With an
         // empty textarea it is the plain approvePrototype() (straight to recon, no echo).
         const feedback = prototypeFeedbackEl?.value.trim() ?? "";
-        // WORKING-REFERENCE classification (Phase 3): read the checkbox ONLY on the plain-approve
+        // WORKING-REFERENCE classification: read the checkbox ONLY on the plain-approve
         // branch. With feedback typed (combined apply-and-approve) the prototype is still being
         // refined — it is not yet the final artifact — so the floor classification does not apply
         // there; the user re-checks it on the round they actually approve as-is.
@@ -3117,7 +3101,7 @@ window.addEventListener("DOMContentLoaded", () => {
         })();
         return;
       }
-      // ACCEPTANCE mode (Phase 5): the Approve button is "Accept (meets baseline)" → approveAcceptance().
+      // ACCEPTANCE mode: the Approve button is "Accept (meets baseline)" → approveAcceptance().
       // The build clears the baseline floor; the deferred finalize runs (notifyDone) and the next
       // snapshot (pendingAcceptance nulled) reverts the bar. The verdict resolves the gate by an
       // explicit action — no held tool to clear.
@@ -3144,7 +3128,7 @@ window.addEventListener("DOMContentLoaded", () => {
       });
     });
 
-    // ---- #prototype-feedback / #prototype-open (PROTOTYPE mode only — Phase 4d) ---------------
+    // ---- #prototype-feedback / #prototype-open (PROTOTYPE mode only) ---------------
     // Typing re-derives the bar so "Request changes" enables on the first non-whitespace character
     // (and re-disables when cleared). Cheap: refreshReviewBar is a pure DOM re-derivation.
     prototypeFeedbackEl?.addEventListener("input", () => refreshReviewBar());
@@ -3152,7 +3136,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // else its first path (pure prototypeOpenTarget; paths may be relative — the open_prototype
     // Rust command resolves them against the gate's cwd and containment-guards the result).
     prototypeOpenEl?.addEventListener("click", () => {
-      // ACCEPTANCE mode (Phase 5): the relabeled "Open baseline" button → open_baseline (the gate's
+      // ACCEPTANCE mode: the relabeled "Open baseline" button → open_baseline (the gate's
       // openTarget relative to <cwd>/.plan-tree/baseline/, containment-guarded Rust-side). Checked
       // FIRST so it wins while the acceptance gate is held (the prototype gate cannot co-exist).
       const acceptGate = activeAcceptanceGate();
@@ -3168,7 +3152,7 @@ window.addEventListener("DOMContentLoaded", () => {
       void openExternally("open_prototype", { cwd: gate.cwd, path: target }, "Could not open prototype");
     });
 
-    // ---- #review-refine (ACCEPTANCE mode only — Phase 6): re-plan the picked sub-plan -----------
+    // ---- #review-refine (ACCEPTANCE mode only): re-plan the picked sub-plan -----------
     // The THIRD acceptance action. Reads the picked target from #review-refine-target and routes it
     // into refineAcceptance(parsePathKey(target)) — the driver resets that sub-plan + its
     // right-siblings and re-runs them (the acceptance gate re-arms on re-completion). Flip to the
@@ -3271,7 +3255,7 @@ window.addEventListener("DOMContentLoaded", () => {
     pending = chainHandler(pending, () => handlePlanChanged(changedPath));
   });
 
-  // ---- Phase 6 — Plan Review event listeners (mirror plan-changed's serialized chain) ----
+  // ---- Plan Review event listeners (mirror plan-changed's serialized chain) ----
   // Review events are serialized on their OWN chain (separate from plan-changed) so a request and
   // a cancel can't interleave their async open/refresh. chainHandler's .catch backstop keeps
   // a single failed handler from wedging the chain.
@@ -3474,7 +3458,7 @@ window.addEventListener("DOMContentLoaded", () => {
   // its OWN listeners for these events (stream rendering); these are SEPARATE listeners purely for the
   // review-state purge. agent-error purges only when fatal (a non-fatal error keeps the seam alive).
   void listen<AgentExit>("agent-exit", () => {
-    // PHASE 6 (DA-I5) — QUOTA-PAUSE RECONCILIATION. A quota wall makes the sidecar gracefulExit(0), so
+    // QUOTA-PAUSE RECONCILIATION. A quota wall makes the sidecar gracefulExit(0), so
     // this agent-exit can be a QUOTA PAUSE exit, not a genuine end-of-run. During a pause the run is
     // NOT over — the orchestrator will respawn a session and re-issue the interrupted turn (which may
     // be mid-ExitPlanMode review). So this listener must NOT destructively tear that state down:
@@ -3483,7 +3467,7 @@ window.addEventListener("DOMContentLoaded", () => {
     //     seam is permanently dead; during a pause the seam is coming back.)
     //   • SKIP the live-run placeholder clear — the placeholder belongs to the still-paused run.
     // Quota-paused is detected via the orchestrator's quotaPaused() probe, which is SYNCHRONOUSLY
-    // correct (DA-I5): the conversation facade's agent-stream listener calls the handle's
+    // correct: the conversation facade's agent-stream listener calls the handle's
     // markQuotaPausePending() the instant a quota_exceeded frame is seen, so quotaPaused() is true
     // from that tick onward — through the microtask-deferred QUOTA_PAUSED dispatch and the auto-resume
     // — NOT only after the deferred dispatch drains. This closes the same-tick race where a
@@ -3494,7 +3478,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // placeholder's, but we gate explicitly so the intent is unambiguous and the purge is skipped too.
     if (isOrchestrationActive() && getOrchestrator().quotaPaused()) return;
     purgeInprocReviews();
-    // Live-run placeholder clear (Bug A fix) — the SAFE variant. agent-exit reports an SDK SESSION
+    // Live-run placeholder clear — the SAFE variant. agent-exit reports an SDK SESSION
     // ending, which is NOT 1:1 with the placeholder's run: notifyDone deregisters the orchestrator
     // BEFORE onDone fires. notifyDone now ends the SDK session on natural completion, so the exit is
     // prompt (it follows onDone closely) rather than arbitrarily late. The clear decision still lives
@@ -3520,7 +3504,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if (event.payload?.fatal) purgeInprocReviews();
   });
 
-  // ---- Phase 5 — resume_fallback toast ---------------------------------------------------------
+  // ---- resume_fallback toast ---------------------------------------------------------
   // The sidecar emits a non-fatal `resume_fallback` agent-stream frame when a requested SDK resume
   // could not rehydrate the prior transcript (missing/expired) and it ran the current step FRESH
   // instead. Surface a non-blocking toast so the user knows history was dropped. This is a SEPARATE
@@ -3548,7 +3532,7 @@ window.addEventListener("DOMContentLoaded", () => {
     refreshAffordances();
   });
 
-  // ---- Phase 6 — launch recovery ----
+  // ---- launch recovery ----
   // On startup, if reviews are already pending (the app launched while a hook is blocking), populate
   // pendingReviews with all non-stale entries and open the NEWEST one's real plan file via the normal
   // flow (no focus — the user just launched). console.warn if more than one is pending. Chained so it

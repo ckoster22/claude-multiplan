@@ -1,11 +1,8 @@
-// Sidebar PURE row-builders — nested-hierarchy render leaves. Side-effect-free at import time.
 // CSS class strings are LOAD-BEARING — pinned by contract.test.ts golden snapshots; do not rename.
 // CONTRACT.md forbids sidebar ↔ reading-pane imports (converge at main.ts only).
-// main.ts re-exports `placeholderVisible` + `initTabs` so their `./main` importers keep resolving unchanged.
 
 import type { PlanRecord, SidebarCtx } from "./types";
 
-// Human-friendly relative time for the sidebar `.plan-meta .when` slot.
 export function relativeTime(mtimeMs: number): string {
   const now = Date.now();
   const diff = now - mtimeMs;
@@ -116,7 +113,6 @@ export interface SubTreeNode {
   kids: SubTreeNode[];
 }
 
-// Recursively render the sub-tree: leaves via buildSub, internal nodes via buildInternalSub with kids into nested `.children`.
 export function renderSubTree(node: SubTreeNode, container: HTMLElement, ctx: SidebarCtx): void {
   if (node.kids.length === 0) {
     container.appendChild(buildSub(node.rec, ctx));
@@ -161,7 +157,6 @@ export function buildPlaceholderRow(
 }
 
 // Shared by renderSidebar AND applyFilterAndRender so both sites cannot drift.
-// Placeholder is visible only while no rendered record carries its tree_id. Exported for unit tests.
 export function placeholderVisible(
   ph: { treeId: string } | null,
   records: PlanRecord[],
@@ -169,7 +164,7 @@ export function placeholderVisible(
   return ph !== null && !records.some((r) => r.tree_id === ph.treeId);
 }
 
-// Wire tab switching: click on `.tab` activates it + matching `.tab-pane`. Pure view switch — never rebuilds pane content. Exported for unit tests.
+// Pure view switch — activating a `.tab` toggles its matching `.tab-pane`; never rebuilds pane content.
 export function initTabs(tabRowEl: HTMLElement, paneEls: HTMLElement[]): void {
   const tabs = Array.from(tabRowEl.querySelectorAll<HTMLElement>(".tab"));
   for (const tab of tabs) {

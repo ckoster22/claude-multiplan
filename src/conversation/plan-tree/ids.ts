@@ -4,8 +4,6 @@
 // recoverable plan-validation error. PURE — no I/O, no Tauri, no DOM. Every other leaf in the
 // package depends on this one; this leaf depends on nothing internal.
 
-// ---- branded domain primitives (make the invalid representations uncompilable) ---------------
-
 // An absolute path PROVEN to come from a real plan-tree write — minted ONLY by the driver's wrapper
 // around the write command's returned path (orchestrator.ts). No exported cast helper exists, so
 // prose/summary TEXT can never flow into a `summaryPath` slot without failing tsc.
@@ -25,8 +23,6 @@ export function parseNn(n: number): Nn {
   }
   return n as Nn;
 }
-
-// ---- gen-2 branded path primitives ------------------------------------------------------------
 
 // A node's address in the tree: the Nn segments from the root down (root itself is `[]`). Nodes
 // store only their OWN segment (`TreeNode.nn`); full paths derive from nesting.
@@ -59,8 +55,6 @@ export function parsePathKey(s: string): NodePath {
   });
 }
 
-// ---- INV-2: typed plan-validation error -------------------------------------------------------
-
 // A RECOVERABLE decomposition-plan validation failure — a malformed DRAFT the user can fix by
 // redrafting (zero `### Sub-Plan` headers, a header outside 1-99, or an empty children list reaching
 // nonEmpty). Thrown by parseSubPlanHeaders (orchestrator) and nonEmpty (here); the orchestrator's
@@ -77,14 +71,12 @@ export class PlanValidationError extends Error {
   }
 }
 
-// ---- gen-2 non-empty array --------------------------------------------------------------------
-
 // An array PROVEN non-empty at the type level — `children` on a split node uses this so an empty
 // children list is unrepresentable at rest.
 export type NonEmptyArray<T> = readonly [T, ...T[]];
 
 // THE NonEmptyArray boundary: throws LOUDLY on empty input instead of letting an empty split exist.
-// INV-2: a PlanValidationError — a header-less decomposition slipping past parseSubPlanHeaders to
+// A PlanValidationError — a header-less decomposition slipping past parseSubPlanHeaders to
 // here still denies-for-redraft (the orchestrator's instanceof catch) rather than FATALing the run.
 export function nonEmpty<T>(arr: readonly T[]): NonEmptyArray<T> {
   if (arr.length === 0) {

@@ -26,7 +26,7 @@ function statusOf(node: TreeNode): ChildStatus {
 //   (2) per-level partition: each split's children read summarized* active? pending* left-to-right
 //       (left siblings completed, AT MOST one in flight, right siblings untouched);
 //   (3) parent split phase ↔ children: `running-children` iff EXACTLY one child active — EXCEPT
-//       the PHASE-4 roll-up window: a NON-ROOT split may rest running-children with ZERO active and
+//       the roll-up window: a NON-ROOT split may rest running-children with ZERO active and
 //       ALL children summarized (awaiting its roll-up summary turn; the root may not — it writes no
 //       roll-up); `reviewing` only BETWEEN children (no child active, ≥1 summarized behind, ≥1
 //       pending ahead); `summarized` only when ALL children are summarized;
@@ -107,8 +107,8 @@ function assertStructure(node: TreeNode, path: NodePath): void {
   const pendingCount = statuses.filter((s) => s === "pending").length;
   if (node.state.phase === "running-children" && activeCount !== 1) {
     // ROLL-UP / ACCEPTANCE WINDOW allowance: a split may legally rest running-children with ZERO
-    // active and ALL children summarized. Non-root (PHASE 4): awaiting its roll-up summary turn.
-    // Root (PHASE 5): the forced-acceptance hold (treeIsDone stays false) while the user records a
+    // active and ALL children summarized. Non-root: awaiting its roll-up summary turn.
+    // Root: the forced-acceptance hold (treeIsDone stays false) while the user records a
     // verdict against the frozen baseline. Whether a parked root is legitimate (baseline + held gate)
     // or stuck is a transient-state concern (pendingAcceptance + reducer discipline), not a
     // tree-structure one — like the roll-up window, its legitimacy lives in the event stream.

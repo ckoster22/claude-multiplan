@@ -19,8 +19,6 @@ export function cloneNode(node: TreeNode): TreeNode {
   return { ...node, state };
 }
 
-// ---- gen-2 tree navigation --------------------------------------------------------------------
-
 // Resolve the node at `path` under `root` (root itself for []). Returns null when the path walks
 // off the tree — a missing child segment, or a segment under a non-split node (only split states
 // HAVE children, so descent through open/leaf is structurally impossible).
@@ -63,11 +61,11 @@ function activeWithin(node: TreeNode, prefix: NodePath): NodePath | null {
         const found = activeWithin(child, [...prefix, child.nn]);
         if (found !== null) return found;
       }
-      // PHASE 4 ROLL-UP WINDOW: a NON-ROOT split whose children are ALL summarized has no active
+      // ROLL-UP WINDOW: a NON-ROOT split whose children are ALL summarized has no active
       // descendant — the split node ITSELF is the active node (its roll-up summary turn is the one
       // in flight; SUMMARY_WRITTEN{this path} completes it).
       if (prefix.length > 0 && inRollupWindow(node)) return prefix;
-      // PHASE 5 ACCEPTANCE WINDOW: the ROOT resting running-children with ALL children summarized is
+      // ACCEPTANCE WINDOW: the ROOT resting running-children with ALL children summarized is
       // the forced-acceptance hold — the ROOT itself is the active node (ACCEPTANCE_APPROVED/DIVERGED
       // resolves it). Without a baseline the reducer never parks here (it finalizes in the same
       // reduction); activePathOf reads the TREE alone, so the allowance is structural like the
@@ -117,7 +115,7 @@ export function inRollupWindow(node: TreeNode): boolean {
   );
 }
 
-// PHASE 5 — THE FORCED ACCEPTANCE WINDOW: the ROOT resting in `running-children` with EVERY child
+// THE FORCED ACCEPTANCE WINDOW: the ROOT resting in `running-children` with EVERY child
 // summarized. STRUCTURALLY identical to a non-root roll-up window, but at the ROOT it is the
 // forced-acceptance hold — the root writes no roll-up, so without a baseline the reducer finalizes
 // here in the SAME reduction (root → summarized). WITH a baseline it parks here while

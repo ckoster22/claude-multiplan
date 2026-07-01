@@ -24,7 +24,7 @@ import { planName2, treeIsDone, activePhaseLabel } from "./select";
 // Rehydrate the in-memory PlanTreeState2 from a persisted ledger: assert coherence, carry EVERY
 // serialized field, and null EVERY transient gate (none of pendingApproval/pendingClarify/
 // pendingPrototype/parsedChildren survives a restart — they describe a session that is gone). The
-// driver re-mints any gate it re-presents from on-disk artifacts (Phase 3).
+// driver re-mints any gate it re-presents from on-disk artifacts.
 export function rehydrateState2(ledger: RecursiveLedger): PlanTreeState2 {
   assertCoherent2(ledger.root);
   return {
@@ -66,8 +66,7 @@ export const EXECUTING_REWIND_HAZARD =
 // the injected disk probe used ONLY by the `open/decomposing` case.
 //
 // Mapping policy: every resumable phase → `{kind:"resume", plan}`; every blocked phase → a
-// `rewind`/`restart` action (Phases 2-3 surface some of these as forward verdicts). The ONE
-// behavioral change is `open/decomposing` (see below).
+// `rewind`/`restart` action. The disk-probe-aware case is `open/decomposing` (see below).
 export function recoveryFor(
   node: TreeNode,
   path: NodePath,
@@ -83,11 +82,11 @@ export function recoveryFor(
       switch (state.phase) {
         case "clarifying-intent":
           // GENESIS clarify window: no durable artifact; restart the clarify turn from the root title.
-          // PHASE 2: the adapter surfaces this as a RESUMABLE `restart` (was a dead-end).
+          // The adapter surfaces this as a RESUMABLE `restart`.
           return { kind: "restart", from: "clarify" };
         case "prototype-review":
           // PROTOTYPE GATE window: UNLIKE clarify it has durable artifacts (the `.plan-tree/prototype/`
-          // dir + INTENT.md), so it is RE-PRESENTABLE. PHASE 2: a `resume` carrying the dedicated
+          // dir + INTENT.md), so it is RE-PRESENTABLE. A `resume` carrying the dedicated
           // `prototype-gate` ResumePlan (the consumer re-mints the gate — not a plan-file gate). path
           // is the root.
           return resume({ kind: "prototype-gate", path });
@@ -160,7 +159,7 @@ export function recoveryFor(
             redraftCount: node.redraftCount,
           });
         case "executing":
-          // PHASE 3 — OFFERABLE-but-HAZARDOUS rewind (invariant I3). The in-flight executing turn may
+          // OFFERABLE-but-HAZARDOUS rewind (invariant I3). The in-flight executing turn may
           // have ALREADY PARTIALLY APPLIED edits; winding back to this leaf's approval gate and
           // re-running could DUPLICATE those writes. We OFFER the rewind (the user CAN continue) but
           // ONLY behind a confirmation (`requiresConfirm`) so the banner (P3c) forces acknowledgement of
@@ -183,7 +182,7 @@ export function recoveryFor(
     case "split":
       switch (state.phase) {
         case "running-children":
-          // PHASE 5 — THE ROOT ACCEPTANCE WINDOW: the run is complete except the user's verdict against
+          // THE ROOT ACCEPTANCE WINDOW: the run is complete except the user's verdict against
           // the frozen baseline. RESUMABLE iff the run-level facts confirm a legitimately-parked root
           // (frozen baseline AND no verdict). Otherwise (non-root roll-up, or a torn/over-resolved
           // root) → rewind placeholder.
@@ -230,14 +229,13 @@ function assertNeverRecovery(state: never): never {
 }
 
 // PURE resume-scope decision over a tree: resolve the active node via activePathOf, then DERIVE the
-// verdict from the TOTAL `recoveryFor` classifier (Phase 2 turns the formerly-blocked rewind/restart
-// phases into FORWARD, resumable verdicts):
+// verdict from the TOTAL `recoveryFor` classifier:
 //   - `{kind:"resume", plan}`  → `{resumable:true, plan, phaseLabel}` (gate / resend / acceptance, and
 //     the dedicated `prototype-gate` plan from open/prototype-review);
 //   - `{kind:"restart", from}` → `{resumable:true, plan:{kind:"restart", from, path}, phaseLabel}`;
 //   - `{kind:"rewind", target}`: OFFERABLE → `{resumable:true, plan:{kind:"rewind", …}}` (non-root
 //     roll-up, between-children review, torn leaf gate, no-active-node); NON-offerable →
-//     `{resumable:false, reason: hazard}` (leaf/executing — Phase 3 — and root acceptance-window holds).
+//     `{resumable:false, reason: hazard}` (leaf/executing and root acceptance-window holds).
 //
 // DECOMPOSITION GATE PLAN PATH: an `open/awaiting-decomposition-approval` node has NO path field at
 // rest (the masterPath lived only on the transient ApprovalGate2, discarded on restart), so it is
@@ -286,8 +284,8 @@ export function resumeScopeForRoot(
       return { resumable: true, plan: action.plan, phaseLabel };
     case "rewind": {
       const t = action.target;
-      // PHASE 2: an OFFERABLE rewind becomes a RESUMABLE `rewind` ResumePlan (wind back to the nearest
-      // durable gate). Non-offerable (leaf/executing — Phase 3 — and root acceptance-window holds) keeps
+      // An OFFERABLE rewind becomes a RESUMABLE `rewind` ResumePlan (wind back to the nearest
+      // durable gate). Non-offerable (leaf/executing and root acceptance-window holds) keeps
       // the LEGACY blocked verdict, its hazard the reason.
       if (t.offerable) {
         return {
@@ -298,8 +296,8 @@ export function resumeScopeForRoot(
             path: t.path,
             planPath: t.planPath ?? null,
             ...(t.hazard !== undefined ? { hazard: t.hazard } : {}),
-            // PHASE 3: surface the HAZARDOUS one-confirm flag (leaf/executing) so the banner (P3c) gates
-            // it behind a confirm dialog. The one-click Phase-2 rewinds leave requiresConfirm absent.
+            // Surface the HAZARDOUS one-confirm flag (leaf/executing) so the banner (P3c) gates
+            // it behind a confirm dialog. The one-click rewinds leave requiresConfirm absent.
             ...(t.requiresConfirm ? { requiresConfirm: true } : {}),
           },
           phaseLabel,
@@ -308,8 +306,8 @@ export function resumeScopeForRoot(
       return { resumable: false, reason: t.hazard ?? "not resumable", phaseLabel };
     }
     case "restart":
-      // PHASE 2: the GENESIS clarify window is now a FORWARD action — a resumable `restart` (re-run the
-      // clarify turn from the root title), no longer a dead-end. `path` is the active (root) node.
+      // The GENESIS clarify window is a FORWARD action — a resumable `restart` (re-run the
+      // clarify turn from the root title). `path` is the active (root) node.
       return {
         resumable: true,
         plan: { kind: "restart", from: action.from, path: activePath },

@@ -21,10 +21,8 @@ import {
 import { assertCoherent2 } from "./coherence";
 import { planName2, summaryName2 } from "./select";
 
-// ---- gen-2 reducer helpers ----------------------------------------------------------------------
-
-// A freshly-minted pending child (the gen-2 makeSub: artifact-free by CONSTRUCTION — the open
-// stage has no path fields, so "no artifacts yet" is structural, not null-at-rest).
+// A freshly-minted pending child: artifact-free by CONSTRUCTION — the open stage has no path
+// fields, so "no artifacts yet" is structural, not null-at-rest.
 function makeNode2(nn: Nn, title: string): TreeNode {
   return { nn, title, redraftCount: 0, lastFeedback: null, state: { stage: "open", phase: "pending" } };
 }
@@ -42,7 +40,7 @@ function initial2(treeId: string, request: string, nowMs: number): PlanTreeState
       title: request,
       redraftCount: 0,
       lastFeedback: null,
-      // GENESIS: the run opens with the intent-clarifier (root-only phase), exactly as in gen 1.
+      // GENESIS: the run opens with the intent-clarifier (root-only phase).
       state: { stage: "open", phase: "clarifying-intent" },
     },
     // No SDK session yet — captured on the first system_init frame (SESSION_INITIALIZED).
@@ -82,9 +80,8 @@ function clone2(state: PlanTreeState2): PlanTreeState2 {
   };
 }
 
-// The gen-2 requirePointer: assert the event addresses THE active node, returning it. Every
-// node-targeted event must address the currently-active node (depth-first uniqueness is the
-// coherence invariant), exactly as gen-1 events had to address the pointed-at sub-plan.
+// Assert the event addresses THE active node, returning it. Every node-targeted event must address
+// the currently-active node (depth-first uniqueness is the coherence invariant).
 function requireActive2(root: TreeNode, path: NodePath, what: string): TreeNode {
   const active = activePathOf(root);
   if (active === null || pathKey(active) !== pathKey(path)) {
@@ -97,7 +94,7 @@ function requireActive2(root: TreeNode, path: NodePath, what: string): TreeNode 
   return node;
 }
 
-// PHASE 4 — ONE COMPLETION-ASCENT HOP. After the node at `path` (a leaf or rolled-up split) was
+// ONE COMPLETION-ASCENT HOP. After the node at `path` (a leaf or rolled-up split) was
 // marked summarized, take the single next step:
 //   - a NEXT PENDING SIBLING exists → it activates (open/pending → open/recon);
 //   - LAST child of the ROOT → the root completes (split → summarized; treeIsDone) + notifyDone (the
@@ -118,7 +115,7 @@ function advanceAfterSummary(next: PlanTreeState2, path: NodePath, effects: Effe
   const idx = siblings.findIndex((c) => c.nn === path[path.length - 1]);
   const sibling = idx + 1 < siblings.length ? siblings[idx + 1] : null;
   if (sibling) {
-    // PHASE 5 — THE PARENT-REVIEW TURN: a child summarized with right-siblings remaining, so the
+    // THE PARENT-REVIEW TURN: a child summarized with right-siblings remaining, so the
     // PARENT (root included) enters `reviewing` and the next sibling STAYS pending. The driver runs
     // the no-tools review turn (→ ADJUST/NONE) and dispatches PARENT_REVIEW_DONE, the ONLY arc that
     // activates the next sibling's recon. Review happens only BETWEEN siblings — the last child takes
@@ -141,7 +138,7 @@ function advanceAfterSummary(next: PlanTreeState2, path: NodePath, effects: Effe
     if (next.root.state.stage !== "split") {
       throw new Error("incoherent: completion ascent reached a non-split root");
     }
-    // PHASE 5 — THE FORCED ACCEPTANCE GATE: a tree that froze a working-reference baseline CANNOT
+    // THE FORCED ACCEPTANCE GATE: a tree that froze a working-reference baseline CANNOT
     // finalize without a recorded verdict. When `next.baseline_` is present AND no verdict yet
     // (acceptance_ undefined — defensive against double-finalize), instead of completing the root we
     // PARK it in its acceptance window (running-children, all children summarized — treeIsDone stays
@@ -165,13 +162,10 @@ function advanceAfterSummary(next: PlanTreeState2, path: NodePath, effects: Effe
   // state IS the window; the driver's roll-up turn completes it via SUMMARY_WRITTEN{parentPath}).
 }
 
-// ---- the gen-2 pure reducer ----------------------------------------------------------------------
-
 // The PURE gen-2 reducer. Returns a NEW state plus the effects the driver must execute. Never
 // mutates the input; assertCoherent2 runs at the end of EVERY arc so any illegal transition throws.
-// Effect kinds/ordering mirror the gen-1 reducer one-for-one at depth 1 (see the Effect2 notes for
-// the two documented driver-write-boundary deltas), so the driver cutover preserves the golden
-// depth-1 trace.
+// Effect kinds/ordering are fixed one-for-one at depth 1 (see the Effect2 notes for the two
+// driver-write-boundary deltas) to preserve the golden depth-1 trace.
 export function reduce2(
   state: PlanTreeState2,
   event: PlanTreeEvent2,
@@ -182,7 +176,7 @@ export function reduce2(
   switch (event.type) {
     case "START": {
       // Bootstrap a fresh tree (ignores prior state — START is the genesis event). The on-disk
-      // .plan-tree/ is reset FIRST, THEN the genesis ledger is persisted into it (gen-1 order).
+      // .plan-tree/ is reset FIRST, THEN the genesis ledger is persisted into it.
       const fresh = initial2(event.treeId, event.request, event.nowMs);
       effects.push({ kind: "resetPlanTreeDir" }, { kind: "persist" });
       assertCoherent2(fresh.root);
@@ -191,8 +185,7 @@ export function reduce2(
 
     case "INTENT_CLARIFIED": {
       // ROOT-ONLY GENESIS ARC: clarifying-intent → recon, writing INTENT.md (the one artifact
-      // whose text still rides the event — the reducer write mirrors gen 1 byte-for-byte).
-      // Stricter than gen 1: a stray INTENT_CLARIFIED mid-run throws instead of rewinding.
+      // whose text still rides the event). A stray INTENT_CLARIFIED mid-run throws.
       if (next.root.state.stage !== "open" || next.root.state.phase !== "clarifying-intent") {
         throw new Error(
           `INTENT_CLARIFIED illegal: root is ${next.root.state.stage}/${next.root.state.phase}, expected open/clarifying-intent`,
@@ -276,7 +269,7 @@ export function reduce2(
           state: { stage: "leaf", phase: "drafting", planPath: null, summaryPath: null, plansDirPath: null },
         }));
       } else {
-        // PHASE 4 — EVERY OTHER NODE (root AND non-root): recon → sizing (the SIZER_DONE verdict
+        // EVERY OTHER NODE (root AND non-root): recon → sizing (the SIZER_DONE verdict
         // decides leaf vs split). recon.md is DRIVER-written (the event carries no text).
         next.root = replaceAt(next.root, event.path, (n) => ({
           ...n,
@@ -294,7 +287,7 @@ export function reduce2(
           `SIZER_DONE illegal: node "${pathKey(event.path)}" is ${node.state.stage}/${node.state.phase}, expected open/sizing`,
         );
       }
-      // TWO-OUTCOME SIZER, gen-1 thresholds preserved AT EVERY DEPTH: a CONFIDENT single makes the
+      // TWO-OUTCOME SIZER, thresholds preserved AT EVERY DEPTH: a CONFIDENT single makes the
       // node a leaf; a split OR a low-confidence single (< 0.6, per the sizer skill's rule)
       // decomposes. (The outcome itself is not stored: schema 2 has no sizer field — the verdict
       // is fully encoded in the arc.)
@@ -317,7 +310,7 @@ export function reduce2(
             },
           };
         } else {
-          // PHASE 4 — NON-ROOT SINGLE: the node ITSELF becomes the leaf (NO collapse child — the
+          // NON-ROOT SINGLE: the node ITSELF becomes the leaf (NO collapse child — the
           // collapse exists only at the root, where a gate must still follow). Its leaf gate is this
           // node's human checkpoint.
           next.root = replaceAt(next.root, event.path, (n) => ({
@@ -327,7 +320,7 @@ export function reduce2(
         }
       } else {
         // SPLIT (or low-confidence single treated as one) → the decomposition draft turn, at ANY
-        // depth (PHASE 4: non-root splits draft their own decompositions).
+        // depth (non-root splits draft their own decompositions).
         next.root = replaceAt(next.root, event.path, (n) => ({
           ...n,
           state: { stage: "open", phase: "decomposing" },
@@ -338,7 +331,7 @@ export function reduce2(
     }
 
     case "DECOMPOSITION_DRAFTED": {
-      // PHASE 4: legal at ANY depth — a non-root split drafts its own decomposition
+      // Legal at ANY depth — a non-root split drafts its own decomposition
       // (".plan-tree/<dotted>-plan.md", driver-written) and gets the same unified gate.
       const node = requireActive2(next.root, event.path, "DECOMPOSITION_DRAFTED");
       if (node.state.stage !== "open" || node.state.phase !== "decomposing") {
@@ -350,9 +343,9 @@ export function reduce2(
         ...n,
         state: { stage: "open", phase: "awaiting-decomposition-approval" },
       }));
-      // THE UNIFIED GATE: the decomposition gate lives in pendingApproval like every other gate (the
-      // gen-1 nn:-1 sentinel is gone). master.md and the plans-dir copy are DRIVER-written before this
-      // event — it carries their real paths into the gate.
+      // THE UNIFIED GATE: the decomposition gate lives in pendingApproval like every other gate.
+      // master.md and the plans-dir copy are DRIVER-written before this event — it carries their real
+      // paths into the gate.
       const gate: ApprovalGate2 = {
         path: event.path,
         kind: "decomposition",
@@ -367,7 +360,7 @@ export function reduce2(
     }
 
     case "GATE_RE_PRESENTED": {
-      // INV-3 — PHASE-ONLY RE-ARM (resume). Advance ONLY open/decomposing →
+      // PHASE-ONLY RE-ARM (resume). Advance ONLY open/decomposing →
       // open/awaiting-decomposition-approval so a subsequent DECOMPOSITION_APPROVED's guard is
       // satisfied (the resumed-gate Approve path FATALed otherwise). The DRIVER already set
       // pendingApproval + fired onAwaitingApproval on resume, so this emits NO effects — re-running
@@ -387,11 +380,11 @@ export function reduce2(
     }
 
     case "CHILDREN_PARSED": {
-      // PHASE 4: legal at ANY depth (children carry per-level Nn segments; full paths derive from
+      // Legal at ANY depth (children carry per-level Nn segments; full paths derive from
       // nesting at DECOMPOSITION_APPROVED).
       const node = requireActive2(next.root, event.path, "CHILDREN_PARSED");
-      // Legal in the gen-1 SUBPLANS_PARSED window: while decomposing OR while the draft's gate is
-      // held (the parse derives from the draft, whichever order the driver lands them in).
+      // Legal while decomposing OR while the draft's gate is held (the parse derives from the draft,
+      // whichever order the driver lands them in).
       if (
         node.state.stage !== "open" ||
         (node.state.phase !== "decomposing" && node.state.phase !== "awaiting-decomposition-approval")
@@ -400,7 +393,7 @@ export function reduce2(
           `CHILDREN_PARSED illegal: node "${pathKey(event.path)}" is ${node.state.stage}/${node.state.phase}, expected open/decomposing|awaiting-decomposition-approval`,
         );
       }
-      // SIBLING-nn UNIQUENESS (INV-2 recoverable): two headers parsing to the SAME nn (e.g.
+      // SIBLING-nn UNIQUENESS (recoverable): two headers parsing to the SAME nn (e.g.
       // "Sub-Plan 1" and "Sub-Plan 01") would mint duplicate-nn siblings, and navigation resolves nn
       // to the FIRST match, so the run executes one twin and later events alias the other, wedging
       // mid-run. REJECT it HERE with a PlanValidationError (the SAME typed class as empty/out-of-range)
@@ -430,7 +423,7 @@ export function reduce2(
     }
 
     case "DECOMPOSITION_APPROVED": {
-      // PHASE 4: legal at ANY depth — the open→split replacement happens wherever the gated node
+      // Legal at ANY depth — the open→split replacement happens wherever the gated node
       // lives; ANCESTORS are untouched (they stay running-children, and the newly-active first
       // grandchild keeps each level's exactly-one-active partition satisfied).
       const node = requireActive2(next.root, event.path, "DECOMPOSITION_APPROVED");
@@ -441,11 +434,10 @@ export function reduce2(
       }
       const stash = next.parsedChildren;
       if (!stash || pathKey(stash.path) !== pathKey(event.path)) {
-        // The gen-1 "MASTER_APPROVED before SUBPLANS_PARSED" guard, path-addressed.
         throw new Error("DECOMPOSITION_APPROVED before CHILDREN_PARSED — no children to run");
       }
       const gate = next.pendingApproval;
-      // The instantaneous `approved` tick (gen-1 semantics): the open node is REPLACED by the
+      // The instantaneous `approved` tick: the open node is REPLACED by the
       // populated split, already running its first child — a resting "approved-but-idle" state is
       // unrepresentable. The decomposition's artifact paths move from the gate onto the split node.
       const children = nonEmpty(
@@ -464,7 +456,7 @@ export function reduce2(
       }));
       next.parsedChildren = null;
       next.pendingApproval = null;
-      // Gen-1 APPROVE effect shape, unified onto the decomposition gate: resolve-allow + persist.
+      // The APPROVE effect shape, unified onto the decomposition gate: resolve-allow + persist.
       // (Driver-side interrupt/arm-resuming hardening stays DRIVER policy — the reducer only resolves
       // the held permission, as for a leaf APPROVE.)
       if (gate) effects.push({ kind: "resolvePermission", id: gate.toolUseId, allow: true });
@@ -473,7 +465,7 @@ export function reduce2(
     }
 
     case "DECOMPOSITION_CHANGES_REQUESTED": {
-      // PHASE 4: legal at ANY depth — the nested redraft happens IN PLACE exactly like the root's.
+      // Legal at ANY depth — the nested redraft happens IN PLACE exactly like the root's.
       const node = requireActive2(next.root, event.path, "DECOMPOSITION_CHANGES_REQUESTED");
       if (node.state.stage !== "open" || node.state.phase !== "awaiting-decomposition-approval") {
         throw new Error(
@@ -507,8 +499,7 @@ export function reduce2(
         );
       }
       // leaf drafting → awaiting-approval, recording the DRIVER-written plan's paths (the plan text
-      // never rides the event — see the driver-write boundary note; the gen-1 writeAgentPlan effect
-      // is gone).
+      // never rides the event — see the driver-write boundary note).
       next.root = replaceAt(next.root, event.path, (n) => ({
         ...n,
         state: {
@@ -534,7 +525,7 @@ export function reduce2(
 
     case "APPROVE": {
       const node = requireActive2(next.root, event.path, "APPROVE");
-      // Legal ONLY from leaf/awaiting-approval (the gen-1 lifecycle guard, stage-aware).
+      // Legal ONLY from leaf/awaiting-approval.
       if (node.state.stage !== "leaf" || node.state.phase !== "awaiting-approval") {
         throw new Error(
           `APPROVE illegal: node "${pathKey(event.path)}" is ${node.state.stage}/${node.state.phase}, expected leaf/awaiting-approval`,
@@ -547,7 +538,7 @@ export function reduce2(
       });
       next.pendingApproval = null;
       if (gate) effects.push({ kind: "resolvePermission", id: gate.toolUseId, allow: true });
-      // NO setMode effect (gen-1 invariant preserved): the writable mode is DERIVED from the tree
+      // NO setMode effect: the writable mode is DERIVED from the tree
       // (writePolicyFor2's existential flips on the `executing` leaf set above).
       effects.push({ kind: "persist" });
       break;
@@ -562,7 +553,7 @@ export function reduce2(
       }
       const gate = next.pendingApproval;
       // Re-draft IN PLACE: the active path MUST NOT move; siblings MUST NOT be touched (replaceAt
-      // copies only the spine). The drafted paths stay recorded on the leaf (gen-1 behavior).
+      // copies only the spine). The drafted paths stay recorded on the leaf.
       next.root = replaceAt(next.root, event.path, (n) => {
         if (n.state.stage !== "leaf") throw new Error("unreachable: REQUEST_CHANGES target re-checked non-leaf");
         return {
@@ -582,8 +573,8 @@ export function reduce2(
 
     case "EXEC_DONE": {
       const node = requireActive2(next.root, event.path, "EXEC_DONE");
-      // The leaf finished executing; it STAYS `executing` until its summary lands (gen-1 shape —
-      // the summary turn still needs the writable window's bookkeeping to be unambiguous).
+      // The leaf finished executing; it STAYS `executing` until its summary lands (the summary turn
+      // still needs the writable window's bookkeeping to be unambiguous).
       if (node.state.stage !== "leaf" || node.state.phase !== "executing") {
         throw new Error(
           `EXEC_DONE illegal: node "${pathKey(event.path)}" is ${node.state.stage}/${node.state.phase}, expected leaf/executing`,
@@ -594,12 +585,12 @@ export function reduce2(
     }
 
     case "SUMMARY_WRITTEN": {
-      // PHASE 4 — TWO shapes at ANY depth, both addressing THE active node:
-      //   LEAF summary: a leaf/executing node summarizes (the gen-1 arc, path-generic), OR
+      // TWO shapes at ANY depth, both addressing THE active node:
+      //   LEAF summary: a leaf/executing node summarizes (path-generic), OR
       //   ROLL-UP summary: a NON-ROOT split resting in its roll-up window (running-children, all
       //   children summarized — see inRollupWindow) records its own roll-up and completes.
       // Either way the summary FILE was already written by the driver — the event carries the
-      // write's real returned path; the reducer only RECORDS it (no write effect; gen-1 invariant).
+      // write's real returned path; the reducer only RECORDS it (no write effect).
       const node = requireActive2(next.root, event.path, "SUMMARY_WRITTEN");
       if (node.state.stage === "leaf") {
         if (node.state.phase !== "executing") {
@@ -642,7 +633,7 @@ export function reduce2(
     }
 
     case "PARENT_REVIEW_DONE": {
-      // PHASE 5 — the ONLY exit from `reviewing`: back to running-children, activating the next
+      // The ONLY exit from `reviewing`: back to running-children, activating the next
       // pending child's recon. Legal ONLY while the addressed node is a split in `reviewing` (any
       // other state throws — reviewing → anything-else has no arc). The reviewed-child summary and
       // the ADJUST note are driver concerns; the reducer only moves the partition forward.
@@ -675,7 +666,7 @@ export function reduce2(
 
     case "ACCEPTANCE_APPROVED":
     case "ACCEPTANCE_DIVERGED": {
-      // PHASE 5 — RESOLVE THE FORCED ACCEPTANCE GATE: perform the finalize advanceAfterSummary
+      // RESOLVE THE FORCED ACCEPTANCE GATE: perform the finalize advanceAfterSummary
       // deferred (root acceptance window → summarized + notifyDone) and clear the held gate. Legal
       // ONLY while the gate is open: the root resting in its acceptance window AND pendingAcceptance
       // held. Any other shape throws LOUDLY.
@@ -706,9 +697,9 @@ export function reduce2(
     }
 
     case "ACCEPTANCE_REFINED": {
-      // PHASE 6 — RE-PLAN A SUB-PLAN FROM THE FORCED ACCEPTANCE GATE. A first-class third action: reset
+      // RE-PLAN A SUB-PLAN FROM THE FORCED ACCEPTANCE GATE. A first-class third action: reset
       // the target node AND its right-siblings to a fresh re-execution shape so they re-run and
-      // overwrite their summaries; on re-completion (baseline present, no verdict) the Phase-5 gate
+      // overwrite their summaries; on re-completion (baseline present, no verdict) the gate
       // re-arms. NO "stale summary" flag — the reset IS the mechanism, and the resulting shape is one
       // the per-level partition already permits.
       //
@@ -803,14 +794,14 @@ export function reduce2(
         return { ...n, state: { ...n.state, children } };
       });
       // BACK TO EXECUTING: clear the held gate (no verdict recorded — acceptance_ stays absent). The
-      // re-executed nodes will eventually re-arm the gate at root re-completion (Phase-5 logic).
+      // re-executed nodes will eventually re-arm the gate at root re-completion.
       next.pendingAcceptance = null;
       effects.push({ kind: "persist" });
       break;
     }
 
     case "CLARIFY_REQUESTED": {
-      // A held AskUserQuestion — transient gate only; does NOT change any node (gen-1 carry-over).
+      // A held AskUserQuestion — transient gate only; does NOT change any node.
       next.pendingClarify = { toolUseId: event.toolUseId, questions: event.questions };
       break;
     }
@@ -819,7 +810,7 @@ export function reduce2(
       const gate = next.pendingClarify;
       next.pendingClarify = null;
       // Resolve the held AskUserQuestion with the user's selections (gate id wins; event id is the
-      // no-gate fallback — gen-1 carry-over).
+      // no-gate fallback).
       const message = JSON.stringify({ answers: event.answers });
       const id = gate ? gate.toolUseId : event.toolUseId;
       effects.push({ kind: "resolvePermission", id, allow: true, message });
@@ -902,7 +893,7 @@ export function reduce2(
     }
   }
 
-  // NOTE: the reducer does NOT stamp updated_ms (gen-1 invariant): the driver stamps a fresh
+  // NOTE: the reducer does NOT stamp updated_ms: the driver stamps a fresh
   // injected-now() timestamp at its single persist path.
   assertCoherent2(next.root);
   return { state: next, effects };

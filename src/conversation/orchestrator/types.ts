@@ -1,5 +1,5 @@
 // Multiplan orchestration — frozen public interfaces (leaf): Mandate, OrchestratorObserver,
-// OrchestratorHandle. Relocated verbatim from the former single-file orchestrator.ts.
+// OrchestratorHandle.
 // NOTE: `../types` here is the EXISTING src/conversation/types.ts (AgentStream / AskUserQuestion* /
 // ToolPermissionRequested) — distinct from this orchestrator-leaf `types.ts`.
 
@@ -20,15 +20,12 @@ import type { AttachedImage } from "../images";
 
 // The structured mandate a child node carries out of its parent's decomposition. The section BODY
 // (scope under the `### Sub-Plan NN:` header) and decomposition PREAMBLE (shared context above the
-// first header) travel WITH the title, so a node prompt can never silently degrade to title-only
-// (the lost-mandate bug).
+// first header) travel WITH the title, so a node prompt can never silently degrade to title-only.
 export interface Mandate {
   title: string;
   sectionBody: string;
   masterPreamble: string;
 }
-
-// ---- observer + handle (frozen public surface) ----------------------------------------------
 
 // The observer the renderer/main.ts subscribes to. Every hook is optional so a partial observer
 // compiles. These are fired by the matching notify* effects + onSnapshot after every transition.
@@ -36,7 +33,7 @@ export interface OrchestratorObserver {
   // Fired after EVERY transition with the fresh snapshot (so the UI can re-render).
   onSnapshot?(snap: PlanTreeSnapshot2): void;
   // A node is awaiting the user's approval — the UNIFIED gate (decomposition AND leaf; the root
-  // decomposition gate included — the gen-1 nn:-1 sentinel is gone).
+  // decomposition gate included).
   onAwaitingApproval?(gate: ApprovalGate2): void;
   // A held AskUserQuestion is awaiting the user's answers.
   onClarify?(clarify: ClarifyGate): void;
@@ -44,7 +41,7 @@ export interface OrchestratorObserver {
   // notifyPrototypeReview effect; resolved via approvePrototype()/refinePrototype() — by TURN
   // COMPLETION, not a held tool, so there is nothing to purge on cancel.
   onPrototypeReview?(gate: PrototypeGate): void;
-  // PHASE 5 — the forced acceptance gate is awaiting the user's verdict against the frozen baseline.
+  // The forced acceptance gate is awaiting the user's verdict against the frozen baseline.
   // Fired by notifyAcceptanceReview (the driver has already opened the baseline). The run is built but
   // NOT done — notifyDone is withheld until approveAcceptance()/divergeAcceptance(). `gate` is the
   // driver-AUGMENTED AcceptanceGate (cwd/openTarget/runCommand filled in). Resolved by an explicit
@@ -57,18 +54,18 @@ export interface OrchestratorObserver {
   onDone?(snap: PlanTreeSnapshot2): void;
   // A fatal error occurred (terminal). The driver tears down after dispatching this.
   onFatal?(message: string): void;
-  // PHASE 4 — QUOTA AUTO-RESUME SURFACE (NON-terminal). The run hit a quota wall and PAUSED (NOT torn
+  // QUOTA AUTO-RESUME SURFACE (NON-terminal). The run hit a quota wall and PAUSED (NOT torn
   // down — `active` stays true); a wall-clock-aware timer to `resetAt` will auto-resume the turn.
   //   - `resetAt` is epoch-MILLISECONDS (when the quota refreshes).
   //   - `remaining` is the auto-resume budget left AFTER this pause (always > 0 when paused — at 0
   //     the reducer routes to onQuotaExhausted instead).
   //   - `source` is the detection carrier (rate-limit event vs. thrown error).
   onQuotaPaused?(info: { resetAt: number; remaining: number; source: string }): void;
-  // PHASE 4 — the run hit a quota wall but the auto-resume budget is SPENT (remaining 0, or no
+  // The run hit a quota wall but the auto-resume budget is SPENT (remaining 0, or no
   // budget was ever granted — fail-closed). NO timer is scheduled; the only affordance is Cancel.
   // The run stays paused/active (not torn down) so the user can read the next reset time.
   onQuotaExhausted?(info: { resetAt: number; source: string }): void;
-  // PHASE 4 — the quota refreshed and the interrupted turn was auto-resumed (the in-memory pause is
+  // The quota refreshed and the interrupted turn was auto-resumed (the in-memory pause is
   // cleared; the run is live again). Fired after the resume prompt is re-issued.
   onQuotaResumed?(): void;
 }
@@ -79,7 +76,7 @@ export interface OrchestratorHandle {
   // no-op returning false (so the composer doesn't close on a dead start); a real start returns true,
   // stores `cwd` for .plan-tree/ writes, opens the SDK session, and sends the first (intent) prompt.
   start(args: { cwd: string; request: string; images?: AttachedImage[] }): Promise<boolean>;
-  // RESUME (Phase 3): continue a non-terminal plan-tree from disk WITHOUT reset. Mirrors start() but
+  // RESUME: continue a non-terminal plan-tree from disk WITHOUT reset. Mirrors start() but
   // skips START/resetPlanTreeDir — seeds `state` from the ledger (rehydrateState2), reloads
   // non-serialized driver state (summaries/mandates) from disk, opens the SDK session in the DERIVED
   // policy resuming the prior transcript (resumeSessionId: ledger.sdk_session_id), then either
@@ -102,7 +99,7 @@ export interface OrchestratorHandle {
   // block) via PROTOTYPE_APPROVED, then continues into recon like INTENT_CLARIFIED. Throws when no
   // prototype gate is pending.
   //
-  // WORKING-REFERENCE (Phase 3): { asWorkingReference: true } marks the prototype a FLOOR on the
+  // WORKING-REFERENCE: { asWorkingReference: true } marks the prototype a FLOOR on the
   // outcome dimensions (not a match-target); the driver freezes .plan-tree/prototype/ →
   // .plan-tree/baseline/ and records the baseline. Default (omitted/false) freezes nothing.
   approvePrototype(opts?: { asWorkingReference?: boolean }): Promise<void>;
@@ -114,7 +111,7 @@ export interface OrchestratorHandle {
   // one round applying the feedback but arms an internal latch so the revised prototype auto-resolves
   // the gate forward to recon without another review round. Driver-owned — never model-controlled.
   refinePrototype(feedback: string, opts?: { autoApprove?: boolean }): Promise<void>;
-  // PHASE 5 — RESOLVE THE FORCED ACCEPTANCE GATE (baseline-bearing runs only). Both perform the
+  // RESOLVE THE FORCED ACCEPTANCE GATE (baseline-bearing runs only). Both perform the
   // deferred finalize (root → summarized + notifyDone) and clear the gate; the verdict is recorded on
   // the ledger (acceptance_). Throw loudly when no acceptance gate is pending.
   //   - approveAcceptance(): the built result clears the baseline floor.
@@ -122,7 +119,7 @@ export interface OrchestratorHandle {
   //     reason is persisted as the audit trail).
   approveAcceptance(): Promise<void>;
   divergeAcceptance(reason: string): Promise<void>;
-  // PHASE 6 — RE-PLAN (refine) a chosen sub-plan from the forced acceptance gate (the THIRD gate
+  // RE-PLAN (refine) a chosen sub-plan from the forced acceptance gate (the THIRD gate
   // action, beside approve and accept-divergence). `target` is the sub-plan to re-plan (a direct root
   // child today). RESETS the target node AND its right-siblings to a fresh re-execution shape
   // (recon→draft→exec→summary), deletes their stale on-disk NN-plan.md/NN-summary.md, clears the gate,
@@ -148,18 +145,18 @@ export interface OrchestratorHandle {
   // consults this (via isOrchestratorResuming()) AT INGEST to mark that result a deliberate interrupt,
   // not a genuine failure.
   resuming(): boolean;
-  // PHASE 4 / DA-I5 — SYNCHRONOUS QUOTA-PAUSE PROBE (mirrors resuming()): true between a quota_exceeded
+  // SYNCHRONOUS QUOTA-PAUSE PROBE (mirrors resuming()): true between a quota_exceeded
   // pause and its auto-resume (or cancel/exhaust-then-cancel). Synchronously correct from the INSTANT
   // markQuotaPausePending() fires (before the microtask-deferred QUOTA_PAUSED installs the pause) until
   // the pause resolves. BOTH agent-exit listeners (index.ts AND main.ts) consult it to land "paused" on
   // a same-tick exit rather than tearing the session down / purging held reviews. Read-only.
   quotaPaused(): boolean;
-  // DA-I5 — SYNCHRONOUS pause-pending latch. The agent-stream listener calls this the instant a
+  // SYNCHRONOUS pause-pending latch. The agent-stream listener calls this the instant a
   // quota_exceeded frame is seen, BEFORE the microtask-deferred QUOTA_PAUSED dispatch — making
   // quotaPaused() synchronously true so a same-tick agent-exit is classified a PAUSE by both listeners.
   // Subsumed once the pause installs; cleared when it resolves (resume/cancel/teardown/terminal). Idempotent.
   markQuotaPausePending(): void;
-  // PHASE 4 — PRIOR-SESSION EXIT SIGNAL. index.ts / main.ts own the `agent-exit` listener and forward
+  // PRIOR-SESSION EXIT SIGNAL. index.ts / main.ts own the `agent-exit` listener and forward
   // it here. While a quota pause is armed, this records that the prior (paused) sidecar session exited
   // — the precondition for re-opening a session (the Rust one-session-per-launch guard rejects a
   // second `start` until the prior child is reaped). If the resume timer already fired and was waiting

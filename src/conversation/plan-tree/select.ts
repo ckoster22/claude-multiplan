@@ -10,7 +10,7 @@ import type { TreeNode, WritePolicy, PlanTreeState2, RecursiveLedger, PlanTreeSn
 import { cloneNode, activePathOf, someNodeExecuting, nodeAtPath, inAcceptanceWindow } from "./nav";
 
 // Derive the schema-2 serializable ledger (deep-copied; excludes any future transient gates) —
-// what the driver will persist to state.json after the swap.
+// what the driver will persist to state.json.
 export function toLedger2(state: PlanTreeState2): RecursiveLedger {
   return {
     schema: 2,
@@ -22,7 +22,7 @@ export function toLedger2(state: PlanTreeState2): RecursiveLedger {
     // Carry the frozen working-reference record through persistence (deep-copied so the ledger
     // never aliases live state). Absent ⇒ omitted (sketch — today's behavior unchanged).
     baseline_: state.baseline_ ? { ...state.baseline_ } : undefined,
-    // PHASE 5 — carry the acceptance verdict (incl. the divergence reason) through persistence so a
+    // Carry the acceptance verdict (incl. the divergence reason) through persistence so a
     // resumed ledger keeps the audit trail. Deep-copied; absent ⇒ omitted (the no-baseline path never
     // sets it — byte-identical to today).
     acceptance_: state.acceptance_ ? { ...state.acceptance_ } : undefined,
@@ -49,16 +49,13 @@ export function toSnapshot2(state: PlanTreeState2): PlanTreeSnapshot2 {
 
 // Run completion is DERIVED, never stored: the tree is done iff the ROOT has summarized (leaf or
 // split). "done" is deliberately NOT a NodeState phase — a non-root "done" is unrepresentable.
-// PHASE 5 — the forced acceptance gate keeps `treeIsDone` FALSE while it is open: the root rests in
+// the forced acceptance gate keeps `treeIsDone` FALSE while it is open: the root rests in
 // its `running-children` acceptance window (NOT `summarized`) until ACCEPTANCE_APPROVED/DIVERGED
 // finalizes it, so a baseline-bearing tree can never read done without a recorded verdict.
 export function treeIsDone(root: TreeNode): boolean {
   return root.state.stage !== "open" && root.state.phase === "summarized";
 }
 
-// ---- gen-2 derived write policy ---------------------------------------------------------------
-
-// PURE projection, ROOT-PHASE-AWARE then TREE-WIDE EXISTENTIAL:
 //   - the ROOT in its intent-clarification window (open clarifying-intent OR prototype-review) →
 //     "prototype": throwaway visual-prototype artifacts may be written, but no plan exists yet.
 //     GENESIS therefore derives "prototype"; recon onward falls through to the existential below.
@@ -78,11 +75,9 @@ export function writePolicyFor2(root: TreeNode): WritePolicy {
   return someNodeExecuting(root) ? "acceptEdits" : "plan";
 }
 
-// ---- gen-2 summary filename ---------------------------------------------------------------------
-
 // The on-disk summary filename for a node: the dotted pathKey + "-summary.md". A single segment
 // degenerates to the legacy flat shape ("01-summary.md" — byte-identical to gen-1 summaryName), so
-// Phase-1 depth-1 filenames are unchanged on disk. The ROOT writes no roll-up summary (run
+// depth-1 filenames are unchanged on disk. The ROOT writes no roll-up summary (run
 // completion is DERIVED — see treeIsDone), so the empty path throws loudly.
 export function summaryName2(path: NodePath): string {
   if (path.length === 0) {
@@ -91,7 +86,7 @@ export function summaryName2(path: NodePath): string {
   return `${pathKey(path)}-summary.md`;
 }
 
-// The on-disk DECOMPOSITION-plan filename for a split node (PHASE 4): the root keeps its legacy
+// The on-disk DECOMPOSITION-plan filename for a split node: the root keeps its legacy
 // "master.md" (root-only artifact special case); a non-root split writes the dotted
 // `<pathKey>-plan.md` (summaryName2-style naming) — e.g. "02-plan.md", "02.01-plan.md".
 export function planName2(path: NodePath): string {
@@ -143,7 +138,7 @@ export function activePhaseLabel(root: TreeNode): string {
     case "split":
       switch (state.phase) {
         case "running-children":
-          // PHASE 5 — the ROOT resting running-children with all children summarized is the
+          // the ROOT resting running-children with all children summarized is the
           // forced-acceptance hold (the run is built; the user must record a verdict); every other
           // running-children resting node is a roll-up window.
           return activePath.length === 0 && inAcceptanceWindow(node)

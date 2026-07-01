@@ -8,8 +8,6 @@
 import type { AskUserQuestionItem } from "../types";
 import type { Nn, NodePath, PlanTreeFilePath, NonEmptyArray } from "./ids";
 
-// ---- shared frozen types (survivors of the gen-1 deletion — names are load-bearing) --------
-
 // The sizer's verdict on how to decompose the request. EXACTLY two outcomes: "split" or a
 // confident "single". `escalate` is unrepresentable — the master gate is already the human
 // checkpoint, so an uncertain sizer splits (the driver coerces any unknown decision to split).
@@ -44,7 +42,7 @@ export interface PrototypeGate extends PrototypeInfo {
   cwd: string;
 }
 
-// PHASE 5 — THE FORCED ACCEPTANCE GATE (transient, NEVER serialized — modeled on PrototypeGate).
+// THE FORCED ACCEPTANCE GATE (transient, NEVER serialized — modeled on PrototypeGate).
 // A tree that froze a working-reference baseline (state.baseline_) CANNOT be reported done without
 // the user recording a verdict against it. When the ROOT's last child summarizes WITH a baseline
 // present, instead of finalizing the reducer holds the root in its running-children acceptance window
@@ -66,15 +64,11 @@ export interface AcceptanceGate {
   readonly round: number;
 }
 
-// ---- derived write policy ---------------------------------------------------------------------
-
 // The sidecar permission mode the session must be in for a given ledger state. Derived by
 // writePolicyFor2 (root-phase-aware) and asserted by the driver after every transition. "prototype"
 // is the visual-prototyping window (root still clarifying-intent / prototype-review): throwaway
 // prototype artifacts may be written but no plan exists yet.
 export type WritePolicy = "plan" | "acceptEdits" | "prototype";
-
-// ---- gen-2 node state + tree node -------------------------------------------------------------
 
 // The discriminated per-node state. The three stages are STRUCTURALLY distinct:
 //   - "open": pre-sizing (incl. the split-decided-but-not-yet-parsed window) — NO children, NO
@@ -122,8 +116,6 @@ export interface TreeNode {
   readonly state: NodeState;
 }
 
-// ---- gen-2 ledger (schema 2) + projections ----------------------------------------------------
-
 // The recursive JSON-serializable ledger, 1:1 with `.plan-tree/state.json` schema 2. `pointer` is
 // GONE — the active path is derived (activePathOf); coherence guarantees ≤ 1 active node. No
 // schema-1 migration exists (no resume-from-disk exists).
@@ -138,14 +130,14 @@ export interface RecursiveLedger {
   // state.json deserializes fine (absent ⇒ no resumable transcript). Set once on the first non-empty
   // id; a later re-init overwrites it (the live id wins).
   sdk_session_id?: string;
-  // The frozen "working reference" record (Phase 3). PRESENT iff the user marked the prototype a
+  // The frozen "working reference" record. PRESENT iff the user marked the prototype a
   // working reference at the prototype-approval gate — the driver froze `.plan-tree/prototype/` into
   // `.plan-tree/baseline/` and recorded it here. The baseline is a FLOOR on the outcome dimensions in
   // INTENT.md, never a behavioral match-target. OPTIONAL + additive (schema stays 2): absent ⇒ no
   // working reference. `frozen_ms` is informational (presence is the signal). No path list is stored
   // (the artifacts live under `.plan-tree/baseline/` — a list would only duplicate and drift).
   baseline_?: { frozen: true; frozen_ms: number };
-  // PHASE 5 — THE ACCEPTANCE VERDICT against the frozen baseline. PRESENT iff the run reached the
+  // THE ACCEPTANCE VERDICT against the frozen baseline. PRESENT iff the run reached the
   // forced acceptance gate (a baseline existed at last-child summary) AND the user resolved it:
   //   - "approved": the result clears the baseline floor (the default success verdict).
   //   - "diverged": the user accepted a result BELOW the floor and recorded WHY (`reason` — a
@@ -166,10 +158,10 @@ export interface RecursiveLedger {
   auto_resume_?: { budget: number; remaining: number };
 }
 
-// THE UNIFIED APPROVAL GATE (gen 2): ONE shape for ALL held-ExitPlanMode gates — the root
-// decomposition gate included. The gen-1 `nn: -1` sentinel does not exist here: a gate is
-// addressed by its NodePath and discriminated by `kind` ("decomposition" = the node's split plan
-// is awaiting approval; "leaf" = the node's own plan is). Transient — never serialized.
+// THE UNIFIED APPROVAL GATE: ONE shape for ALL held-ExitPlanMode gates — the root decomposition
+// gate included. A gate is addressed by its NodePath and discriminated by `kind` ("decomposition" =
+// the node's split plan is awaiting approval; "leaf" = the node's own plan is). Transient — never
+// serialized.
 export interface ApprovalGate2 {
   readonly path: NodePath;
   readonly kind: "decomposition" | "leaf";
@@ -190,7 +182,7 @@ export interface ApprovalGate2 {
 //     discards it.
 //   - pendingPrototype: the held visual-prototype gate. NEVER serialized (no resume-from-disk — a
 //     persisted gate could only describe a review the restart can't resolve; the turn re-runs).
-//   - pendingAcceptance: PHASE 5's held forced-acceptance gate. Opened when the root's last child
+//   - pendingAcceptance: the held forced-acceptance gate. Opened when the root's last child
 //     summarizes WITH a baseline present (the reducer parks the root in its running-children
 //     acceptance window instead of finalizing); cleared by ACCEPTANCE_APPROVED/DIVERGED. NEVER
 //     serialized — a resumed run re-presents it from the tree shape + baseline_.
@@ -203,8 +195,7 @@ export interface PlanTreeState2 extends RecursiveLedger {
 }
 
 // The gen-2 read-only snapshot: the ledger's tree plus DERIVED fields (active path, write policy,
-// done) so consumers never re-derive them divergently, plus the transient gates (mirroring the
-// gen-1 snapshot, which carried pendingApproval/pendingClarify to the UI).
+// done) so consumers never re-derive them divergently, plus the transient gates.
 export interface PlanTreeSnapshot2 {
   readonly treeId: string;
   readonly root: TreeNode;
@@ -217,34 +208,32 @@ export interface PlanTreeSnapshot2 {
   readonly pendingAcceptance: AcceptanceGate | null;
 }
 
-// ---- resume plan / scope (PURE decision types) ------------------------------------------------
-
-// What resuming the active node REQUIRES of the driver. Shapes (mirroring the v1 scope table):
+// What resuming the active node REQUIRES of the driver. Shapes:
 //   - "gate": the active node is parked at a human approval checkpoint (leaf plan, or decomposition/
 //     master). The driver re-presents it from disk — `planPath` is the file reviewed, `plansDirPath`
 //     its plans-dir copy when known, `redraftCount` rides. NO tokens spent.
 //   - "resend": the active node is mid-turn at a re-sendable step (recon / sizer / leaf draft). The
 //     driver re-arms `awaiting` and re-sends that step's existing prompt.
-//   - "acceptance" (PHASE 5): the ROOT is parked in its forced-acceptance window (running-children,
+//   - "acceptance": the ROOT is parked in its forced-acceptance window (running-children,
 //     all children summarized, baseline frozen, no verdict yet). The build is COMPLETE — only the
 //     human verdict is missing. The driver re-mints the transient pendingAcceptance gate (as the live
 //     notifyAcceptanceReview path does) so the acceptance bar re-appears. NO model turn is sent.
 //     Carries NO path/artifact fields: re-derived from the tree shape + baseline_ (never serialized).
-//   - "restart" (PHASE 2): the active node is in the GENESIS clarify window (open/clarifying-intent).
+//   - "restart": the active node is in the GENESIS clarify window (open/clarifying-intent).
 //     No durable artifact; recovery RE-RUNS the clarify turn from the root title. `path` is the (root)
-//     node; `from:"clarify"` is the only anchor. A FORWARD action (replaces the legacy dead-end).
-//   - "prototype-gate" (PHASE 2): the root prototype-approval window (open/prototype-review). Unlike
+//     node; `from:"clarify"` is the only anchor. A FORWARD action.
+//   - "prototype-gate": the root prototype-approval window (open/prototype-review). Unlike
 //     clarify it HAS durable artifacts (the `.plan-tree/prototype/` dir + INTENT.md), so it is
 //     re-presentable. A DEDICATED kind (not a reuse of "gate") because its artifact is a DIRECTORY
 //     under `.plan-tree/`, not a single plan .md — the consumer re-mints the prototype gate, not a
 //     plan-file read. `path` is the (root) node.
-//   - "rewind" (PHASE 2): fast-forward-safe resume is impossible, but the run can be SALVAGED by
+//   - "rewind": fast-forward-safe resume is impossible, but the run can be SALVAGED by
 //     winding back to the nearest DURABLE gate. `toGate` names the checkpoint, `path` the node it
 //     lives on; `planPath` is the durable artifact filename when the gate has one, else null;
 //     `hazard` notes what made the active node unrecoverable. The resumable counterpart of the
 //     internal RecoveryAction rewind: ONLY `offerable` rewinds (non-root roll-up, between-children
-//     review, torn leaf gate, no-active-node) surface here; non-offerable ones (leaf/executing —
-//     Phase 3 — and root acceptance-window holds) still map to a BLOCKED verdict.
+//     review, torn leaf gate, no-active-node) surface here; non-offerable ones (leaf/executing and
+//     root acceptance-window holds) still map to a BLOCKED verdict.
 export type ResumePlan =
   | {
       kind: "gate";
@@ -255,7 +244,7 @@ export type ResumePlan =
       redraftCount: number;
     }
   // The active node is mid-turn at a re-sendable step. "recon"/"sizer"/"draft"/"decompose" re-arm a
-  // leaf/open step from the node's own state. PHASE-2 DEFECT FIX — "rollup"/"review" re-run the
+  // leaf/open step from the node's own state. "rollup"/"review" re-run the
   // IN-FLIGHT TURN of an ALREADY-SPLIT node whose context is reconstructable from disk
   // (reloadDriverStateFromDisk), so the lost work is ONLY the un-landed turn:
   //   - "rollup": a NON-ROOT split in its roll-up window (running-children, all children summarized)
@@ -275,9 +264,9 @@ export type ResumePlan =
       path: NodePath;
       planPath: string | null;
       hazard?: string;
-      // PHASE 3: a HAZARDOUS rewind that the user may take but ONLY behind a confirmation (edits from
+      // a HAZARDOUS rewind that the user may take but ONLY behind a confirmation (edits from
       // the in-flight executing turn may already be PARTIALLY APPLIED — invariant I3). `true` ⇒ the
-      // banner (P3c) must gate the action behind a confirm dialog; absent/false ⇒ a one-click Phase-2
+      // banner (P3c) must gate the action behind a confirm dialog; absent/false ⇒ a one-click
       // rewind (rollup / between-children review / torn leaf gate — no side effects to re-apply). The
       // ONLY requiresConfirm rewind today is leaf/executing.
       requiresConfirm?: boolean;
@@ -290,12 +279,10 @@ export type ResumeScope =
   | { resumable: true; plan: ResumePlan; phaseLabel: string }
   | { resumable: false; reason: string; phaseLabel: string };
 
-// ---- TOTAL recovery model -----------------------------------------------------------------------
-//
-// `RecoveryAction` is the TOTAL replacement for the partial resumable/blocked split: EVERY active
-// (stage,phase) maps to a concrete recovery, so a dead-end is UNREPRESENTABLE. Three variants:
+// `RecoveryAction` is TOTAL: EVERY active (stage,phase) maps to a concrete recovery, so a dead-end
+// is UNREPRESENTABLE. Three variants:
 //   - "resume": re-present a gate / re-send a step (`recoveryFor` maps every resumable phase to this,
-//     carrying the SAME ResumePlan the legacy table produced).
+//     carrying a ResumePlan).
 //   - "rewind": fast-forward-safe recovery is impossible, but the run can be SALVAGED by winding back
 //     to the nearest durable gate (leaf-approval/decomposition/leaf) rather than discarded.
 //   - "restart": the active node is in the GENESIS window (clarify/prototype) with no durable
@@ -308,17 +295,17 @@ export type RewindTarget = {
   hazard?: string;
   // Whether this rewind is OFFERABLE as a forward resume NOW. `true` ⇒ resumeScopeForRoot surfaces a
   // resumable `{kind:"rewind", …}` ResumePlan; absent/false ⇒ the LEGACY blocked verdict (hazard is
-  // the reason). NON-offerable today: leaf/executing (Phase 3 owns duplicate-write recovery) and the
-  // root acceptance-window holds (no baseline / over-resolved).
+  // the reason). NON-offerable today: leaf/executing and the root acceptance-window holds (no
+  // baseline / over-resolved).
   offerable?: boolean;
   // The durable artifact filename for an offerable rewind that re-presents a gate (a decomposition
   // plan, via planName2). null when the rewind has no single plan artifact (a torn leaf gate, or a
   // roll-up/review whose target is the split's own decomposition).
   planPath?: string | null;
-  // PHASE 3: this OFFERABLE rewind is HAZARDOUS — the user may continue, but ONLY behind a confirm,
+  // this OFFERABLE rewind is HAZARDOUS — the user may continue, but ONLY behind a confirm,
   // because the in-flight executing turn may have ALREADY PARTIALLY APPLIED edits (invariant I3).
   // `true` ⇒ the adapter surfaces `requiresConfirm` so the banner (P3c) gates it behind a dialog;
-  // absent/false ⇒ the one-click Phase-2 rewinds. The ONLY requiresConfirm rewind today is
+  // absent/false ⇒ the one-click rewinds. The ONLY requiresConfirm rewind today is
   // leaf/executing.
   requiresConfirm?: boolean;
 };

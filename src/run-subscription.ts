@@ -1,12 +1,8 @@
-// Run-subscription PURE predicates — orchestrator-observer truth tables.
-// Side-effect-free at import time. main.ts re-exports both predicates so their `./main` importers keep resolving unchanged.
-
 import type { PlanTreeSnapshot2 } from "./conversation/orchestrator";
 
 // Suppress the onActivity conversation-tab flip while a gate is held (pendingApproval):
 // gate-held streams still fire onActivity and would steal focus from the Plan view.
 // Must NOT suppress on pendingClarify — AskUserQuestion cards render in Conversation and need the flip.
-// Exported for unit tests.
 export function suppressConversationFlip(
   snap: Pick<PlanTreeSnapshot2, "pendingApproval"> | null,
 ): boolean {
@@ -17,7 +13,6 @@ export function suppressConversationFlip(
 // a prior session's late exit can arrive after a fresh run has minted its own placeholder.
 // Clear only when no active orchestration claims the placeholder (treeId mismatch or no active run);
 // when treeIds match, the placeholder's lifecycle belongs to onDone/onFatal, not a session exit.
-// Exported for unit tests.
 export function shouldClearPlaceholderOnExit(
   placeholder: { treeId: string } | null,
   orchestrationActive: boolean,
