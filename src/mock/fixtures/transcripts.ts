@@ -1,4 +1,4 @@
-// Mock-mode fixtures — plan HISTORY transcripts (Phase 3).
+// Mock-mode fixtures — plan HISTORY transcripts.
 //
 // The conversation controller's loadHistoryForPlan(stem) invokes `read_plan_transcript({ stem })` and
 // feeds its `lines` (raw CLI jsonl records) through the REAL parseTranscript → applyTranscriptToModel →

@@ -12,7 +12,7 @@
 //     section, so any question here automatically exercises it; the radio question's description text
 //     simply makes the card visually richer.
 //
-// PHASE 4 — the Question-card knobs (count / multiSelect / include-Other) need a PARAMETERIZED
+// The Question-card knobs (count / multiSelect / include-Other) need a PARAMETERIZED
 // builder, not just the canonical fixed set. `buildQuestions(opts)` below produces a question set of
 // the requested SIZE, with each question's multiSelect chosen per the `multiSelect` knob, and an
 // `includeOther` flag controlling whether the synthetic "Other…" free-text affordance is exercised.
@@ -65,8 +65,6 @@ export function cloneQuestions(): AskUserQuestionItem[] {
     options: q.options.map((o) => ({ ...o })),
   }));
 }
-
-// ---- PHASE 4 parameterized builder (the Question-card knobs) --------------------------------
 
 // Options for buildQuestions — the Question-card knob group's tunables.
 export interface QuestionBuildOpts {

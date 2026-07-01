@@ -42,12 +42,10 @@ export const QUESTION_OTHER_TEXT_SELECTOR = '[data-other="text"]';
 
 // The injected seam surface. Tests pass spies; index.ts passes the real production seams.
 export interface ReconcilerSeams {
-  // ---- conversation pane (the player-owned model + pane) ----
   // Re-render the conversation from the model scrubbed to T (resets + re-applies the ≤T model-frame
   // SET, then renderTree into the player pane). Called ONLY when modelSignature changes.
   renderConv: (T: number) => void;
 
-  // ---- reading pane ----
   // Read a plan's markdown (the real `invoke("read_plan_contents", { path })`). Async.
   readPlan: (path: string) => Promise<string>;
   // The real render facade: synchronous markdown→HTML into the pane.
@@ -59,48 +57,44 @@ export interface ReconcilerSeams {
   // The reading-pane element + a fn deriving the plan dir from a path (so the reconciler stays DOM-light).
   readingPane: HTMLElement;
   planDirOf: (path: string) => string;
-  // (c4) Rebuild the sidebar Contents ToC from the CURRENTLY-rendered reading pane (the player wires the
+  // Rebuild the sidebar Contents ToC from the CURRENTLY-rendered reading pane (the player wires the
   // REAL extractToc→buildToc over #reading-pane → #toc-list). Called AFTER the reading-pane render+settle
   // (so the headings exist) and on the empty-pane close (an empty pane ⇒ an empty ToC). OPTIONAL so the
-  // pre-c4 player wiring + unit tests that omit it still typecheck (the reconciler guards each call).
+  // player wiring + unit tests that omit it still typecheck (the reconciler guards each call).
   rebuildToc?: (pane: HTMLElement) => void;
 
-  // ---- sidebar ----
   // Stash the full plan set the mock list_plans returns, then …
   setPlans: (plans: PlanRecord[]) => void;
   // … emit the plan-changed event so main.ts re-lists the sidebar through its real handler.
   emitPlanChanged: () => void;
 
-  // ---- review bar (NEVER write #review-bar — drive the inputs; main.ts paints) ----
+  // review bar: NEVER write #review-bar — drive the inputs; main.ts paints.
   setPendingReviews: (reviews: ReviewRequest[]) => void;
   emitReviewRequested: (review: ReviewRequest) => void;
   emitReviewCancelled: (reviewId: string) => void;
 
-  // ---- prototype gate ----
   emitGate: (which: "prototype", round?: number) => void;
   clearGate: () => void;
 
-  // ---- (c5) in-process approval-review gate ("Request changes" VIEWING bar) --------------------
   // Drive the in-process orchestrator approval gate for the open plan at `planPath`, pushing the open
   // plan's authoritative `commentCount` so #review-bar shows in VIEWING / IN-PROCESS mode (Submit
   // "Request changes", disabled at 0 comments → enabled at >=1). The player emits an onSnapshot-only
   // gate (NOT onAwaitingApproval, which re-opens + wipes highlights) + fires onCommentCountChanged so
-  // main.ts's commentCount + refreshReviewBar reflect the count. OPTIONAL so pre-c5 player wiring + unit
+  // main.ts's commentCount + refreshReviewBar reflect the count. OPTIONAL so player wiring + unit
   // tests that omit it still typecheck (the reconciler guards the call).
   emitReviewGate?: (planPath: string, commentCount: number) => void;
   // Clear the in-process approval gate (the bar reverts). OPTIONAL (guarded).
   clearReviewGate?: () => void;
 
-  // ---- active tab (click the real tab button; never un-hide #conversation-stream) ----
+  // active tab: click the real tab button; never un-hide #conversation-stream.
   setActiveTab: (tab: "plan" | "conversation") => void;
 
-  // ---- (c4) sidebar tab (Plans / Contents) — click the real sidebar `.tab-row .tab[data-tab=…]` so
+  // sidebar tab (Plans / Contents) — click the real sidebar `.tab-row .tab[data-tab=…]` so
   // main.ts's initTabs switching runs. Distinct from setActiveTab (the READER Plan/Conversation tab).
-  // OPTIONAL so pre-c4 player wiring + unit tests that omit it still typecheck (reconciler guards it).
+  // OPTIONAL so player wiring + unit tests that omit it still typecheck (reconciler guards it).
   setSidebarTab?: (tab: "plans" | "contents") => void;
 
-  // ---- overlay seams (cosmetic; reconciler-owned DOM) --------------------------------------------
-  // All overlay seams are OPTIONAL so the player (index.ts) can wire them incrementally (P2) without a
+  // All overlay seams are OPTIONAL so the player (index.ts) can wire them incrementally without a
   // typecheck break; the reconciler guards each call. Unit tests inject all of them as spies.
   //
   // Move/press the #demo-cursor overlay. The reconciler resolves selectors→rects against the LIVE DOM
@@ -133,8 +127,7 @@ export interface Reconciler {
   // immediately (already-resolved promise) when no async open is in flight. The player wires this into
   // `window.__mockAnim.seekSettled` so a capture/replay caller can await a FULLY-rendered pane before
   // screenshotting (seekTo → paint → reconcileReadingPane kicks off a detached async chain that returns
-  // BEFORE the pane finishes rendering — this barrier closes that race). Pure addition: existing callers
-  // never call it, so reconcile behavior is unchanged.
+  // BEFORE the pane finishes rendering — this barrier closes that race).
   settleBarrier: () => Promise<void>;
 }
 
@@ -177,7 +170,6 @@ export function createReconciler(
   // superseded chain leaves the field pointing at the newest open). It never rejects (the chain swallows).
   let inFlightSettle: Promise<void> | null = null;
 
-  // ---- overlay-pass memo state ------------------------------------------------------------------
   // Pulse: the sorted-JSON key of the last-applied pulse SET (mirrors plansKey). null ⇒ never applied.
   let lastPulseKey: string | null = null;
   // Fields: the last-applied visible prefix PER target, so setFieldText fires only when a target's
@@ -191,15 +183,15 @@ export function createReconciler(
   // Cursor: the last-GOOD resolved position. Held when a target is absent OR resolves to a zero-area
   // rect (e.g. a display:none modal), so the cursor never lerps toward (0,0) — it dwells in place.
   let lastCursorPos: { x: number; y: number } | null = null;
-  // (c4) Sidebar tab: the last-applied projected value, so setSidebarTab fires only on change (mirrors
+  // Sidebar tab: the last-applied projected value, so setSidebarTab fires only on change (mirrors
   // reconcileActiveTab). null ⇒ never applied.
   let lastSidebarTab: "plans" | "contents" | null = null;
-  // (c5) In-process review gate: the last-applied key (on|planPath|count). Re-drives the gate seam when
+  // In-process review gate: the last-applied key (on|planPath|count). Re-drives the gate seam when
   // EITHER the gate toggles/moves OR the open plan's comment count changes (so Submit disabled→enabled
   // tracks the growing comment set). null ⇒ never applied.
   let lastReviewGateKey: string | null = null;
 
-  // (c4/scroll determinism) `T` is threaded in so the async reading-pane chain can RE-ASSERT the
+  // `T` is threaded in so the async reading-pane chain can RE-ASSERT the
   // projected scroll AFTER its render+applyComments+settle+rebuildToc complete (each of which resets the
   // container's scrollTop to 0). On a FRESH seekSettled(T) there is no subsequent tick to self-heal the
   // synchronous reconcileScroll(T) that ran BEFORE the async chain finished, so a scrolled beat would
@@ -215,7 +207,7 @@ export function createReconciler(
       // Bump the epoch so any in-flight async read aborts (it would otherwise re-fill the pane).
       void ++openEpoch;
       seams.renderInto(seams.readingPane, "", seams.planDirOf(""));
-      // (c4) An empty pane ⇒ an empty ToC (the real buildToc clears #toc-list). Re-derives from the
+      // An empty pane ⇒ an empty ToC (the real buildToc clears #toc-list). Re-derives from the
       // now-empty pane, so a backward scrub to no-open-plan reverts the ToC cleanly.
       seams.rebuildToc?.(seams.readingPane);
       // Synchronous, fully-settled close: nothing async is pending, so any prior in-flight barrier is
@@ -241,12 +233,12 @@ export function createReconciler(
       seams.applyComments(seams.readingPane, comments);
       // Guard again before the (async) settle so a delayed settle from a superseded read can't run.
       if (gen === openEpoch) await seams.settle(seams.readingPane);
-      // (c4) Rebuild the Contents ToC from the freshly-rendered+settled pane (the headings now exist).
+      // Rebuild the Contents ToC from the freshly-rendered+settled pane (the headings now exist).
       // Guarded on the epoch so a superseded render never clobbers a newer render's ToC. The real
       // extractToc→buildToc is the SAME data flow production uses (the sidebar never queries #reading-pane
       // itself). A backward scrub re-renders the projected markdown, so the ToC re-derives from scratch.
       if (gen === openEpoch) seams.rebuildToc?.(seams.readingPane);
-      // (c4/scroll determinism) RE-ASSERT the projected scroll for THIS scrub T, now that the pane is
+      // RE-ASSERT the projected scroll for THIS scrub T, now that the pane is
       // fully rendered+settled+ToC-built+highlighted (all of which reset scrollTop to 0). This is what
       // makes a FRESH seekSettled(T) to a scrolled beat land at the scrolled position (the synchronous
       // reconcileScroll(T) in the main pass ran BEFORE this async chain finished, so its write was wiped).
@@ -300,7 +292,7 @@ export function createReconciler(
     seams.setActiveTab(surface.activeTab);
   }
 
-  // (c5) Drive the IN-PROCESS approval-review gate ("Request changes" VIEWING bar). Keyed on
+  // Drive the IN-PROCESS approval-review gate ("Request changes" VIEWING bar). Keyed on
   // (on, planPath, commentCount): when on, emit the in-process gate for `planPath` + push the open
   // plan's projected comment count (so Submit is DISABLED at 0 comments, ENABLED at >=1 — the bar
   // re-derives as each set_comments grows the count). When off, clear the gate. Re-fires on EITHER a
@@ -322,7 +314,7 @@ export function createReconciler(
     }
   }
 
-  // (c4) Drive the SIDEBAR tab (Plans / Contents) to the projected value only on change (mirrors
+  // Drive the SIDEBAR tab (Plans / Contents) to the projected value only on change (mirrors
   // reconcileActiveTab). A pure last-≤-T fn of T (projectSidebarTab), so a backward scrub reverts to the
   // default "plans". Distinct from reconcileActiveTab (the reader Plan/Conversation tab).
   function reconcileSidebarTab(T: number): void {
@@ -332,8 +324,6 @@ export function createReconciler(
     lastSidebarTab = tab;
     seams.setSidebarTab(tab);
   }
-
-  // ---- overlay passes ---------------------------------------------------------------------------
 
   // Drive `.demo-pulse` to EXACTLY the projected pulse set. Memoized on a sorted-JSON key (mirrors
   // plansKey) so an unchanged set is a no-op; a changed set re-drives the WHOLE set (the player diffs
@@ -484,14 +474,14 @@ export function createReconciler(
   }
 
   function reconcile(T: number): void {
-    // ---- conversation: re-render only when the model signature changes ----
+    // conversation: re-render only when the model signature changes.
     const sig = modelSignature(story, T);
     if (sig !== lastModelSig) {
       lastModelSig = sig;
       seams.renderConv(T);
     }
 
-    // ---- surfaces: project the FULL state at T, drive only the changed seams ----
+    // surfaces: project the FULL state at T, drive only the changed seams.
     const surface = projectSurfaceState(story, T);
     const prev = lastSurface;
     reconcileReadingPane(surface, T);
@@ -501,16 +491,16 @@ export function createReconciler(
     reconcileSidebar(surface, prev);
     reconcileReviewBar(surface, prev);
     reconcileGate(surface, prev);
-    // (c5) The in-process approval-review gate runs AFTER reconcileGate (prototype cleared) + the
+    // The in-process approval-review gate runs AFTER reconcileGate (prototype cleared) + the
     // reading-pane rebuild (highlights painted), so its "Request changes" VIEWING bar is the
     // highest-precedence surface and coexists with the inline comment highlights.
     reconcileReviewGate(surface);
     reconcileActiveTab(surface, prev);
-    // (c4) Switch the sidebar Plans/Contents tab BEFORE the cursor pass — switching to Contents un-hides
+    // Switch the sidebar Plans/Contents tab BEFORE the cursor pass — switching to Contents un-hides
     // #tab-contents, giving the `.toc-item` elements the cursor targets a non-zero rect to resolve to.
     reconcileSidebarTab(T);
 
-    // ---- overlays: drive the cosmetic seams. ORDER MATTERS: every pass that may change DOM geometry
+    // overlays: drive the cosmetic seams. ORDER MATTERS: every pass that may change DOM geometry
     // (composer/popover/question-UI) runs BEFORE the cursor, so reconcileCursor reads
     // post-update rects. Pulse + fields are geometry-neutral but kept here for grouping.
     reconcilePulse(T);

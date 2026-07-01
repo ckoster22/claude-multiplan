@@ -1,4 +1,4 @@
-// Mock-mode fixture — the synthetic "resume sentinel" sidebar row (Phase 4b).
+// Mock-mode fixture — the synthetic "resume sentinel" sidebar row.
 //
 // `list_plans` (Rust) synthesizes a childless MASTER PlanRecord for a mid-decompose tree that has NO
 // plan `.md` file on disk yet; its `absolute_path` is the SENTINEL `plan-tree-resume://<tree_id>` —

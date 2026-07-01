@@ -7,7 +7,7 @@
 //
 // Most frames are `agent-stream` payloads typed against the real `AgentStream` union
 // (src/conversation/types.ts), so a render-data drift is caught when `tsc --noEmit` runs over
-// src/mock/** (Phase 5). Two scenes also carry a `tool-permission-requested` frame (the interactive
+// src/mock/**. Two scenes also carry a `tool-permission-requested` frame (the interactive
 // AskUserQuestion card and the ExitPlanMode permission marker) — those are NOT agent-stream events,
 // so a scene frame is tagged with its destination EVENT so the player routes each to the right
 // emitMockEvent channel.
@@ -18,13 +18,6 @@ import { cloneQuestions } from "./questions";
 // The event channels a scene frame can target — the four REAL Tauri events the conversation domain
 // subscribes to. Every scene drives one of these via the mock event bus, so a deck preset's live
 // behavior always matches its model-direct test path (no synthetic, no-wire-route channel).
-//
-// (Historical note: a fifth `notice` channel once existed for the `.conv-notice` row, but that row is
-// surfaced ONLY through the conversation controller's `surfaceMessage` — a private, non-exported
-// `main.ts` handle the mock cannot reach without editing production source — and is not driven by any
-// live wire event today. A `notice` scene therefore rendered nothing in the browser while its
-// model-direct test passed, masking the live no-op. It was removed so no scene's test can contradict
-// its live behavior. See src/mock/README.md → "Load-bearing fidelity assumptions".)
 export type SceneEvent =
   | "agent-stream"
   | "tool-permission-requested"
@@ -46,10 +39,10 @@ function stream(payload: AgentStream): SceneFrame {
   return { event: "agent-stream", payload };
 }
 
-// FINDING 1 (fidelity): the REAL sidecar emits `tool_permission_requested` with NO `seq` field — see
+// The REAL sidecar emits `tool_permission_requested` with NO `seq` field — see
 // sidecar/permissions.ts (it emits only kind/id/tool/input/agent_id) and the live controller
 // (conversation/index.ts) which passes e.payload straight to model.appendPermissionRequest WITHOUT
-// injecting a seq. The earlier fixtures fabricated `seq: 3`, which does not match the wire. So this
+// injecting a seq. So this
 // constructor takes the SEQ-LESS shape (Omit<…, "seq">) and pins every OTHER field to the real type
 // (a rename is still a compile error). It is emitted without a seq, exactly as the wire delivers it —
 // the model then orders it by insertion (its seq is undefined; it never advances lastWireSeq, so a
@@ -100,8 +93,6 @@ function result(
     ...(over.deliberateInterrupt !== undefined ? { deliberateInterrupt: over.deliberateInterrupt } : {}),
   };
 }
-
-// ---- the scene builders (one per family) ----------------------------------------------------
 
 // Assistant text bubble (.conv-text). The signature frame is the assistant_text — removing it
 // leaves only system_init + result, so no `.conv-text` node exists (the falsifiability target).
@@ -322,7 +313,7 @@ export const questionCard: SceneBuilder = () => [
   // No result — the agent is blocked on the user's answer (waiting-for-input state).
 ];
 
-// FINDING 6 (fidelity): the in-process review flow keys on THIS plan text. When the live app receives
+// The in-process review flow keys on THIS plan text. When the live app receives
 // the ExitPlanMode tool-permission-requested frame, main.ts's handleToolPermissionRequested calls
 // write_agent_plan({ plan: input.plan }) then opens the written path with read_plan_contents — so the
 // Plan tab MUST show exactly THIS markdown, not a fallback. The mock captures input.plan at
@@ -402,8 +393,6 @@ export const permissionThenReply: SceneBuilder = () => [
   stream(result(4)),
 ];
 
-// ---- PHASE 4 reusable frame builders (the Question-card knob composes a card on the fly) -----
-//
 // The Question-card knobs (count / multiSelect / include-Other / answered) build a card from a
 // PARAMETERIZED question set (questions.buildQuestions) rather than the fixed questionCard scene, so
 // the deck needs the same primitive frames the scenes use. These thin exports reuse the private
@@ -434,8 +423,6 @@ export function questionPermissionFrame(id: string, questions: AskUserQuestionIt
     agent_id: null,
   });
 }
-
-// ---- the registry: name -> builder (the deck + tests enumerate scenes from this) ------------
 
 export const SCENES = {
   assistantText,

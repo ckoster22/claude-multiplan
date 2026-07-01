@@ -1,4 +1,4 @@
-// Mock-mode fixtures — plan-REVIEW surfaces (Phase 3).
+// Mock-mode fixtures — plan-REVIEW surfaces.
 //
 // Four review-bar modes light up here, each through the NARROWEST faithful production seam (no
 // production edits — see the seam notes at each fixture):
@@ -55,8 +55,6 @@ export const MOCK_REVIEW: ReviewRequest = {
   plan_file_path: REVIEW_PLAN_PATH,
   created_ms: 1_700_000_700_000,
 };
-
-// ---- orchestrator-gate fixtures (PROTOTYPE / ACCEPTANCE) -------------------------------------
 
 // The cwd the gates render under (open_prototype / open_baseline resolve relative to it).
 export const GATE_CWD = "/Users/mock/work/widgets";
@@ -123,7 +121,7 @@ function splitRoot(): TreeNode {
 // pending* gates default null; the one requested is set. This is the data the real orchestrator
 // produces; main.ts's real derivation reads it via orchSnapshot.
 //
-// PHASE 4 — the Review-bar "prototype round" knob varies the held gate's `round` (1..3); the real
+// The Review-bar "prototype round" knob varies the held gate's `round` (1..3); the real
 // prototypeBarLabel(round) → "Visual prototype — round N of 3". `round` is clamped to the real 1..3
 // band the orchestrator emits. Passing it for an acceptance gate is harmless (acceptance also carries
 // a round, surfaced only as audit data).
@@ -170,8 +168,6 @@ export function gateSnapshot(
   };
 }
 
-// ---- in-process APPROVAL gate fixture (the "Request changes" VIEWING bar) --------------------
-//
 // The mock-ANIMATE comment chapter (review2 c5) shows the user requesting changes on the master plan
 // THEY ARE ALREADY VIEWING. The faithful surface is the orchestrator's held APPROVAL gate
 // (pendingApproval, an ApprovalGate2) whose `planPath` EQUALS the open plan — so main.ts's
@@ -221,8 +217,6 @@ export function placeholderSnapshot(): PlanTreeSnapshot2 {
     pendingAcceptance: null,
   };
 }
-
-// ---- RESUME BANNER verdict fixtures ---------------------------------------------------------
 
 // A minimal RecursiveLedger (schema 2) for the resume verdict's stashed `ledger` (used only when the
 // Resume button is clicked → getOrchestrator().resume()). The banner render itself reads only

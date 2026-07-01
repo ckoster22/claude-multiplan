@@ -1,4 +1,4 @@
-// Mock-mode control deck — Phase 4, the payoff.
+// Mock-mode control deck.
 //
 // A floating, collapsible control panel injected by vite.mock.config.ts (a module script AFTER
 // main.ts). It offers:
@@ -29,8 +29,6 @@ import { installMockOrchestrator } from "./orchestrator";
 import { KNOBS, seedKnobDefaults, type Knob, type KnobGroup } from "./knobs";
 import { getKnob, restoreKnobsFromSession } from "./state";
 import { SCENE_NAMES, type SceneName } from "./fixtures/scenes";
-
-// ---- the deck's namespaced stylesheet --------------------------------------------------------
 
 const DECK_CSS = `
 #mock-deck.mockdeck-root {
@@ -167,8 +165,6 @@ const SCENE_LABELS: Partial<Record<SceneName, string>> = {
   permissionThenReply: "Permission → reply",
 };
 
-// ---- element builders ------------------------------------------------------------------------
-
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -265,8 +261,6 @@ function groupKnobs(): Array<{ group: KnobGroup; knobs: Knob[] }> {
   return order.map((group) => ({ group, knobs: byGroup.get(group)! }));
 }
 
-// ---- mount -----------------------------------------------------------------------------------
-
 function injectStyle(): void {
   if (document.getElementById("mock-deck-style")) return;
   const style = el("style");
@@ -296,7 +290,6 @@ function mountDeck(): void {
 
   const body = el("div", "mockdeck-body");
 
-  // ---- Presets section ----
   body.appendChild(sectionTitle("Presets · conversation"));
   const convPresets = el("div", "mockdeck-presets");
   for (const name of SCENE_NAMES) {
@@ -311,7 +304,6 @@ function mountDeck(): void {
   for (const p of STATE_PRESETS) statePresets.appendChild(presetButton(p.label, p.run));
   body.appendChild(statePresets);
 
-  // ---- Knobs section ----
   body.appendChild(sectionTitle("Knobs"));
   for (const { group, knobs } of groupKnobs()) {
     body.appendChild(el("div", "mockdeck-group-title", group));

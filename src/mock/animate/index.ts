@@ -15,7 +15,7 @@
 // from scratch (so a backward scrub correctly reverts a fire-once event with no inverse). See
 // reconcile.ts for the core principle.
 //
-// CHOSEN SEAM (load-bearing, preserved from Slice-01): the player owns its OWN ConversationModel and
+// CHOSEN SEAM (load-bearing): the player owns its OWN ConversationModel and
 // its OWN container <div>. It NEVER renders into the production #conversation-stream — that element is
 // owned by main.ts and is clobbered by loadHistoryForPlan on every sidebar click, which would wipe our
 // animation. Instead the player pane is mounted as a SIBLING of #conversation-stream inside its parent
@@ -70,12 +70,10 @@ import { loadDoc, saveDoc } from "./annotations-io";
 import { mountAnnotateUI, runAuthorPaintHooks } from "./annotate-ui";
 import type { PlanRecord, ReviewRequest } from "../../types";
 
-// ---- window globals: the programmatic seek hook + the author-mode flag --------------------------
-//
 // `window.__mockAnim` is the capture/replay control surface (exposed at the end of mountPlayer). It
 // lets a headless driver land EXACTLY on a comment's tMs (vs fuzzing pixel-drags on .mockanim-progress)
 // and await a fully-settled reading pane before screenshotting. `window.__MOCK_ANNOTATE` is the
-// author-mode flag injected by the dev plugin (Phase 3); declared now so later phases need no re-decl.
+// author-mode flag injected by the dev plugin.
 export interface MockAnimApi {
   seekTo: (tMs: number) => void;
   seekSettled: (tMs: number) => Promise<void>;
@@ -94,8 +92,6 @@ declare global {
     __MOCK_ANNOTATE?: boolean | undefined;
   }
 }
-
-// ---- namespaced stylesheet -------------------------------------------------------------------
 
 const ANIM_CSS = `
 /* The real #conversation-stream stays EMPTY (we never write into it). Hide it so only the
@@ -343,8 +339,6 @@ const ANIM_CSS = `
 }
 `;
 
-// ---- element helper (mirrors deck.ts's el()) -------------------------------------------------
-
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,
@@ -363,8 +357,6 @@ function injectStyle(): void {
   style.textContent = ANIM_CSS;
   document.head.appendChild(style);
 }
-
-// ---- presentation setup (dark mode + real conversation tab) ----------------------------------
 
 // Force the app into DARK mode deterministically (the exact attribute/value the app's CSS keys on).
 function forceDarkTheme(): void {
@@ -400,27 +392,25 @@ function clickTab(tab: "plan" | "conversation"): HTMLElement | null {
   return pane;
 }
 
-// Derive a plan's directory from its absolute path (mirrors main.ts's dirOf). "" → "".
+// Derive a plan's directory from its absolute path. "" → "".
 function planDirOf(path: string): string {
   if (!path) return "";
   const idx = path.lastIndexOf("/");
   return idx > 0 ? path.slice(0, idx) : path;
 }
 
-// ---- playback timing -------------------------------------------------------------------------
-
 // The wall-clock tick interval; T advances by `TICK_MS × tickRate(T, speed)` each tick.
 const TICK_MS = 50;
 // The cycle of playback speeds the speed control rotates through.
 const SPEEDS = [0.5, 1, 2, 4, 8] as const;
 
-// (c6 — review2) The AUTOPLAY advance rate at a given T. PIECEWISE: inside the Execution warp window
+// The AUTOPLAY advance rate at a given T. PIECEWISE: inside the Execution warp window
 // [WARP_POINT_MS, TERMINAL_LAND_MS) the demo plays the dragging subplan tail at 4× the UI speed; outside
 // it (the detailed front half AND the terminal "done" beat) it plays at 1× the UI speed so those land.
 // This affects the AUTOPLAY ADVANCE ONLY — it composes with (multiplies) the UI `speed()` selector and
 // touches NOTHING about the T→frame mapping. tFromPointer (scrub/seek), the progress fraction, getDuration,
 // and every pure f(T) projection stay LINEAR in T. Pure + exported so it is unit-testable without a RAF loop.
-// (P2) The quota-wall scene [QUOTA_START_MS, QUOTA_END_MS) sits INSIDE the 4× warp window, but the
+// The quota-wall scene [QUOTA_START_MS, QUOTA_END_MS) sits INSIDE the 4× warp window, but the
 // countdown + resume beat must be LEGIBLE — so it is a 1× ISLAND: inside it the advance is the plain UI
 // speed (no 4× multiplier). Bounds are DERIVED from the storyboard (QUOTA_START_MS/QUOTA_END_MS), so a
 // re-time can't desync the island from the scene. Checked BEFORE the warp window so it wins inside it.
@@ -429,24 +419,21 @@ export const tickRate = (t: number, speed: number): number => {
   return t >= WARP_POINT_MS && t < TERMINAL_LAND_MS ? 4 * speed : speed;
 };
 
-// ---- player ----------------------------------------------------------------------------------
-
 function mountPlayer(): void {
   // Idempotent: never mount twice (e.g. an HMR re-run).
   if (document.getElementById("mock-anim")) return;
   injectStyle();
 
-  // AUTHOR MODE (Phase 3): the one interactive path. Gated on the injected flag OR a `?annotate=1`
+  // AUTHOR MODE: the one interactive path. Gated on the injected flag OR a `?annotate=1`
   // runtime fallback. When ON: boot PAUSED, mount the author toolbar, let the canvas capture pointer
   // input, and SUPPRESS the cosmetic demo overlays (#demo-cursor / .demo-pulse) — they are demo-internal
   // presentation, not part of the screen being annotated, and the reconciler re-asserts them every tick
-  // (Risk #3), so we suppress at the seam (below) and after every paint. Default/replay: authorMode is
+  // so we suppress at the seam (below) and after every paint. Default/replay: authorMode is
   // false and NOTHING below changes — behavior is byte-unchanged.
   const authorMode =
     window.__MOCK_ANNOTATE === true ||
     new URLSearchParams(window.location.search).has("annotate");
 
-  // Presentation: render the demo dark.
   forceDarkTheme();
 
   const story: StoryFrame[] = TRAILHEAD_BEAT;
@@ -455,7 +442,6 @@ function mountPlayer(): void {
   // The player owns its OWN model + container — never #conversation-stream.
   const model = new ConversationModel();
 
-  // ---- player-owned pane: mounted INTO the real conversation slot ----
   const pane = el("div", "mockanim-pane");
   const stream = document.getElementById("conversation-stream");
   const wrap = stream?.parentElement ?? null;
@@ -467,7 +453,6 @@ function mountPlayer(): void {
     document.body.appendChild(pane);
   }
 
-  // ---- player-owned conversation minimap (Phase 6) ----
   // The real initConversation binds its OWN createMinimap controller to #conversation-stream — which the
   // player HIDES (mockanim-hidden-stream) and never renders into — yet that controller paints the
   // #conversation-minimap gutter node it queried at boot. Its MutationObserver/ResizeObserver re-paint
@@ -509,7 +494,6 @@ function mountPlayer(): void {
   const readingPane =
     document.getElementById("reading-pane") ?? document.createElement("div");
 
-  // ---- overlay nodes: created ONCE, appended to the max-z player root layer ----
   // (Defined below; the root is built after the reconciler. We append them to <body> here so they
   // exist before the first paint; they sit at the same max-z as the transport chrome.)
   const cursorNode = el("div");
@@ -517,7 +501,6 @@ function mountPlayer(): void {
   cursorNode.style.display = "none";
   document.body.appendChild(cursorNode);
 
-  // ---- annotation overlay nodes (Phase 1) ----
   // The canvas sits ABOVE #demo-cursor (it is appended AFTER it, below the transport
   // root appended later — see the z-order comment in ANIM_CSS). Both nodes are created ONCE; the player
   // is the single writer, mirroring the #demo-cursor pattern. INERT until a doc is loaded.
@@ -529,13 +512,12 @@ function mountPlayer(): void {
   cmtPanel.id = "mockanim-cmt";
   document.body.appendChild(cmtPanel);
 
-  // ---- annotation in-memory state (Phase 1: no persistence) ----
   // The active doc, or null when none is loaded (the default — the overlay is then fully INERT). The
   // player is the single writer via loadAnnotations(); the overlay is a PURE projection of (currentDoc, T)
   // re-derived every paint, so a back-scrub clears it like every other reconciler-owned overlay.
   let currentDoc: AnnotationDoc | null = null;
 
-  // Capture-isolation focus (Phase 4): when non-null, the CANVAS + panel render path shows ONLY the
+  // Capture-isolation focus: when non-null, the CANVAS + panel render path shows ONLY the
   // comment with this id (passed as `projectActiveComments`'s `onlyId` arg), so the capture script can
   // shoot one clean frame per comment even when several share a tMs. null (the default) = normal
   // window-based projection → byte-unchanged replay/author behavior. The player is the single writer
@@ -626,8 +608,6 @@ function mountPlayer(): void {
   // and adds to the new). Held across reconcile passes — the player is the single writer of the class.
   const pulsedEls = new Set<HTMLElement>();
 
-  // ---- overlay seam implementations -------------------------------------------------------------
-
   // Move/press the cursor. Position IS a transform (translate); compose the press scale in JS so a
   // single transform carries both (a class alone cannot encode the live x/y).
   const setCursor = (state: { x: number; y: number; pressing: boolean } | null): void => {
@@ -677,11 +657,9 @@ function mountPlayer(): void {
         next.add(m);
       }
     }
-    // Remove from elements that fell out of the set.
     for (const elPrev of pulsedEls) {
       if (!next.has(elPrev)) elPrev.classList.remove("demo-pulse");
     }
-    // Add to the new set.
     for (const elNext of next) elNext.classList.add("demo-pulse");
     pulsedEls.clear();
     for (const elNext of next) pulsedEls.add(elNext);
@@ -696,7 +674,7 @@ function mountPlayer(): void {
     // over the drawing surface. Passing the empty set (not the projected one) makes setPulseTargets
     // remove the class from every previously-pulsed element and add to none — and because the
     // reconciler + the same-pass renderConv re-apply both route through here, suppression holds across
-    // ticks and across a seek-triggered repaint (Risk #3). Default/replay passes the projected set.
+    // ticks and across a seek-triggered repaint. Default/replay passes the projected set.
     const effective = authorMode ? new Set<string>() : selectors;
     lastPulseSelectors = effective;
     setPulseTargets(effective);
@@ -789,7 +767,7 @@ function mountPlayer(): void {
     if (Math.abs(container.scrollTop - next) > 0.5) container.scrollTop = next;
   };
 
-  // (c4) Rebuild the sidebar Contents ToC from the CURRENTLY-rendered reading pane, reusing the REAL
+  // Rebuild the sidebar Contents ToC from the CURRENTLY-rendered reading pane, reusing the REAL
   // production data flow: extractToc (read-only over #reading-pane) → buildToc (writes #toc-list, wiring
   // each row's click to scrollToHeading). This is the ONE sanctioned render→sidebar flow (the sidebar
   // never queries #reading-pane itself). Resolves #toc-list against the LIVE DOM each call; no-op if the
@@ -800,7 +778,7 @@ function mountPlayer(): void {
     buildToc(tocList, extractToc(pane));
   };
 
-  // (c4) Switch the SIDEBAR Plans/Contents tab by clicking the real `.tab-row .tab[data-tab=…]` so
+  // Switch the SIDEBAR Plans/Contents tab by clicking the real `.tab-row .tab[data-tab=…]` so
   // main.ts's initTabs switching logic runs (toggles `.active` on `#tab-plans` / `#tab-contents`). Falls
   // back to toggling the `.active` classes directly the way initTabs does — robust to a boot-order race
   // where the click listener isn't wired yet (mirrors clickTab's fallback for the reader tab). Scopes to
@@ -820,7 +798,6 @@ function mountPlayer(): void {
     }
   };
 
-  // ---- the reconciler: wired to the REAL host seams ----
   const reconciler = createReconciler(
     {
       // Conversation: re-apply the model to T (token reveal included) + renderTree into the player pane.
@@ -830,7 +807,7 @@ function mountPlayer(): void {
         // renderTree does replaceChildren (no scroll handling); the long Execution conversation would
         // render with the finale below the fold. Pin to the bottom so the latest bubbles stay visible.
         pane.scrollTop = pane.scrollHeight;
-        // PLAYER-OWNED MINIMAP REBUILD (Phase 6): repaint the right-gutter minimap from the pane's
+        // PLAYER-OWNED MINIMAP REBUILD: repaint the right-gutter minimap from the pane's
         // CURRENT children every tick — a pure reflection of the just-rendered stream, so a back-scrub
         // (which re-renders fewer/no children) reverts it cleanly (empty stream → `.is-empty`). Called
         // AFTER the scrollTop pin above so the viewport indicator reflects the pinned scroll position.
@@ -852,7 +829,7 @@ function mountPlayer(): void {
       applyComments,
       readingPane,
       planDirOf,
-      // (c4) Rebuild the Contents ToC from the rendered pane via the REAL extractToc→buildToc.
+      // Rebuild the Contents ToC from the rendered pane via the REAL extractToc→buildToc.
       rebuildToc,
       // Sidebar: stash the full plan set + emit plan-changed so main.ts re-lists through its real handler.
       setPlans: (plans: PlanRecord[]): void => setPlans(plans),
@@ -875,13 +852,13 @@ function mountPlayer(): void {
       emitGate: (_which: "prototype", round?: number): void =>
         emitGate("prototype", round, trailheadProtoPreviewOverride(round ?? 1)),
       clearGate,
-      // (c5) In-process approval-review gate: set the mock comment count FIRST (the value the real
+      // In-process approval-review gate: set the mock comment count FIRST (the value the real
       // get_comment_count returns), fan the onSnapshot-only gate for the OPEN plan (viewingGate()
       // matches WITHOUT a re-open → #review-bar VIEWING / IN-PROCESS, Submit "Request changes"), then
       // re-read the count through the REAL refreshCommentCount (→ refreshReviewBar with the authoritative
       // count, so Submit is disabled at 0 / enabled at >=1). No onAwaitingApproval → highlights survive.
       emitReviewGate: (planPath: string, commentCount: number): void => {
-        // ROOT-CAUSE FIX (review2 c5 live bug): align main.ts's openPath with the plan the player has
+        // Align main.ts's openPath with the plan the player has
         // RENDERED. The player renders the reading pane DIRECTLY (readPlan→renderInto→applyComments) and
         // NEVER calls openPlan, so main.ts's openPath would be null/stale. viewingGate() compares
         // gate.planPath === openPath — so WITHOUT this the held gate is seen as a review of a DIFFERENT
@@ -900,9 +877,8 @@ function mountPlayer(): void {
       setActiveTab: (tab: "plan" | "conversation"): void => {
         clickTab(tab);
       },
-      // (c4) Sidebar tab: click the real sidebar Plans/Contents tab so initTabs switching runs.
+      // Sidebar tab: click the real sidebar Plans/Contents tab so initTabs switching runs.
       setSidebarTab,
-      // ---- overlay seams (cosmetic; reconciler-owned DOM) ----
       // Author mode routes through the suppression wrapper (cursor hard-hidden); default/replay uses
       // the raw seam.
       setCursor: setCursorMaybeSuppressed,
@@ -919,7 +895,6 @@ function mountPlayer(): void {
     model,
   );
 
-  // ---- transport bar: the only fixed/max-z layer ----
   const root = el("div", "mockanim-root");
   root.id = "mock-anim";
 
@@ -951,7 +926,6 @@ function mountPlayer(): void {
 
   document.body.appendChild(root);
 
-  // ---- playback state ----
   let T = 0;
   let playing = false;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -991,7 +965,7 @@ function mountPlayer(): void {
   };
 
   const tick = (): void => {
-    // (c6) Piecewise autoplay rate: 4× through the Execution tail, 1× elsewhere (incl. the terminal beat),
+    // Piecewise autoplay rate: 4× through the Execution tail, 1× elsewhere (incl. the terminal beat),
     // composed with the UI speed control. AUTOPLAY ADVANCE ONLY — seek/scrub/progress/f(T) stay linear in T.
     T += TICK_MS * tickRate(T, speed());
     if (T >= duration) {
@@ -1016,7 +990,6 @@ function mountPlayer(): void {
     else play();
   });
 
-  // ---- draggable progress track: pointerdown/move/up → scrub T ----
   const tFromPointer = (clientX: number): number => {
     const rect = progress.getBoundingClientRect();
     const width = rect.width || 1;
@@ -1039,13 +1012,12 @@ function mountPlayer(): void {
   progress.addEventListener("pointerup", endDrag);
   progress.addEventListener("pointercancel", endDrag);
 
-  // ---- speed control: cycle 0.5×/1×/2×/4×/8× ----
   speedBtn.addEventListener("click", () => {
     speedIdx = (speedIdx + 1) % SPEEDS.length;
     speedBtn.textContent = `${speed()}×`;
   });
 
-  // ---- annotation comment ticks on the scrubber (rebuilt on doc change, NOT every tick) ----
+  // annotation comment ticks on the scrubber, rebuilt on doc change, NOT every tick.
   // One `.mockanim-cmt-tick` per distinct comment tMs (tickGroups), positioned at tMs/duration, click →
   // seekTo (mirrors the chapter .mockanim-marker). A multi-comment group carries a small count badge.
   const rebuildCmtTicks = (): void => {
@@ -1066,7 +1038,6 @@ function mountPlayer(): void {
     }
   };
 
-  // ---- programmatic seek/replay control surface (window.__mockAnim) ----
   // seekSettled: seek, then await the reconciler's reading-pane settle barrier so a caller (capture /
   // replay) lands on a FULLY-rendered pane. The barrier resolves immediately (next microtask) when no
   // plan-open is in flight, so callers can await it uniformly.
@@ -1096,7 +1067,7 @@ function mountPlayer(): void {
   };
   const getActiveComments = (): AnnotationComment[] =>
     currentDoc === null ? [] : projectActiveComments(currentDoc, T);
-  // focusComment (Phase 4 capture): set the capture-isolation id + repaint so ONLY that comment's
+  // focusComment: set the capture-isolation id + repaint so ONLY that comment's
   // strokes/text render (via projectActiveComments's onlyId). null returns to normal window behavior.
   const focusComment = (id: string | null): void => {
     captureFocusId = id;
@@ -1117,7 +1088,6 @@ function mountPlayer(): void {
     focusComment,
   };
 
-  // ---- author mode: enable canvas capture + mount the toolbar (Phase 3) ----
   // Only in author mode: flip the annotation canvas to capture pointer input (replay/default keeps it
   // pointer-events:none) and mount the author UI. The UI reaches the player ONLY through these deps —
   // it shares no closure state. `getDoc`/`setDoc` bridge the player's `currentDoc` so the UI mutates
@@ -1155,7 +1125,7 @@ function mountPlayer(): void {
   // Initial paint at T=0 (the opening frame), paused. The reconciler will activate the Conversation
   // tab (no plan open at T=0 → activeTab "conversation").
   //
-  // DEFERRED to a macrotask (mirrors deck.ts's `setTimeout(applyDefaultOnReady, 0)`): this script loads
+  // DEFERRED to a macrotask: this script loads
   // after main.ts's deferred bundle, so at module-eval `document.readyState` is "interactive" and
   // main.ts's DOMContentLoaded handler (which calls initTabs to wire the reader tab buttons) has NOT run
   // yet. Painting synchronously here would land `setActiveTab("conversation")` → clickTab → tabBtn.click()
@@ -1171,16 +1141,15 @@ function mountPlayer(): void {
 // (after main.ts's module body, which only registers a DOMContentLoaded listener), so the singleton is
 // installed before that handler runs. WITHOUT this, main.ts subscribes to the REAL orchestrator while
 // the reconciler's emitGate/clearGate fan to the fake handle nobody subscribed to — so the prototype
-// gate (Slice 04) and review (Slice 06) animation would silently no-op. deck.ts does the same; the
-// animate path omitted it because deck.ts is excluded when MOCK_ANIMATE=1. Only the orchestrator is
+// gate and review animation would silently no-op. Only the orchestrator is
 // needed here: the reconciler drives setPlans/setPendingReviews/emitMockEvent/emitGate/clearGate
 // DIRECTLY (not via window.__mock), so installMockApi() (the window.__mock hook) is NOT required.
 installMockOrchestrator();
 
-// Replay-from-file boot hook (Phase 2): when launched with `?annotations=<name>`, load the persisted
+// Replay-from-file boot hook: when launched with `?annotations=<name>`, load the persisted
 // AnnotationDoc from the dev middleware and feed it into the just-mounted player so its ticks + overlay
 // render from disk. A missing file (null) or a fetch error is logged and NON-fatal — the demo still
-// plays unannotated. Author UI / sessionStorage draft belt are Phase 3, not here.
+// plays unannotated.
 async function loadAnnotationsFromUrl(): Promise<void> {
   const name = new URLSearchParams(window.location.search).get("annotations");
   if (name === null || name.length === 0) return;
@@ -1196,7 +1165,7 @@ async function loadAnnotationsFromUrl(): Promise<void> {
   }
 }
 
-// DOM-ready boot guard (mirrors deck.ts): this script loads after main.ts's deferred bundle, so
+// DOM-ready boot guard: this script loads after main.ts's deferred bundle, so
 // DOMContentLoaded may have already fired.
 function boot(): void {
   mountPlayer();

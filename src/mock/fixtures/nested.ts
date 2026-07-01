@@ -38,8 +38,6 @@ const CWD = "/Users/mock/work/chompy-asteroids";
 
 export const NESTED_TREE_ID = "tree-mqcobtz3-5632dc17";
 
-// ---- frontmatter stripping (mirror of the Rust `split_frontmatter` single source of truth) ----
-//
 // The real backend's read_plan_contents strips a leading `---`…`---` YAML frontmatter block before
 // returning the body, so the reading pane never renders it. The mock's read_plan_contents serves
 // these raw files, so it MUST strip identically. We replicate the Rust rule EXACTLY: line 1 must be
@@ -66,8 +64,6 @@ export function stripFrontmatter(content: string): string {
   // Opening fence but no closing fence ⇒ NOT frontmatter; pass through unchanged.
   return content;
 }
-
-// ---- record + content tables -----------------------------------------------------------------
 
 // One node descriptor: its on-disk-style filename stem, its raw file content, and (for subs) the
 // canonical dotted nn_path. `title` is what the sidebar renders (the real H1) — in the mock the

@@ -1,7 +1,7 @@
-// Mock-ANIMATE author mode UI (Phase 3) — the ONE interactive (non-pure-T) path over the otherwise
+// Mock-ANIMATE author mode UI — the ONE interactive (non-pure-T) path over the otherwise
 // pure-projection `mock-animate` demo. Behind a flag (`npm run mock-annotate`, or `?annotate=1`): draw
 // pen/arrow/box strokes over the screen, type a comment, Pin it at the current scrub-time T, repeat,
-// then Save the AnnotationDoc to disk (P2 middleware) so replay/capture can load it back.
+// then Save the AnnotationDoc to disk (middleware) so replay/capture can load it back.
 //
 // This module is the toolbar/composer + the canvas pointer-capture wiring. It is loaded ONLY in author
 // mode (gated in index.ts); default/replay behavior is byte-unchanged because none of this mounts
@@ -9,8 +9,6 @@
 // needs no live player or DOM.
 
 import type { AnnotationComment, AnnotationDoc, Stroke } from "./annotations";
-
-// ---- pure helpers (unit-tested, no DOM) ------------------------------------------------------
 
 // Map a viewport-pixel point to NORMALIZED viewport coords (0..1). Inverse of `denorm`. Clamped to
 // [0,1] so a stray pointer just outside the window can't produce out-of-range stored coords.
@@ -48,8 +46,6 @@ export function buildComment(
 export function deleteComment(doc: AnnotationDoc, id: string): AnnotationDoc {
   return { ...doc, comments: doc.comments.filter((c) => c.id !== id) };
 }
-
-// ---- author UI mount -------------------------------------------------------------------------
 
 // The tool/color palettes. Kept small + stable so the verifier can target `.maa-tool[data-tool=…]`
 // and `.maa-color[data-color=…]`.
@@ -216,7 +212,6 @@ function el<K extends keyof HTMLElementTagNameMap>(
 export function mountAnnotateUI(deps: AnnotateDeps): void {
   if (document.getElementById("mockanim-author")) return;
 
-  // ---- style ----
   if (!document.getElementById("mockanim-author-style")) {
     const style = el("style");
     style.id = "mockanim-author-style";
@@ -224,7 +219,6 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
     document.head.appendChild(style);
   }
 
-  // ---- author session state ----
   let activeTool: Stroke["tool"] = "pen";
   let activeColor: string = COLORS[0];
   // Strokes drawn but not yet pinned. Cleared on Pin. Rendered live over the projected overlay.
@@ -234,7 +228,6 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
   // Monotonic id counter; seeded past any restored draft so ids never collide.
   let seq = 0;
 
-  // ---- draft belt: stash on every doc mutation; restore on boot (Risk #1 recovery) ----
   const stashDraft = (): void => {
     try {
       sessionStorage.setItem(DRAFT_KEY, JSON.stringify(deps.getDoc()));
@@ -243,7 +236,6 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
     }
   };
 
-  // ---- toolbar DOM ----
   const root = el("div");
   root.id = "mockanim-author";
 
@@ -314,7 +306,6 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
     toastTimer = setTimeout(() => toast.classList.remove("maa-toast-on"), 4000);
   };
 
-  // ---- highlight sync ----
   function syncToolHighlight(): void {
     for (const [tool, b] of toolBtns) b.classList.toggle("maa-active", tool === activeTool);
   }
@@ -324,7 +315,6 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
   syncToolHighlight();
   syncColorHighlight();
 
-  // ---- "comments at this T" list ----
   // Show the comments active near the current T (reuse a fixed window). Each row carries a delete (✕).
   const LIST_WINDOW_MS = 180;
   const rebuildList = (): void => {
@@ -348,7 +338,7 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
     list.replaceChildren(...rows);
   };
 
-  // ---- working-strokes live preview (drawn AFTER the player's pinned projection each repaint) ----
+  // working-strokes live preview: drawn AFTER the player's pinned projection each repaint.
   const renderWorking = (): void => {
     const ctx = deps.canvas.getContext("2d");
     if (!ctx) return;
@@ -357,7 +347,6 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
     for (const s of workingStrokes) deps.drawStroke(ctx, s, vw, vh);
   };
 
-  // ---- pin / delete / save ----
   const pin = (): void => {
     const doc = deps.getDoc();
     const comment = buildComment(deps.getT(), text.value, workingStrokes, ++seq);
@@ -393,7 +382,7 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
   pinBtn.addEventListener("click", pin);
   saveBtn.addEventListener("click", () => void save());
 
-  // ---- canvas pointer capture (author mode only; the player enables pointer-events on the canvas) ----
+  // canvas pointer capture (author mode only; the player enables pointer-events on the canvas).
   const ptToNorm = (clientX: number, clientY: number): [number, number] =>
     normalizePoint(clientX, clientY, window.innerWidth, window.innerHeight);
 
@@ -426,7 +415,7 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
   deps.canvas.addEventListener("pointerup", endDraw);
   deps.canvas.addEventListener("pointercancel", endDraw);
 
-  // ---- draft restore on boot (only when not loading a ?annotations= file) ----
+  // draft restore on boot (only when not loading a ?annotations= file).
   const hasAnnotationsUrl = new URLSearchParams(window.location.search).has("annotations");
   if (!hasAnnotationsUrl) {
     try {
@@ -466,8 +455,6 @@ export function mountAnnotateUI(deps: AnnotateDeps): void {
   });
 }
 
-// ---- author paint hooks ----------------------------------------------------------------------
-//
 // The player's `paint()` runs the pinned projection then must overlay the working strokes + refresh
 // the "comments at this T" list. Rather than thread a callback back into the player's closure, the UI
 // registers paint hooks here and the player drains them at the end of each paint (author mode only).

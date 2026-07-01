@@ -1,4 +1,4 @@
-// Mock-ANIMATE annotation persistence CLIENT (Phase 2) — a tiny browser-side fetch wrapper over the
+// Mock-ANIMATE annotation persistence CLIENT — a tiny browser-side fetch wrapper over the
 // dev-server middleware (`annotationsApiPlugin` in vite.mock.config.ts). The browser can't write
 // files, so saving/loading an AnnotationDoc round-trips through the mock dev server.
 //

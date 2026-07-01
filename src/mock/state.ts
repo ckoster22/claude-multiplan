@@ -14,7 +14,7 @@ import { DEFAULT_SCENE, type SceneName } from "./fixtures/scenes";
 // sidebar). Exported so the shims and fixtures can agree on one value.
 export const MOCK_HOME = "/Users/mock";
 
-// A generic, untyped bag for knob values (Phase 4 fleshes out the deck). Kept loose on purpose —
+// A generic, untyped bag for knob values. Kept loose on purpose —
 // each knob owns its own value shape; the store just persists them.
 export type Knobs = Record<string, unknown>;
 
@@ -28,7 +28,7 @@ interface MockState {
   pendingReviews: ReviewRequest[];
   // Auth status (what agent_auth_status returns).
   auth: { hasToken: boolean };
-  // The active conversation scene's ordered frames (Phase 2 replays these through the event bus).
+  // The active conversation scene's ordered frames (replayed through the event bus).
   // Held here so the deck can stage a scene before the conversation listeners exist.
   frames: AgentStream[];
   // The name of the ACTIVE conversation scene (the one start_agent_session / playScene replays).
@@ -60,8 +60,6 @@ function freshState(): MockState {
 }
 
 let state: MockState = freshState();
-
-// ---- getters ----
 
 export function getPlans(): PlanRecord[] {
   return state.plans;
@@ -103,8 +101,6 @@ export function getKnob<T = unknown>(id: string): T | undefined {
 export function getCommentCount(): number {
   return state.commentCount;
 }
-
-// ---- setters ----
 
 export function setPlans(plans: PlanRecord[]): void {
   state.plans = plans;
@@ -154,8 +150,6 @@ export function resetState(): void {
   state = freshState();
 }
 
-// ---- knob-store persistence ACROSS a conversation-jump reload --------------------------------
-//
 // Conversation jumps reload the page (the clean-model seam — see api.ts). A reload otherwise drops the
 // in-memory knob store, so non-global knobs (sidebar count, etc.) silently revert to defaults and the
 // deck rebuilds its controls at defaults. To keep the harness usable, the knob slice (+ commentCount,
