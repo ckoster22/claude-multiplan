@@ -700,7 +700,7 @@ export class ConversationModel {
     // order so group children come out ordered.
     const ordered = [...this.events].sort((a, b) => seqOf(a) - seqOf(b));
     const placed: Placed[] = [];
-    const sink = batchSink(placed);
+    const sink = batchSink(acc, placed);
     for (const ev of ordered) {
       consume(acc, ev, segmentOf.get(ev) ?? 0, sink);
     }
@@ -720,6 +720,8 @@ export class ConversationModel {
 interface DeriveSink {
   // A produced render node + the parent_tool_use_id it belongs under (null = top level).
   emit(node: RenderNode, parent: string | null): void;
+  // Correlate a tool_result onto its tool_use row (running → done/error). No-op if the id is unknown.
+  correlateResult(toolUseId: string, content: unknown, isError: boolean): void;
   // The subagent metadata for `id` was just updated (a `subagent_started` frame) — sync the group.
   syncSubagentMeta(id: string): void;
   // The answers for question-request `id` were just recorded — fold them onto the question node.
@@ -808,17 +810,12 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
         sink.emit(node, ev.parent_tool_use_id);
         break;
       }
-      case "tool_result": {
-        // Correlate onto the matching tool_use by id. A result with no matching tool_use is dropped
-        // (no orphan row) — the tool row is the unit of display.
-        const target = acc.toolById.get(ev.tool_use_id);
-        if (target) {
-          target.status = ev.is_error ? "error" : "done";
-          target.result = ev.content;
-          target.isError = ev.is_error;
-        }
+      case "tool_result":
+        // Correlate onto the matching tool_use by id (running → done/error). A result with no
+        // matching tool_use is dropped (no orphan row) — the tool row is the unit of display. The
+        // full replay mutates the fresh node in place; the fast path replaces it copy-on-write.
+        sink.correlateResult(ev.tool_use_id, ev.content, ev.is_error);
         break;
-      }
       case "mode_change":
         acc.permissionMode = ev.mode;
         sink.emit({ type: "mode", seq: ev.seq, mode: ev.mode }, null);
@@ -1142,19 +1139,63 @@ function ensureLiveGroup(acc: DeriveAccum, id: string, seqHint: number): Subagen
   return group;
 }
 
-// The full-replay sink: collect nodes into `placed` for a single sorted assembly; answer folds and
-// group-metadata annotation are handled authoritatively by the finalize passes (foldAnswers /
-// assembleTopNodes), so they are no-ops here.
-function batchSink(placed: Placed[]): DeriveSink {
+// Replace a subagent group with a patched COPY (copy-on-write), keeping topNodes + groupsById
+// pointing at the new object. Any change to a group's content — a new child, an edited child, updated
+// metadata — mints a new group object, so a group's identity is stable IFF its content is unchanged.
+function cowGroup(
+  acc: DeriveAccum,
+  oldGroup: SubagentGroupNode,
+  patch: Partial<SubagentGroupNode>,
+): SubagentGroupNode {
+  const newGroup: SubagentGroupNode = { ...oldGroup, ...patch };
+  acc.groupsById.set(newGroup.agentId, newGroup);
+  const gi = acc.topNodes.indexOf(oldGroup);
+  if (gi !== -1) acc.topNodes[gi] = newGroup;
+  return newGroup;
+}
+
+// Replace `oldNode` with `newNode` wherever it sits (top level or a group child), by object identity.
+// A group child is replaced inside a COPIED children array on a COW'd group, so a held snapshot of the
+// old tree keeps the old child AND the old group object.
+function replaceNodeInTree(acc: DeriveAccum, oldNode: RenderNode, newNode: RenderNode): void {
+  const top = acc.topNodes.indexOf(oldNode);
+  if (top !== -1) {
+    acc.topNodes[top] = newNode;
+    return;
+  }
+  for (const group of acc.groupsById.values()) {
+    const ci = group.children.indexOf(oldNode);
+    if (ci !== -1) {
+      const children = group.children.slice();
+      children[ci] = newNode;
+      cowGroup(acc, group, { children });
+      return;
+    }
+  }
+}
+
+// The full-replay sink: collect nodes into `placed` for a single sorted assembly, and correlate
+// results by mutating the FRESH tool node in place (the node in `placed` and in toolById are the same
+// object during a replay). Answer folds and group-metadata annotation are handled authoritatively by
+// the finalize passes (foldAnswers / assembleTopNodes), so they are no-ops here.
+function batchSink(acc: DeriveAccum, placed: Placed[]): DeriveSink {
   return {
     emit: (node, parent) => placed.push({ node, parent }),
+    correlateResult: (toolUseId, content, isError) => {
+      const target = acc.toolById.get(toolUseId);
+      if (target) {
+        target.status = isError ? "error" : "done";
+        target.result = content;
+        target.isError = isError;
+      }
+    },
     syncSubagentMeta: () => {},
     foldAnswer: () => {},
   };
 }
 
-// The fast-path sink: insert nodes into the LIVE topNodes / group children, and fold answers +
-// annotate group metadata in place on the retained nodes.
+// The fast-path sink: insert nodes into the LIVE topNodes / group children, and apply edits to earlier
+// nodes copy-on-write so a node's object identity changes IFF its content changes.
 function liveSink(acc: DeriveAccum): DeriveSink {
   return {
     emit: (node, parent) => {
@@ -1163,19 +1204,47 @@ function liveSink(acc: DeriveAccum): DeriveSink {
         return;
       }
       const group = ensureLiveGroup(acc, parent, node.seq);
-      insertSorted(group.children, node);
+      // COW: a new children array (the child appended at its sorted position) on a new group object,
+      // so a group with a fresh child is a fresh object. Under the monotonic wire-seq gate the child's
+      // seq is >= every existing child's, so it appends at the tail and the group's seq is unchanged.
+      const children = group.children.slice();
+      insertSorted(children, node);
+      cowGroup(acc, group, { children });
+    },
+    correlateResult: (toolUseId, content, isError) => {
+      const old = acc.toolById.get(toolUseId);
+      if (!old) return;
+      const updated: ToolNode = {
+        ...old,
+        status: isError ? "error" : "done",
+        result: content,
+        isError,
+      };
+      acc.toolById.set(toolUseId, updated);
+      replaceNodeInTree(acc, old, updated);
     },
     syncSubagentMeta: (id) => {
       const meta = acc.subagentMeta.get(id);
       if (!meta) return;
-      const group = ensureLiveGroup(acc, id, meta.seq);
-      group.subagentType = meta.subagentType;
-      group.description = meta.description;
-      group.prompt = meta.prompt;
+      const existing = acc.groupsById.get(id);
+      // Metadata before any child: create the (already-labeled) group. Otherwise COW the existing
+      // group with the new label. meta.seq is >= the group's seq on the fast path, so seq is unchanged.
+      if (!existing) {
+        ensureLiveGroup(acc, id, meta.seq);
+        return;
+      }
+      cowGroup(acc, existing, {
+        subagentType: meta.subagentType,
+        description: meta.description,
+        prompt: meta.prompt,
+      });
     },
     foldAnswer: (id, answers) => {
-      const node = acc.questionNodesById.get(id);
-      if (node) node.answers = answers;
+      const old = acc.questionNodesById.get(id);
+      if (!old) return;
+      const updated: QuestionRequestNode = { ...old, answers };
+      acc.questionNodesById.set(id, updated);
+      replaceNodeInTree(acc, old, updated);
     },
   };
 }
