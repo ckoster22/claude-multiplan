@@ -48,7 +48,7 @@ fn valid_plan_tree_name(name: &str) -> bool {
 }
 
 /// Hand-parse the `SEG("."SEG)*-(plan|summary).md` shape with zero regex dependency, where SEG is
-/// EXACTLY two ASCII digits (Phase 2: dotted hierarchical ids; flat legacy is the 1-segment case).
+/// EXACTLY two ASCII digits (dotted hierarchical ids; flat legacy is the 1-segment case).
 ///
 /// Layout: `<id>-<stem>.md`, where `<id>` is dot-joined two-digit segments (`01`, `02.01`,
 /// `02.01.01`, …) and `<stem>` is exactly `plan` or `summary`. We strip the trailing `.md`, split
@@ -160,7 +160,7 @@ pub fn read_plan_tree_file(cwd: String, name: String) -> Result<Option<String>, 
     }
 }
 
-/// Delete `<cwd>/.plan-tree/<name>` (PHASE 6 — the refine branch's per-reset-node cleanup). `name`
+/// Delete `<cwd>/.plan-tree/<name>` (the refine branch's per-reset-node cleanup). `name`
 /// MUST be allow-listed and `cwd` an existing dir (the SAME `guarded_plan_tree_path` containment +
 /// allow-list guard the read/write paths use — so a name that is not a literal control file or
 /// `NN-(plan|summary).md` is rejected before any unlink, and the target can never escape `.plan-tree`).
@@ -268,8 +268,6 @@ pub fn reset_plan_tree_dir(cwd: String) -> Result<(), String> {
     Ok(())
 }
 
-// ---- visual-prototype support (Phase 4d) -------------------------------------------------------
-//
 // The intent-clarifier's visual-prototype mode writes throwaway artifacts under
 // `<cwd>/.plan-tree/prototype/` (the sidecar's "prototype" write policy confines the agent to
 // exactly that subtree, but it cannot CREATE the dir — `ensure_prototype_dir` does, before the
@@ -382,8 +380,6 @@ pub fn open_prototype(
         .map_err(|e| format!("could not open prototype: {e}"))
 }
 
-// ---- baseline (frozen "working reference") support (Phase 3) -----------------------------------
-//
 // When the user marks a visual prototype a "working reference" at the prototype-approval gate, the
 // throwaway `<cwd>/.plan-tree/prototype/` tree is FROZEN into a contained `<cwd>/.plan-tree/baseline/`
 // so it survives the prototype dir being reset/overwritten by later runs. The baseline is a FLOOR on
@@ -556,7 +552,7 @@ fn validated_baseline_file(cwd: &str, path: &str) -> Result<PathBuf, String> {
 
 /// Open a baseline artifact (validated by `validated_baseline_file` — strictly under
 /// `<cwd>/.plan-tree/baseline/`) in the OS default handler via tauri-plugin-opener's Rust API.
-/// Mirrors `open_prototype` but scoped to `baseline/` (Phase 5's gate opens the frozen baseline).
+/// Mirrors `open_prototype` but scoped to `baseline/` (the gate opens the frozen baseline).
 #[tauri::command]
 pub fn open_baseline(app: tauri::AppHandle, cwd: String, path: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
@@ -710,7 +706,7 @@ mod tests {
         std::fs::remove_dir_all(&cwd).ok();
     }
 
-    /// PHASE 6 — delete an allow-listed file: it is removed from `.plan-tree` and reads back as
+    /// Delete an allow-listed file: it is removed from `.plan-tree` and reads back as
     /// absent. Falsifiable: if the unlink were skipped, the post-delete read would still return the
     /// body and the `assert_eq!(read, None)` would fire.
     #[test]
@@ -734,7 +730,7 @@ mod tests {
         std::fs::remove_dir_all(&cwd).ok();
     }
 
-    /// PHASE 6 — deleting an ABSENT allow-listed file is a graceful no-op (`Ok(())`), not an error
+    /// Deleting an ABSENT allow-listed file is a graceful no-op (`Ok(())`), not an error
     /// (a leaf node never wrote `NN-plan.md`, so its delete is a no-op). Falsifiable: if the absent
     /// case errored, the `expect` would panic.
     #[test]
@@ -745,7 +741,7 @@ mod tests {
         std::fs::remove_dir_all(&cwd).ok();
     }
 
-    /// PHASE 6 — the delete path is containment-guarded EXACTLY like read/write: every hostile name
+    /// The delete path is containment-guarded EXACTLY like read/write: every hostile name
     /// is rejected (Err) and removes NOTHING. We seed a legitimate file and assert it survives every
     /// rejected delete. Falsifiable: if a hostile name slipped the guard and unlinked the seed (or
     /// escaped `.plan-tree`), the survival assert would fire.
@@ -838,8 +834,8 @@ mod tests {
 
     /// CONTRACT: widening the allow-list must NOT open a path-traversal/hostile-name hole. Every name
     /// here must still be rejected. Falsifiable: if the charset/shape guard regressed (e.g. accepted a
-    /// `/` or `..`), the matching `assert!` goes red. Extended (Phase 2, dotted ids) with the dotted
-    /// hostile set — the dotted generalization must not loosen any segment/shape rule.
+    /// `/` or `..`), the matching `assert!` goes red. The dotted hostile set ensures the dotted
+    /// generalization must not loosen any segment/shape rule.
     #[test]
     fn still_rejects_unsafe_names() {
         let reject = [
@@ -861,7 +857,7 @@ mod tests {
             "00-plans.md",    // wrong stem
             "%2e%2e/x",       // url-encoded traversal
             "evil.md",
-            // ---- dotted hostiles (Phase 2: SEG must be EXACTLY two digits, no empty segments) ----
+            // dotted hostiles: SEG must be EXACTLY two digits, no empty segments
             "001-plan.md",      // three-digit segment
             "02.-plan.md",      // trailing empty segment
             "02..01-plan.md",   // interior empty segment
@@ -882,7 +878,7 @@ mod tests {
         }
     }
 
-    /// Phase 2 (dotted hierarchical ids): the hand parser generalizes to `SEG("."SEG)*-(plan|summary).md`
+    /// The hand parser generalizes to `SEG("."SEG)*-(plan|summary).md`
     /// where SEG is EXACTLY two ASCII digits. Flat legacy names are the 1-segment case (still accepted
     /// byte-identically); arbitrary depth nests by appending `.SEG`. Falsifiable: revert `valid_nn_md`
     /// to the two-digit-only parser and every dotted accept below goes RED (the reject set is pinned
@@ -1343,8 +1339,6 @@ mod tests {
 
         std::fs::remove_dir_all(&cwd).ok();
     }
-
-    // ---- baseline (frozen "working reference") tests (Phase 3) ---------------------------------
 
     /// `ensure_baseline_dir` creates `<cwd>/.plan-tree/baseline/` when absent and is IDEMPOTENT.
     /// The returned path is absolute and ends with `.plan-tree/baseline`. Falsifiable: skip the

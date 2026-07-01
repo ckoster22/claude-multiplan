@@ -1,10 +1,10 @@
 // Tauri shell, plan list & live file-watch.
 //
-// INVARIANT: this app never writes into `~/.claude/plans/`, so the plans watcher never fires
+// This app never writes into `~/.claude/plans/`, so the plans watcher never fires
 // on our own writes. CONTRACT.md, the cwd_spike example, and all build artifacts live in the
 // repo, not the plans dir.
 //
-// Phase 4 adds exactly TWO write surfaces under `~/.claude/` (both OUTSIDE `plans/`):
+// The app adds exactly TWO write surfaces under `~/.claude/` (both OUTSIDE `plans/`):
 //   (a) `~/.claude/plan-reader/**` — self-owned headless-review state (requests/, responses/,
 //       app.alive heartbeat, hook.sh). Writes are atomic (temp-write + rename) and
 //       containment-guarded (`guarded_path_in` canonicalizes the parent, rejecting any id that
@@ -48,19 +48,18 @@ struct PlanRecord {
     absolute_path: String,
     filename_stem: String,
     mtime_ms: i64,        // millis since UNIX_EPOCH, JS-friendly
-    cwd: Option<String>,  // resolved cwd, else None
-    unread: bool,         // read/unread
-    // ---- Nested-hierarchy fields. snake_case JSON keys (no rename). ----
+    cwd: Option<String>,
+    unread: bool,
     /// Closed flavor set, never absent: "master" | "sub" | "standalone".
     flavor: Flavor,
     /// Join key linking a master to its subs; `null` for standalone.
     tree_id: Option<String>,
-    /// Sub sequence number; `null` for master/standalone. With dotted hierarchical ids (Phase 2)
+    /// Sub sequence number; `null` for master/standalone. With dotted hierarchical ids
     /// this stays the FIRST segment only (legacy sidebar behavior byte-identical) — the full
     /// dotted id lives in `nn_path`.
     nn: Option<u32>,
     /// Full canonical zero-padded dotted id (e.g. `"02.01"`; flat legacy ⇒ `"02"`); `null` for
-    /// master/standalone. ADDITIVE (Phase 2): the frontend builds visual nesting depth from
+    /// master/standalone. The frontend builds visual nesting depth from
     /// these prefixes; `nn` above keeps its legacy first-segment meaning.
     nn_path: Option<String>,
     /// Master only: OBSERVED count of present children (>= 0); `null` otherwise.
@@ -92,7 +91,7 @@ enum RawFlavor {
 }
 
 /// A parsed frontmatter marker. `tree_id` is mandatory (a marker without it is rejected);
-/// `nn` is only meaningful for `Sub`. Dotted hierarchical ids (Phase 2): `nn` is the parsed
+/// `nn` is only meaningful for `Sub`. Dotted hierarchical ids: `nn` is the parsed
 /// segment vector — legacy `nn: 2` is the single-segment `vec![2]`, `nn: 02.01` is `vec![2, 1]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RawMarker {
@@ -150,21 +149,18 @@ struct CommentRecord {
     id: i64,
 }
 
-// ============================================================================
-// Phase 3 — review-request / review-response wire types + plan-reader paths.
+// Review-request / review-response wire types + plan-reader paths.
 //
 // These are the PURE cores for the headless plan-review handshake. A hook drops
 // a `ReviewRequest` JSON file under `~/.claude/plan-reader/requests/`; the app
 // emits a `ReviewRequested` event, the user accepts/rejects, and the app writes a
-// `ReviewResponse` JSON file under `~/.claude/plan-reader/responses/`. No Tauri
-// commands or watcher wiring live here yet (that is Phase 4) — only the data
-// shapes, path helpers, id validation, and the safety-critical settings-merge.
+// `ReviewResponse` JSON file under `~/.claude/plan-reader/responses/`. Only the data
+// shapes, path helpers, id validation, and the safety-critical settings-merge live here.
 //
 // Serde casing: the crate's convention is snake_case field names with NO
 // `rename_all` (see `PlanRecord` / `CommentRecord`). The wire keys required here
 // (schema, review_id, session_id, transcript_path, plan_text, created_ms, …) are
 // already snake_case, so the field names serialize verbatim — no rename needed.
-// ============================================================================
 
 /// Schema version stamped into every `ReviewRequest` / `ReviewResponse` on the wire.
 const REVIEW_SCHEMA: u32 = 1;
@@ -516,14 +512,11 @@ fn system_time_to_ms(t: std::time::SystemTime) -> i64 {
 /// Missing or empty dir => empty list (UI shows empty-state, never errors).
 /// Per-entry I/O errors skip that entry rather than failing the whole call.
 ///
-/// gains an injected `State<Mutex<AppState>>` (the JS `invoke("list_plans")`
-/// call is unchanged — Tauri injects the managed state). It populates `cwd` from the
-/// in-memory cache (NO transcript scan here — that lives in `resolve_cwds`, which must stay
-/// fast) and `unread` per the baseline / viewed / open-path rules in `compute_unread`.
-///
-/// also reads a bounded head of each file, runs
+/// Populates `cwd` from the in-memory cache (NO transcript scan here — that lives in
+/// `resolve_cwds`, which must stay fast) and `unread` per the baseline / viewed / open-path
+/// rules in `compute_unread`. Also reads a bounded head of each file, runs
 /// `split_frontmatter` → `parse_marker`, builds raw rows, and delegates ordering +
-/// flavor-normalization to the pure `arrange_plans` (replacing the old `sort_newest_first`).
+/// flavor-normalization to the pure `arrange_plans`.
 /// Collapse-state entries whose `tree_id` no longer appears in any record are pruned.
 #[tauri::command]
 fn list_plans(state: tauri::State<'_, Mutex<AppState>>) -> Vec<PlanRecord> {
@@ -559,7 +552,6 @@ fn list_plans(state: tauri::State<'_, Mutex<AppState>>) -> Vec<PlanRecord> {
 
     for entry in read_dir.flatten() {
         let path = entry.path();
-        // *.md files only.
         let is_md = path
             .extension()
             .and_then(|e| e.to_str())
@@ -640,7 +632,7 @@ fn list_plans(state: tauri::State<'_, Mutex<AppState>>) -> Vec<PlanRecord> {
     }
 
     // Synthetic-row suppression set, built from the RAW frontmatter markers BEFORE `arrange_plans`
-    // consumes `rows`. Concern 4: `arrange_plans` NULLS an orphan sub's `tree_id` (sub file present,
+    // consumes `rows`. `arrange_plans` NULLS an orphan sub's `tree_id` (sub file present,
     // master absent → reclassified Standalone, tree_id=None), so a set built from ARRANGED
     // `records[].tree_id` would miss that tree and wrongly synthesize a master ALONGSIDE the orphan
     // sub (a double row for one tree). Keying off the raw marker means ANY real plan file of ANY
@@ -650,10 +642,9 @@ fn list_plans(state: tauri::State<'_, Mutex<AppState>>) -> Vec<PlanRecord> {
         .filter_map(|r| r.marker.as_ref().map(|m| m.tree_id.clone()))
         .collect();
 
-    // Pure ordering + flavor-normalization (replaces the old `sort_newest_first`).
+    // Pure ordering + flavor-normalization.
     let records = arrange_plans(rows, &collapse_state);
 
-    // ---- Synthetic resume rows (Phase 4) ----
     // A plan-tree mid-decompose can have a live `<cwd>/.plan-tree/state.json` but NO plan `.md`
     // file in `~/.claude/plans/` — so it has zero real rows here and would be INVISIBLE (its
     // resume banner unreachable). Synthesize a standalone master row for every NON-done tree in
@@ -729,7 +720,7 @@ fn read_head_string(path: &Path, cap: usize) -> Option<String> {
 
 /// Sort plan records newest-first (largest `mtime_ms` at index 0). Extracted from
 /// `list_plans` so the ordering invariant is unit-testable without touching the real
-/// plans dir — behavior is identical to the inline sort it replaced.
+/// plans dir.
 #[allow(dead_code)]
 fn sort_newest_first(records: &mut [PlanRecord]) {
     records.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
@@ -911,13 +902,12 @@ fn parse_marker(yaml_block: &str) -> Option<RawMarker> {
 ///   - Top level (masters + standalones) interleaved by recency DESC; a master's recency =
 ///     max mtime over {master file, all present children}.
 ///   - Each master is immediately followed by ALL its subs (the two-level grouping is kept;
-///     the frontend builds visual depth from `nn_path` prefixes in Phase 3) in PER-SEGMENT
+///     the frontend builds visual depth from `nn_path` prefixes) in PER-SEGMENT
 ///     integer-vector order on the dotted nn (`1 < 1.1 < 1.2 < 2` — depth-first dotted order).
 ///     This order is mtime-INDEPENDENT for distinct ids; mtime/stem are tie-breaks for
 ///     IDENTICAL ids only. A dotted sub whose parent prefix row is absent (orphan) still
-///     orders by its segments — visual orphan handling is the Phase-3 frontend's job.
+///     orders by its segments — visual orphan handling is the frontend's job.
 fn arrange_plans(rows: Vec<RawRow>, collapse_state: &HashMap<String, bool>) -> Vec<PlanRecord> {
-    // ---- Phase 1: identify the surviving master per tree_id (duplicate demotion). ----
     // For each tree_id, collect candidate master rows; pick newest-mtime, tie lexicographic
     // stem. The surviving master's stem is recorded so the others can be demoted.
     let mut master_candidates: HashMap<String, Vec<usize>> = HashMap::new();
@@ -951,7 +941,6 @@ fn arrange_plans(rows: Vec<RawRow>, collapse_state: &HashMap<String, bool>) -> V
         surviving_master.insert(tree_id.clone(), winner);
     }
 
-    // ---- Phase 2: classify each row into (Flavor, tree_id, nn). ----
     // children[tree_id] = Vec of child row indices (only subs whose master survives).
     let mut children: HashMap<String, Vec<usize>> = HashMap::new();
 
@@ -1017,7 +1006,6 @@ fn arrange_plans(rows: Vec<RawRow>, collapse_state: &HashMap<String, bool>) -> V
         classified.push(c);
     }
 
-    // ---- Phase 3: build PlanRecords + per-master observed child_count + recency. ----
     let build_record = |i: usize, c: &Classified, child_count: Option<u32>| -> PlanRecord {
         let collapsed = match (&c.flavor, &c.tree_id) {
             (Flavor::Master, Some(tid)) => collapse_state.get(tid).copied().unwrap_or(false),
@@ -1039,7 +1027,7 @@ fn arrange_plans(rows: Vec<RawRow>, collapse_state: &HashMap<String, bool>) -> V
         }
     };
 
-    // ---- Phase 4: order children per master: PER-SEGMENT integer-vector comparison on the ----
+    // Order children per master: PER-SEGMENT integer-vector comparison on the
     // dotted nn (Vec<u32> lexicographic Ord IS depth-first dotted order: [1] < [1,1] < [1,2] <
     // [2], because a strict prefix sorts before its extensions). Explicitly mtime-INDEPENDENT
     // for distinct ids — the mtime/stem tie-breaks apply to IDENTICAL ids only (the duplicate-id
@@ -1059,7 +1047,6 @@ fn arrange_plans(rows: Vec<RawRow>, collapse_state: &HashMap<String, bool>) -> V
         v
     };
 
-    // ---- Phase 5: top-level entries (masters + standalones) with recency. ----
     // A top-level entry is either a master (with its ordered children) or a standalone.
     struct TopLevel {
         recency: i64,
@@ -1112,7 +1099,6 @@ fn arrange_plans(rows: Vec<RawRow>, collapse_state: &HashMap<String, bool>) -> V
             .then_with(|| a.stem.cmp(&b.stem))
     });
 
-    // ---- Phase 6: flatten into the final display-ordered Vec. ----
     let mut out: Vec<PlanRecord> = Vec::with_capacity(rows.len());
     for entry in &top {
         if entry.is_master {
@@ -1250,11 +1236,6 @@ fn read_image_as_data_url(path: String) -> Result<String, String> {
         .map_err(|e| format!("cannot resolve path: {e}"))?;
     read_image_as_data_url_core(&canon_path)
 }
-
-// ============================================================================
-// managed AppState, persisted cwd cache + read/unread state,
-// and the productionized (single-pass, priority-preserving) cwd resolver.
-// ============================================================================
 
 /// Persisted read/unread state. `baseline_ms` is the first-launch seed: every plan whose
 /// mtime predates the baseline counts as already read (we never write 72 per-plan entries).
@@ -1658,8 +1639,7 @@ fn tree_is_done(state_json: &Value) -> bool {
     let phase = state.get("phase").and_then(|v| v.as_str());
     // LITERAL PORT of the TS `treeIsDone`: `root.state.stage !== "open" && root.state.phase ===
     // "summarized"`. A stage-LESS ledger (`stage` is `None`) is done iff summarized, exactly as the
-    // TS yields (`undefined !== "open"` is true). The earlier Rust had an extra `stage.is_some()`
-    // clause that diverged here (TS → done; old Rust → not done); it is dropped for parity.
+    // TS yields (`undefined !== "open"` is true).
     stage != Some("open") && phase == Some("summarized")
 }
 
@@ -1722,7 +1702,7 @@ fn synthesize_resume_rows(
             Ok(v) => v,
             Err(_) => continue, // unparseable ⇒ skip silently
         };
-        // Concern 6 — reused-cwd ghost guard: the index can hold a STALE `tree_id → cwd` entry after
+        // Reused-cwd ghost guard: the index can hold a STALE `tree_id → cwd` entry after
         // a re-genesis (orchestrator archives the old tree, starts a new tree_id in the SAME cwd).
         // The cwd's `state.json` now describes the NEW tree, so without this check we'd mint a ghost
         // sentinel for the OLD tree_id reading the NEW tree's ledger. Only synthesize when the
@@ -1811,10 +1791,8 @@ fn merge_synthetic_rows(records: Vec<PlanRecord>, synthetic: Vec<PlanRecord>) ->
     groups.into_iter().flat_map(|g| g.rows).collect()
 }
 
-// ---- cwd resolver (ported + inverted from cwd_spike.rs) --------------------
-
 /// Provenance of a stem→cwd match, in priority order. `PlanModeAttachment` is authoritative
-/// and is NEVER downgraded by a later weaker match (the spike's acceptance gate, preserved
+/// and is NEVER downgraded by a later weaker match (preserved
 /// per-stem across the single corpus pass).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Provenance {
@@ -1836,8 +1814,8 @@ fn projects_root() -> Option<PathBuf> {
 }
 
 /// Enumerate every transcript file under `root`: top-level `<session>.jsonl` files AND
-/// `<session>/subagents/agent-*.jsonl`. Mirrors the spike's `collect_transcripts`, but takes
-/// the root as a parameter so tests can point it at a fabricated temp corpus.
+/// `<session>/subagents/agent-*.jsonl`. Takes the root as a parameter so tests can point it
+/// at a fabricated temp corpus.
 fn collect_transcripts(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Ok(project_dirs) = std::fs::read_dir(root) else {
@@ -2357,7 +2335,7 @@ async fn read_plan_transcript(
         .map_err(|e| format!("transcript scan failed: {e}"))?;
 
     // Scan-before-fallback ordering: a scan hit short-circuits and the `tree_id` fallback is
-    // NEVER consulted (CLI-authored plans are unaffected by Phase 2). Only a scan MISS runs the
+    // NEVER consulted (CLI-authored plans are unaffected). Only a scan MISS runs the
     // (async) fallback resolver. We pre-await the fallback ONLY on a miss, then apply the pure
     // `pick_transcript_source` ordering (the unit-tested short-circuit spec).
     let fallback_result: Option<(PathBuf, Option<String>)> = if matched.is_some() {
@@ -2409,7 +2387,7 @@ async fn resolve_tree_fallback(
     state: &tauri::State<'_, Mutex<AppState>>,
 ) -> Result<Option<(PathBuf, Option<String>)>, String> {
     // 1) Read the plan file head and parse its frontmatter `tree_id`. No tree_id ⇒ genuinely
-    //    transcript-less (keep the Phase-1 `found:false`).
+    //    transcript-less (keep the `found:false`).
     let Some(plans) = plans_dir() else {
         return Ok(None);
     };
@@ -2450,8 +2428,6 @@ async fn resolve_tree_fallback(
 
     Ok(resolved.map(|(path, _session_id)| (path, Some(cwd))))
 }
-
-// ---- commands --------------------------------------------------
 
 /// Record the currently-open plan (or `null` when nothing is selected). The open plan is
 /// read by fiat in `list_plans`, so this is what keeps a live-edited open plan from re-bolding.
@@ -2504,8 +2480,6 @@ fn set_tree_collapsed(tree_id: String, collapsed: bool, state: tauri::State<'_, 
     persist_collapse_state(&data_dir, &snapshot);
 }
 
-// ---- comment commands (shape-twins of set_tree_collapsed) -------
-//
 // The backend is the SINGLE SOURCE OF TRUTH for the comment count. `set_comments`/
 // `clear_comments` return the authoritative resulting array so the frontend can adopt it as
 // its per-path cache (cache == last backend-confirmed value); `get_comment_count` is the
@@ -2521,9 +2495,8 @@ fn get_comments(path: String, state: tauri::State<'_, Mutex<AppState>>) -> Vec<C
 }
 
 /// Cold-read the comment count for a plan WITHOUT loading its array into the frontend cache
-/// (the count must persist when the pane is empty or a different plan is open). This is the
-/// 02→03 contract surface — NOT redundant with `array.length`, which only answers for the
-/// currently-open, loaded plan.
+/// (the count must persist when the pane is empty or a different plan is open). NOT redundant
+/// with `array.length`, which only answers for the currently-open, loaded plan.
 #[tauri::command]
 fn get_comment_count(path: String, state: tauri::State<'_, Mutex<AppState>>) -> usize {
     let guard = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -2685,14 +2658,12 @@ async fn resolve_cwds(
     Ok(resolved)
 }
 
-// ============================================================================
-// Phase 4 — headless plan-review commands + control-dir watcher + heartbeat.
+// Headless plan-review commands + control-dir watcher + heartbeat.
 //
 // The hook (hook.sh) drops `requests/<id>.json`, the control-dir watcher emits
 // `plan-review-requested`, the frontend renders the prompt, the user decides,
 // and `respond_to_review` writes `responses/<id>.json` which the hook is polling.
 // `app.alive` is a heartbeat the hook stat's to decide whether to block at all.
-// ============================================================================
 
 /// True iff a control-dir filename should be IGNORED by the watcher / listers: the in-flight
 /// atomic-write temp (`.tmp-…`) and any other dotfile. Centralized so the watcher and
@@ -2760,8 +2731,8 @@ fn read_review_plan(review_id: String) -> Result<String, String> {
 
 /// The EXTERNAL (settings.json ExitPlanMode hook) decision vocabulary is strictly narrower than the
 /// general one: external/hook reviews are DENY-ONLY. The app exposes no in-app affordance to approve
-/// an external review (the old "Dismiss → approve in terminal" button was removed and #review-approve
-/// is hidden for external reviews); external approvals happen exclusively in the terminal. So
+/// an external review (#review-approve is hidden for external reviews); external approvals happen
+/// exclusively in the terminal. So
 /// `respond_to_review` — which is reached ONLY by the external file-IPC path — must reject "allow"
 /// and accept only "deny", making an in-app external approval impossible-by-construction.
 fn is_valid_external_decision(d: &str) -> bool {
@@ -2797,7 +2768,6 @@ fn respond_to_review(review_id: String, decision: String, reason: String) -> Res
     Ok(())
 }
 
-// ============================================================================
 // write_agent_plan: materialize an agent-emitted plan as a REAL
 // file under ~/.claude/plans/ so the existing path-keyed review surface + sidebar
 // nesting work unchanged.
@@ -2822,7 +2792,6 @@ fn respond_to_review(review_id: String, decision: String, reason: String) -> Res
 //   master from its subs ONLY by `nn` (None ⇒ master, Some ⇒ sub). The legacy viewer
 //   contract — `(tree_id None, nn None) ⇒ master`, `(tree_id Some, nn Some) ⇒ sub` —
 //   is a strict subset of this rule.
-// ============================================================================
 
 /// True iff `slug` is a safe single path segment usable as a plan-file stem. Same rule set as
 /// `valid_review_id` (non-empty; not `.`/`..`; no leading `.`; only ASCII `[A-Za-z0-9._-]`, so
@@ -2885,7 +2854,7 @@ fn valid_dotted_nn(nn: &str) -> bool {
 /// PURE core of `write_agent_plan`, parameterized on the plans `base` dir so it is unit-testable
 /// against a tempdir (no real `~/.claude/plans/` needed). Decides flavor/tree_id/nn, builds the
 /// frontmatter + body, derives a safe slug, containment-guards the path, and atomically writes.
-/// Returns the absolute path of the written file as a String. `nn` (Phase 2) is the canonical
+/// Returns the absolute path of the written file as a String. `nn` is the canonical
 /// zero-padded DOTTED id string (`"02"`, `"02.01"`, …) — malformed values are rejected loudly.
 fn write_agent_plan_in(
     base: Option<PathBuf>,
@@ -2908,10 +2877,7 @@ fn write_agent_plan_in(
     //   nn None  ⇒ MASTER ⇒ flavor master, NO nn. tree_id is reused if supplied, else freshly seeded.
     //   nn Some  ⇒ SUB    ⇒ flavor sub, that nn. tree_id is reused if supplied, else freshly seeded.
     // The legacy viewer-era contract is a strict subset of this: (tree_id None, nn None) still ⇒ a
-    // fresh-tree master, and (tree_id Some, nn Some) still ⇒ a sub of that tree. The ONLY behavior
-    // this fixes is (tree_id Some, nn None) — the orchestrator's master write — which previously fell
-    // into the `Some(tid) ⇒ sub, nn unwrap_or(2)` branch and mis-stamped the master decomposition as
-    // `flavor: sub, nn: 2` (so the sidebar found no master record and the subs orphaned to a flat list).
+    // fresh-tree master, and (tree_id Some, nn Some) still ⇒ a sub of that tree.
     let (resolved_tree_id, flavor, resolved_nn): (String, RawFlavor, Option<String>) = match nn {
         None => (
             tree_id.unwrap_or_else(fresh_tree_id),
@@ -2976,8 +2942,8 @@ fn write_agent_plan_in(
 /// See the module-level comment for the frontmatter ⇄ nesting mapping. Atomic + containment-
 /// guarded (the write can only land inside `plans_dir()`). This is the ONE place the prior
 /// "never write into plans/" rule is relaxed; the app still never writes into `projects/`.
-/// WIRE (Phase 2): `nn` is `Option<String>` — the canonical zero-padded dotted id. A bare JSON
-/// integer (`nn: 2`, the pre-Phase-2 wire shape) is REJECTED by serde at the invoke boundary;
+/// WIRE: `nn` is `Option<String>` — the canonical zero-padded dotted id. A bare JSON
+/// integer (`nn: 2`) is REJECTED by serde at the invoke boundary;
 /// every TS call site sends the `pathKey()` string (or null for the master).
 #[tauri::command]
 fn write_agent_plan(
@@ -3253,8 +3219,6 @@ fn spawn_heartbeat() {
     });
 }
 
-// ---- one-time tree-cwd backfill -----------------------------------------------------------
-//
 // App-generated plan-tree plans predating this index have no `tree-cwd-index.json` entry, so
 // their cwd would still resolve "unknown" until the next `state.json` write touches them. The
 // backfill seeds the index ONCE at startup by walking the repo root for existing
@@ -3403,7 +3367,6 @@ fn start_control_watcher(app: tauri::AppHandle) -> Option<impl Sized> {
                     continue;
                 }
                 for p in ev.paths.iter() {
-                    // *.json only.
                     let is_json = p
                         .extension()
                         .and_then(|e| e.to_str())
@@ -3618,7 +3581,7 @@ fn start_watcher(app: tauri::AppHandle) -> Option<impl Sized> {
     };
 
     // The dir may not exist yet; watching a missing path errors. Tolerate it by logging
-    // and returning the debouncer anyway (it just won't fire until 03 or the user creates
+    // and returning the debouncer anyway (it just won't fire until the user creates
     // the dir; re-watch-on-create is a later concern).
     match debouncer.watch(&dir, RecursiveMode::NonRecursive) {
         Ok(()) => {
@@ -3644,13 +3607,12 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         // Native folder picker: the dialog plugin backs the New-plan
         // composer's working-directory "Choose…" button (frontend calls
-        // `@tauri-apps/plugin-dialog` `open({directory:true})`). Additive only —
-        // does NOT touch agent.rs.
+        // `@tauri-apps/plugin-dialog` `open({directory:true})`).
         .plugin(tauri_plugin_dialog::init())
-        // Desktop notifications (Phase 8): the notification plugin backs the
+        // Desktop notifications: the notification plugin backs the
         // frontend `@tauri-apps/plugin-notification` wrapper (src/notify.ts),
         // which fires an OS notification on the two quota events (limit reached /
-        // auto-resumed). Additive only — does NOT touch agent.rs.
+        // auto-resumed).
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // Agent SDK driver: one session per launch, stored in
@@ -3685,7 +3647,7 @@ pub fn run() {
             // and merges idempotently into the managed index above.
             spawn_backfill(app.handle().clone());
 
-            // Phase 4: ensure the control dirs exist so the guarded path builders (which
+            // Ensure the control dirs exist so the guarded path builders (which
             // canonicalize the parent) and the control-dir watcher can operate. Best-effort —
             // failures degrade (the commands re-create on demand; the watcher logs + no-ops).
             if let Some(d) = requests_dir() {
@@ -3695,11 +3657,11 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(&d);
             }
 
-            // Phase 4: prune orphaned control files left by SIGKILLed/timed-out hooks ONCE at
+            // Prune orphaned control files left by SIGKILLed/timed-out hooks ONCE at
             // startup (before any launch recovery), then again on every heartbeat tick.
             prune_stale_control_files();
 
-            // Phase 4: heartbeat thread — touches app.alive every 5s so the hook knows we are
+            // Heartbeat thread — touches app.alive every 5s so the hook knows we are
             // live (a missed beat just makes the hook fall through, the safe failure mode).
             spawn_heartbeat();
 
@@ -3709,7 +3671,7 @@ pub fn run() {
                 app.manage(Mutex::new(debouncer));
             }
 
-            // Phase 4: SECOND debouncer on the control dir (requests/). Wrapped in the
+            // SECOND debouncer on the control dir (requests/). Wrapped in the
             // `ControlWatcher` newtype so it gets a distinct type key in managed state (both
             // debouncers share the same concrete type — a bare `Mutex<Debouncer>` would
             // collide with the plans watcher above). Kept alive the same way: stashed in state.
@@ -3762,7 +3724,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         // Agent SDK driver teardown: gracefully drain the agent
-        // tree on app exit (INV-4) — send `end`, wait a bounded interval for the
+        // tree on app exit — send `end`, wait a bounded interval for the
         // sidecar (and its `claude` grandchild) to exit, SIGKILL only as the
         // fallback — so quitting leaves NO orphaned `claude` or sidecar process.
         .run(|app, event| match event {
@@ -3912,9 +3874,9 @@ mod tests {
         }
     }
 
-    /// Phase 2 serde pin: the EXACT byte shape of a flat (single-segment) sub `PlanRecord` —
+    /// Serde pin: the EXACT byte shape of a flat (single-segment) sub `PlanRecord` —
     /// `nn_path` is the ONE additive field; `nn` keeps its legacy first-segment integer meaning
-    /// byte-identically. The old (pre-Phase-2) shape is re-derived by deleting the nn_path
+    /// byte-identically. The old shape is re-derived by deleting the nn_path
     /// key/value from the pinned bytes and compared too, proving NOTHING ELSE moved. Falsifiable:
     /// any field reorder, rename, or value-type drift breaks the byte equality.
     #[test]
@@ -3936,7 +3898,7 @@ mod tests {
         let json = serde_json::to_string(&sub).unwrap();
         let pinned_new = r#"{"absolute_path":"/tmp/01-sub.md","filename_stem":"01-sub","mtime_ms":2,"cwd":null,"unread":false,"flavor":"sub","tree_id":"tree-1","nn":1,"nn_path":"01","child_count":null,"collapsed":false,"h1s":[]}"#;
         assert_eq!(json, pinned_new, "flat sub PlanRecord JSON must match the pinned Phase-2 bytes");
-        // Deleting the single additive key reproduces the pre-Phase-2 bytes EXACTLY — `nn` is
+        // Deleting the single additive key reproduces the old bytes EXACTLY — `nn` is
         // still the bare integer 1 and every other byte is unchanged.
         let pinned_old = r#"{"absolute_path":"/tmp/01-sub.md","filename_stem":"01-sub","mtime_ms":2,"cwd":null,"unread":false,"flavor":"sub","tree_id":"tree-1","nn":1,"child_count":null,"collapsed":false,"h1s":[]}"#;
         assert_eq!(
@@ -3975,7 +3937,7 @@ mod tests {
         }
     }
 
-    /// A sub marker with a DOTTED hierarchical id (Phase 2), e.g. `&[2, 1]` for `nn: 02.01`.
+    /// A sub marker with a DOTTED hierarchical id, e.g. `&[2, 1]` for `nn: 02.01`.
     fn dotted_sub_marker(tree_id: &str, segments: &[u32]) -> RawMarker {
         RawMarker {
             tree_id: tree_id.to_string(),
@@ -3983,8 +3945,6 @@ mod tests {
             nn: Some(segments.to_vec()),
         }
     }
-
-    // ---- system_time_to_ms ------------------------------------------------
 
     #[test]
     fn mtime_epoch_is_zero() {
@@ -4007,8 +3967,6 @@ mod tests {
         assert!(ms <= 0, "pre-epoch time should map to <= 0, got {ms}");
         assert_eq!(ms, -5_000);
     }
-
-    // ---- sort_newest_first ------------------------------------------------
 
     #[test]
     fn sort_puts_largest_mtime_first() {
@@ -4065,8 +4023,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // ---- is_within (path containment) ------------------------------------
 
     #[test]
     fn path_inside_root_is_accepted() {
@@ -4148,8 +4104,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    // ---- mime_for_ext / is_supported_image_ext (allow-list) --------------
-
     #[test]
     fn allow_list_accepts_supported_extensions() {
         // Lowercase, mixed-case, and the multi-mapped jpeg/svg cases.
@@ -4179,8 +4133,6 @@ mod tests {
         assert!(!is_supported_image_ext(""));
     }
 
-    // ---- within_size_cap (25 MiB boundary) -------------------------------
-
     #[test]
     fn size_cap_boundary_is_inclusive() {
         // Exactly at the cap is allowed; one byte over is not. Tested via the pure fn so
@@ -4191,8 +4143,6 @@ mod tests {
         assert!(within_size_cap(MAX_IMAGE_BYTES)); // exactly 25 MiB: allowed
         assert!(!within_size_cap(MAX_IMAGE_BYTES + 1)); // 25 MiB + 1: rejected
     }
-
-    // ---- read_image_as_data_url_core: is_file rejection ------------------
 
     #[test]
     fn directory_path_is_rejected() {
@@ -4236,8 +4186,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // ---- read_image_as_data_url_core: real PNG round-trip ----------------
 
     /// A minimal, valid 1x1 transparent PNG (67 bytes): signature + IHDR + IDAT + IEND.
     const TINY_PNG: &[u8] = &[
@@ -4287,10 +4235,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ====================================================================
-    // unread, open-plan fiat, resolver, persistence, helpers.
-    // ====================================================================
-
     fn unique_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "plan_reader_{tag}_{}_{}",
@@ -4303,8 +4247,6 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mkdir temp");
         dir
     }
-
-    // ---- compute_unread vs baseline_ms ---------------------------------
 
     #[test]
     fn unread_when_mtime_newer_than_viewed() {
@@ -4330,8 +4272,6 @@ mod tests {
         assert!(!compute_unread(1_000, None, baseline));
     }
 
-    // ---- open-plan fiat ------------------------------------------------
-
     #[test]
     fn open_plan_is_read_by_fiat_even_when_mtime_newer() {
         let p = "/tmp/live.md";
@@ -4351,8 +4291,6 @@ mod tests {
         assert!(unread_for_row(p, 3_000, Some(1_000), 0, Some("/tmp/other.md")));
     }
 
-    // ---- collapse_home -------------------------------------------------
-
     #[test]
     fn collapse_home_replaces_leading_home_with_tilde() {
         assert_eq!(
@@ -4371,8 +4309,6 @@ mod tests {
         // Empty home ⇒ unchanged.
         assert_eq!(collapse_home("/Users/bob/x", ""), "/Users/bob/x");
     }
-
-    // ---- resolver: cross-transcript priority (fabricated fixtures) -----
 
     /// Write a top-level session transcript `<root>/<proj>/<session>.jsonl`.
     fn write_session(root: &Path, proj: &str, session: &str, lines: &[String]) -> PathBuf {
@@ -4586,8 +4522,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // ---- read_plan_transcript: provenance path + server-side filter ----
-
     #[test]
     fn resolve_stem_path_authoritative_beats_fallback_regardless_of_file_order() {
         let stem = "transcript-priority-stem";
@@ -4724,8 +4658,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
-
-    // ---- read_plan_transcript: tree_id fallback (resolve_tree_session) ----
 
     /// A minimal session line carrying the in-file `cwd` + `sessionId`. The transcript FILENAME
     /// (its stem) is the canonical session id; this line lets `first_cwd`/`first_session_id`
@@ -4930,8 +4862,7 @@ mod tests {
     fn resolve_tree_session_primary_rejects_stem_match_from_wrong_cwd() {
         // PRIMARY cwd invariant: a stale `sdk_session_id` names a transcript whose in-file cwd is a
         // DIFFERENT directory than the resolved `cwd`. That stem-matched file must NOT be returned;
-        // resolution falls through to the newest correct-cwd transcript instead. (Pre-fix this test
-        // FAILS — PRIMARY returned the wrong-cwd file by filename alone.)
+        // resolution falls through to the newest correct-cwd transcript instead.
         let root = unique_dir("rts_primary_cwd");
         let resolved_cwd = "/Users/x/RIGHT";
         let stale_session = "stale-session-id";
@@ -5030,8 +4961,6 @@ mod tests {
         assert!(invoked2.get(), "the fallback MUST run on a scan miss");
     }
 
-    // ---- persistence: round-trip, missing, corrupt --------------------
-
     #[test]
     fn cwd_cache_round_trips() {
         let dir = unique_dir("persA");
@@ -5125,8 +5054,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // ---- atomic_write sanity -------------------------------------------
-
     #[test]
     fn atomic_write_overwrites_existing_target() {
         let dir = unique_dir("atomic");
@@ -5149,8 +5076,6 @@ mod tests {
         assert!(leftovers.is_empty(), "atomic_write must not leave temp files behind");
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // ---- write_agent_plan --------------------------------
 
     /// Seed emission (tree_id None) ⇒ a REAL file under the plans dir, with `flavor: master`
     /// frontmatter that `parse_marker` round-trips, and the returned path is contained in base.
@@ -5261,9 +5186,7 @@ mod tests {
     /// REGRESSION (the orchestrator master-write bug): a CALLER-SUPPLIED tree_id with `nn: None`
     /// MUST be written as `flavor: master` carrying that exact tree_id and no `nn` — NOT as a sub.
     /// The multiplan orchestrator seeds its own tree_id (so it is always `Some`) and signals the
-    /// master via `nn: None`; the previous `Some(tid) ⇒ sub, nn unwrap_or(2)` logic mis-stamped the
-    /// master decomposition as `flavor: sub, nn: 2`, so the sidebar found no master record and the
-    /// subs orphaned to a flat list. INVERT-CHECK: revert `write_agent_plan_in` to keying flavor on
+    /// master via `nn: None`. INVERT-CHECK: revert `write_agent_plan_in` to keying flavor on
     /// `tree_id.is_some()` and this test goes RED (it observes `flavor: sub, nn: Some(2)`). It also
     /// feeds the master + a real sub of the same tree into `arrange_plans` and asserts the sub NESTS
     /// under the master — the end-to-end nesting the live sidebar depends on.
@@ -5326,7 +5249,7 @@ mod tests {
         assert_eq!(sub.flavor, Flavor::Sub, "the sub nests under the master");
         assert_eq!(sub.tree_id.as_deref(), Some(tree_id.as_str()));
 
-        // Phase 2 extension: a DOTTED child of the same tree round-trips its dotted nn through
+        // A DOTTED child of the same tree round-trips its dotted nn through
         // the frontmatter (`nn: 01.01`) and nests under the same master, ordered directly after
         // its `01` prefix (depth-first dotted order).
         let dotted_path = write_agent_plan_in(
@@ -5378,7 +5301,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Phase 2: a DOTTED nn writes `flavor: sub` frontmatter carrying the dotted id verbatim
+    /// A DOTTED nn writes `flavor: sub` frontmatter carrying the dotted id verbatim
     /// (`nn: 02.01`) and embeds the dotted id in the slug (valid_plan_slug allows '.').
     /// Falsifiable: formatting the nn through anything but the verbatim string (e.g. first
     /// segment only) breaks the frontmatter/slug asserts.
@@ -5414,7 +5337,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Phase 2: a MALFORMED dotted nn is rejected LOUDLY (Err) and writes NOTHING. The write
+    /// A MALFORMED dotted nn is rejected LOUDLY (Err) and writes NOTHING. The write
     /// side accepts only the canonical zero-padded form — read-side leniency does not apply.
     /// Falsifiable: drop the `valid_dotted_nn` guard and "2" / "02." write files → RED.
     #[test]
@@ -5439,8 +5362,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Phase 2 WIRE PIN: the `nn` invoke argument is `Option<String>` — a bare JSON integer
-    /// (the pre-Phase-2 wire shape, e.g. a stale TS fake still sending `nn: 2`) must FAIL serde
+    /// WIRE PIN: the `nn` invoke argument is `Option<String>` — a bare JSON integer
+    /// (e.g. a stale TS fake still sending `nn: 2`) must FAIL serde
     /// deserialization at the invoke boundary, never be silently stringified. The struct mirrors
     /// the tauri command's argument deserialization. Falsifiable: widen the field back to a
     /// number-tolerant type and the is_err assert goes RED.
@@ -5486,13 +5409,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&base);
     }
-
-    // ====================================================================
-    // nested master/sub hierarchy (frontmatter, markers,
-    // arrange_plans ordering/normalization, collapse persistence, two-read-paths).
-    // ====================================================================
-
-    // ---- split_frontmatter ---------------------------------------------
 
     #[test]
     fn split_frontmatter_extracts_leading_block_and_body() {
@@ -5549,8 +5465,6 @@ mod tests {
         assert_eq!(body, content, "mid-document --- ⇒ body unchanged");
     }
 
-    // ---- extract_h1s (fence-aware H1 scan for the sidebar filter) ------
-
     #[test]
     fn extract_h1s_collects_atx_h1_only() {
         // `# Title` is collected (trimmed); `## H2` and `#NoSpace` are excluded.
@@ -5597,8 +5511,6 @@ mod tests {
         );
     }
 
-    // ---- parse_marker --------------------------------------------------
-
     #[test]
     fn parse_marker_reads_master_block() {
         let m = parse_marker("tree_id: nested-2026\nflavor: master\n").expect("master parses");
@@ -5616,7 +5528,7 @@ mod tests {
         assert_eq!(m.nn, Some(vec![3]));
     }
 
-    /// Phase 2: a DOTTED `nn` frontmatter value parses to its per-segment integer vector, with
+    /// A DOTTED `nn` frontmatter value parses to its per-segment integer vector, with
     /// read-side leniency for 1-digit segments; malformed/out-of-range values parse to nn None
     /// (the marker survives — only the nn is dropped). Falsifiable: revert `parse_nn_segments`
     /// to `value.parse::<u32>()` and the dotted asserts go RED.
@@ -5650,8 +5562,6 @@ mod tests {
         // Absent flavor entirely ⇒ also None.
         assert_eq!(parse_marker("tree_id: t\n"), None);
     }
-
-    // ---- arrange_plans -------------------------------------------------
 
     fn by_stem(records: &[PlanRecord], stem: &str) -> PlanRecord {
         records
@@ -5818,8 +5728,6 @@ mod tests {
         );
     }
 
-    // ---- arrange_plans: dotted hierarchical ids (Phase 2) ---------------
-
     /// Children order by PER-SEGMENT integer-vector comparison on the dotted nn: depth-first
     /// dotted order `02 < 02.01 < 02.02 < 03`, mtime-INDEPENDENT for distinct ids. FRAGILITY PIN:
     /// `02` carries the NEWEST mtime of the whole tree (a just-re-drafted parent), and the other
@@ -5857,7 +5765,7 @@ mod tests {
     /// ORPHAN RULE (kept simple at this layer): a dotted sub whose parent prefix row is ABSENT
     /// (here 02.01 with no `02` row) still orders by its segments among its siblings — it is NOT
     /// demoted, NOT re-ordered, NOT dropped. Visual orphan handling (rendering the gap loudly) is
-    /// the Phase-3 frontend's job, driven by nn_path prefixes. Falsifiable: an implementation
+    /// the frontend's job, driven by nn_path prefixes. Falsifiable: an implementation
     /// that drops or demotes prefix-orphans loses the row / nulls its tree_id → RED.
     #[test]
     fn arrange_orphan_dotted_child_orders_by_segments_without_parent_row() {
@@ -5901,7 +5809,7 @@ mod tests {
         assert_eq!(out.len(), 4, "all rows present, none dropped or duplicated");
     }
 
-    /// PHASE-4 DA FOLLOW-UP — duplicate-SUB id DIRECTION pin: subs sharing one id order
+    /// Duplicate-SUB id DIRECTION pin: subs sharing one id order
     /// oldest-mtime FIRST / newest-mtime LAST. The direction is load-bearing for the FRONTEND's
     /// last-wins rule: `renderSidebar`'s prefix-stack walk (src/main.ts) pushes a new frame per
     /// sub row, so when duplicates of "02" arrive, later extension rows ("02.01", …) attach to
@@ -5929,8 +5837,6 @@ mod tests {
             "identical sub ids must order oldest-first/newest-LAST (frontend last-wins parenting)"
         );
     }
-
-    // ---- collapse round-trip -------------------------------------------
 
     #[test]
     fn collapse_state_round_trips() {
@@ -5969,8 +5875,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // ---- two read paths agree ------------------------------------------
 
     /// A reader-equivalent of `read_plan_contents`'s strip step: read bytes, lossy-decode,
     /// return the body with any leading frontmatter stripped (the production command does
@@ -6054,10 +5958,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // ====================================================================
-    // comments persistence + set_comments semantics + wire freeze.
-    // ====================================================================
 
     fn comment_rec(quote: &str, block_line: Option<i64>, occurrence: i64, id: i64) -> CommentRecord {
         CommentRecord {
@@ -6242,10 +6142,6 @@ mod tests {
             "block_end_line must be present as JSON null when None (never omitted)"
         );
     }
-
-    // ====================================================================
-    // Phase 3 — review wire types, path helpers, id validation, settings merge.
-    // ====================================================================
 
     fn sample_review_request() -> ReviewRequest {
         ReviewRequest {
@@ -6643,8 +6539,8 @@ mod tests {
 
     /// `hook_is_installed` must be FALSE for the user's real settings (which has a Bash PreToolUse
     /// hook + a PostToolUse/ExitPlanMode hook, but NO plan-reader entry), and TRUE after
-    /// `merge_install_hook` adds our entry. Falsifiability proven by inverting the assertion (see
-    /// the commit report): the fixture passes only because no command ends with the suffix, and the
+    /// `merge_install_hook` adds our entry. Falsifiability proven by inverting the assertion:
+    /// the fixture passes only because no command ends with the suffix, and the
     /// merged value passes only because our command does — flipping either `assert!`/`assert!(!…)`
     /// turns the test red.
     #[test]
@@ -6718,10 +6614,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    // ====================================================================
-    // tree-cwd index — auto-capture, read fast-path, startup backfill.
-    // ====================================================================
 
     /// Build an `AppState` whose persistence lands in `dir` (everything else default/empty), so the
     /// index helpers can be exercised against a real on-disk `tree-cwd-index.json`.
@@ -6883,8 +6775,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&empty);
     }
 
-    // ---- Phase 4: synthetic resume rows (tree_is_done + synthesize_resume_rows) ----
-
     /// Build a `state.json` Value with a given root `(stage, phase)` and a `created_ms` / `title`.
     fn resume_state_json(stage: &str, phase: &str, created_ms: i64, title: &str) -> Value {
         serde_json::json!({
@@ -6954,7 +6844,7 @@ mod tests {
     fn tree_is_done_stageless_summarized_is_done_ts_parity() {
         // LITERAL TS PORT: `stage !== "open" && phase === "summarized"`. A stage-LESS ledger
         // (`stage` absent) that is `summarized` IS done — `undefined !== "open"` is true in TS, so
-        // Rust must agree (the old `stage.is_some()` clause wrongly returned NOT done here).
+        // Rust must agree.
         let v = serde_json::json!({ "root": { "state": { "phase": "summarized" } } });
         assert!(
             tree_is_done(&v),
@@ -7068,7 +6958,7 @@ mod tests {
 
     #[test]
     fn orphan_sub_does_not_double_render_with_a_synthetic_master() {
-        // Concern 4 regression: a tree whose ONLY real plan file is an orphan SUB (`.md` for a sub,
+        // Regression: a tree whose ONLY real plan file is an orphan SUB (`.md` for a sub,
         // master `.md` absent) is reclassified Standalone by `arrange_plans`, which NULLS its
         // tree_id. The suppression set MUST be built from the RAW markers (this mirrors `list_plans`)
         // so the orphan-sub tree is still recognized as "has a real row" and NO synthetic master is
@@ -7127,7 +7017,7 @@ mod tests {
 
     #[test]
     fn reused_cwd_with_stale_index_key_skips_ghost_row() {
-        // Concern 6 regression: a re-genesised cwd (orchestrator archives the old tree, starts a new
+        // Regression: a re-genesised cwd (orchestrator archives the old tree, starts a new
         // tree_id in the SAME cwd) leaves a STALE `tree-old → /cwd` index entry. The cwd's state.json
         // now describes `tree-new`. Without the ledger-tree_id guard, synthesis emits a GHOST sentinel
         // for tree-old reading tree-new's ledger. The guard skips the stale key; the matching key for

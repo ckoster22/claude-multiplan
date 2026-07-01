@@ -29,9 +29,7 @@ function fail(msg) {
   process.exit(1);
 }
 
-// ---------------------------------------------------------------------------
 // (a) Assert the darwin-arm64 platform package is present.
-// ---------------------------------------------------------------------------
 const platformPkgDir = join(
   repoRoot,
   "node_modules",
@@ -48,9 +46,7 @@ if (!existsSync(platformPkgDir) || !existsSync(platformBin)) {
 }
 console.log("[sidecar-build] platform package present:", platformBin);
 
-// ---------------------------------------------------------------------------
 // (b) Read the Rust host target triple from `rustc -vV`.
-// ---------------------------------------------------------------------------
 let rustcOut;
 try {
   rustcOut = execFileSync("rustc", ["-vV"], { encoding: "utf8" });
@@ -63,9 +59,7 @@ const triple = hostLine.slice("host:".length).trim();
 if (!triple) fail("empty target triple parsed from `rustc -vV`.");
 console.log("[sidecar-build] host target triple:", triple);
 
-// ---------------------------------------------------------------------------
 // (c) Compile with `bun build --compile`.
-// ---------------------------------------------------------------------------
 const outDir = join(repoRoot, "src-tauri", "binaries");
 mkdirSync(outDir, { recursive: true });
 const outFile = join(outDir, `agent-driver-${triple}`);
@@ -85,7 +79,6 @@ try {
 }
 if (!existsSync(outFile)) fail(`bun reported success but ${outFile} does not exist.`);
 
-// ---------------------------------------------------------------------------
 // (d) Post-build smoke check — boot the binary and confirm the embedded CLI
 //     extracts to an existing, executable path. The sidecar prints nothing
 //     until it gets a `start`, so we send `end` to make it boot + exit 0; a
@@ -94,7 +87,6 @@ if (!existsSync(outFile)) fail(`bun reported success but ${outFile} does not exi
 //     We verify the executable bit on the platform package's bundled CLI here
 //     (the same bytes the compiled binary embeds) as a fast, deterministic
 //     proxy for "extractFromBunfs yields an executable path."
-// ---------------------------------------------------------------------------
 try {
   accessSync(platformBin, constants.X_OK);
 } catch {
@@ -108,7 +100,6 @@ try {
   fail(`compiled sidecar failed its boot smoke check (${e.message}).`);
 }
 
-// ---------------------------------------------------------------------------
 // (e) Post-build USER-TURN smoke check — guards against the bundler-rename trap.
 //
 //     A pure `export { foo } from "./mod"` in index.ts does NOT create a local
@@ -125,7 +116,6 @@ try {
 //     network; the lift (and thus the trap) executes BEFORE any auth, so this is
 //     fast and deterministic regardless of credentials. We assert ONLY on the
 //     defect signature, never on SDK/auth chatter (which is expected here).
-// ---------------------------------------------------------------------------
 const userTurnInput =
   '{"type":"start","cwd":"/tmp","permissionMode":"plan"}\n' +
   '{"type":"user","text":"smoke"}\n' +

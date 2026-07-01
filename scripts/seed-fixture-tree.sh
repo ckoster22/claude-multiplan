@@ -35,7 +35,6 @@ set -euo pipefail
 
 PLANS_DIR="$HOME/.claude/plans"
 
-# --- Hardcoded, human-verified membership table -----------------------------
 # Each entry is a stem followed by the exact frontmatter block to prepend.
 # Stems and their frontmatter are paired by array index.
 

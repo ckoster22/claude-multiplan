@@ -73,8 +73,6 @@ function domainFor(rel) {
   return "Other";
 }
 
-// ---- File discovery ------------------------------------------------------------------------
-
 function walk(absDir, relDir, out, excludes) {
   let entries;
   try {
@@ -107,8 +105,6 @@ function discoverFiles(excludes) {
   files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return files;
 }
-
-// ---- Parsing -------------------------------------------------------------------------------
 
 const HEADER_RE = /^\s*\/\/\s*INVARIANT\[([^\]]+)\]\s*\(([^)]+)\)\s*:\s*(.*)$/;
 const CONT_RE = /^\s*\/\/\s+(prevents|test)\s*:\s*(.*)$/;
@@ -173,8 +169,6 @@ function parseFile(rel, text) {
   }
   return blocks;
 }
-
-// ---- Emission ------------------------------------------------------------------------------
 
 function tierBadge(tier) {
   const valid = TIERS.includes(tier);
@@ -313,8 +307,6 @@ function generate(blocks) {
 
   return out.join("\n");
 }
-
-// ---- Main ----------------------------------------------------------------------------------
 
 /**
  * Parse `--exclude <a,b,c>` and `--exclude=a,b,c` flags out of argv into a Set of

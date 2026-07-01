@@ -39,10 +39,6 @@ const SIDECAR_NAME: &str = "agent-driver";
 /// Token store filename under the app-data dir. NEVER written into `~/.claude`.
 const AUTH_FILE: &str = "agent-auth.json";
 
-// ---------------------------------------------------------------------------
-// Managed state.
-// ---------------------------------------------------------------------------
-
 /// Process-wide monotonic session id. Each `start_agent_session` stamps the
 /// stored driver with the next value; the read task carries that same id so it
 /// only releases the slot for the session it owns (never a successor's).
@@ -127,8 +123,7 @@ impl AgentDriver {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Graceful teardown drain (INV-4).
+// Graceful teardown drain.
 //
 // ROOT CAUSE this fixes: teardown used to call `CommandChild::kill()` = SIGKILL,
 // which is uncatchable — so the SDK's `process.on("exit")` reaper inside the
@@ -147,7 +142,6 @@ impl AgentDriver {
 // drain awaits it. `DrainTarget` abstracts "send the end line" + "consume-by-kill"
 // so the ordering is unit-testable with a fake (the real CommandChild's
 // kill-by-value can't be mocked otherwise).
-// ---------------------------------------------------------------------------
 
 /// The two teardown operations the drain performs on the session child, factored
 /// behind a trait so the ORDER (`send_end` then, only on timeout, `kill`) is
@@ -221,9 +215,6 @@ fn offload_drain<C: DrainTarget + Send + 'static>(
     });
 }
 
-// ---------------------------------------------------------------------------
-// Pure stream-line parser (unit-tested).
-//
 // The shell plugin's non-raw reader accumulates across pipe reads until a
 // `\n`/`\r` and RETAINS the delimiter byte, so a `\r\n` line yields a trailing
 // event whose payload is `"\n"` (NOT `""`). The guard is therefore "skip after
@@ -231,7 +222,6 @@ fn offload_drain<C: DrainTarget + Send + 'static>(
 //   - whitespace-only (incl. a lone "\n"/" ") AFTER trim  -> Ok(None)   (skip)
 //   - valid JSON                                           -> Ok(Some(event))
 //   - non-JSON                                             -> Err(diagnostic)
-// ---------------------------------------------------------------------------
 
 /// A parsed stdout frame routed to one of three Tauri events. The `kind`
 /// distinguishes the committed agent-stream kinds from the permission seam.
@@ -294,10 +284,6 @@ fn normalize_error_payload(mut value: Value) -> Value {
     value
 }
 
-// ---------------------------------------------------------------------------
-// Token persistence — agent-auth.json under app_data_dir, atomic + mode 0600.
-// ---------------------------------------------------------------------------
-
 #[derive(Serialize, serde::Deserialize, Default)]
 struct AuthFile {
     token: Option<String>,
@@ -342,13 +328,11 @@ fn store_token(app: &AppHandle, token: &str) -> Result<(), String> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
 // Read task — recv -> parse -> emit ONLY. Never blocks on app state or awaits a
 // permission resolution (the plugin's event channel is capacity-1, shared by
 // stdout/stderr/terminate; blocking it would backpressure and hang the sidecar).
 // Permission replies arrive over a SEPARATE path: resolve_tool_permission ->
 // child stdin, not through this loop.
-// ---------------------------------------------------------------------------
 
 fn spawn_read_task(
     app: AppHandle,
@@ -412,7 +396,7 @@ fn spawn_read_task(
                 }
                 CommandEvent::Terminated(payload) => {
                     let _ = app.emit("agent-exit", serde_json::json!({ "code": payload.code }));
-                    // Signal the teardown drain (INV-4) that the child has exited,
+                    // Signal the teardown drain that the child has exited,
                     // so a concurrent `block_on(timeout(.., terminated_rx))` returns
                     // immediately and skips the SIGKILL fallback. Fire-and-forget:
                     // if the receiver was already dropped (no drain in flight, the
@@ -441,10 +425,6 @@ fn spawn_read_task(
         }
     });
 }
-
-// ---------------------------------------------------------------------------
-// Commands.
-// ---------------------------------------------------------------------------
 
 type DriverState<'a> = State<'a, Mutex<Option<(u64, AgentDriver)>>>;
 
@@ -479,12 +459,12 @@ pub fn start_agent_session(
     state: DriverState<'_>,
     cwd: String,
     permission_mode: String,
-    // Header-picker selection (Phase 1). Tauri maps JS camelCase `model`/`effort`.
+    // Header-picker selection. Tauri maps JS camelCase `model`/`effort`.
     // None when no picker value is supplied; serde emits `null` and the sidecar
     // treats null/absent as "not set".
     model: Option<String>,
     effort: Option<String>,
-    // Resume an in-progress SDK conversation (Phase 4). Tauri maps JS camelCase
+    // Resume an in-progress SDK conversation. Tauri maps JS camelCase
     // `resumeSessionId`. None when starting fresh; serde emits `null`, forwarded
     // as `"resume"` in the start JSON. The one-session-per-launch guard is
     // UNCHANGED — resume only adds a flag to the start command.
@@ -534,7 +514,7 @@ pub fn start_agent_session(
     // only releases the slot it owns). One fetch_add — never call it twice.
     let id = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
 
-    // Teardown-drain seam (INV-4): the read task fires `terminated_tx` when it
+    // Teardown-drain seam: the read task fires `terminated_tx` when it
     // sees `CommandEvent::Terminated`; the driver keeps `terminated_rx` so the
     // graceful-drain in end_agent_session/shutdown_session can await the child's exit before any
     // SIGKILL fallback.
@@ -670,7 +650,7 @@ pub fn cancel_agent_run(state: DriverState<'_>) -> Result<(), String> {
     driver.send_line(&serde_json::json!({ "type": "interrupt" }))
 }
 
-/// End the session for this launch, draining the agent tree gracefully (INV-4):
+/// End the session for this launch, draining the agent tree gracefully:
 /// send `{"type":"end"}`, wait a bounded interval for the child to exit on its
 /// own (the sidecar's `end`-command handler closes the SDK query, whose reaper
 /// SIGTERMs the `claude` grandchild — never orphaning it), and SIGKILL only as
@@ -719,10 +699,9 @@ pub fn set_agent_oauth_token(app: AppHandle, token: String) -> Result<(), String
     store_token(&app, &token)
 }
 
-// ---------------------------------------------------------------------------
 // Teardown — called from lib.rs on RunEvent::Exit/ExitRequested.
 //
-// GUARANTEED BEHAVIOR (INV-4): quitting the app sends the sidecar a graceful
+// GUARANTEED BEHAVIOR: quitting the app sends the sidecar a graceful
 // `{"type":"end"}` and waits a BOUNDED `DRAIN_TIMEOUT` for it (and its `claude`
 // grandchild) to exit before SIGKILLing only as a fallback. The sidecar's
 // `end`-command handler routes through one awaited drain that closes the SDK
@@ -739,7 +718,6 @@ pub fn set_agent_oauth_token(app: AppHandle, token: String) -> Result<(), String
 // the bounded drain: the process must NOT exit before the agent tree has had its
 // bounded chance to wind down, otherwise a spawned/detached drain would be torn
 // down with the process and orphan the grandchild anyway.
-// ---------------------------------------------------------------------------
 
 pub fn shutdown_session(app: &AppHandle) {
     let taken = app
@@ -756,10 +734,6 @@ pub fn shutdown_session(app: &AppHandle) {
         tauri::async_runtime::block_on(drain_child(driver, terminated, DRAIN_TIMEOUT));
     }
 }
-
-// ---------------------------------------------------------------------------
-// Unit tests — falsifiable parse_stream_line tests.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -786,7 +760,6 @@ mod tests {
         assert_eq!(take_if_current(&slot, 5), None);
     }
 
-    // -----------------------------------------------------------------------
     // a FAILED start-command write must NOT phantom-lock the session slot.
     //
     // `start_agent_session` used to store the driver into the singleton slot and
@@ -801,7 +774,6 @@ mod tests {
     // invariant directly with a fake driver + injectable failing send (the real
     // `AgentDriver::send_line` needs a `CommandChild` that cannot be built in a
     // test).
-    // -----------------------------------------------------------------------
 
     /// On send SUCCESS the driver stays committed in the slot (so the read task can
     /// be wired to it) and `Ok(())` is returned. Falsifiability complement to the
@@ -863,7 +835,7 @@ mod tests {
 
     #[test]
     fn start_command_json_carries_resume_when_some_and_null_when_none() {
-        // Phase 4: the start line must carry the SDK resume id when the host
+        // The start line must carry the SDK resume id when the host
         // supplies one, and serde-`null` when it does not (the sidecar treats
         // null/absent/empty as "no resume"). Falsifiability: drop the `resume`
         // field from start_command_json and BOTH assertions below go RED.
@@ -1017,15 +989,13 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // INV-4: graceful agent-tree teardown drain ordering.
+    // Graceful agent-tree teardown drain ordering.
     //
     // The teardown drain (`drain_child`) MUST send `{"type":"end"}` BEFORE any
     // SIGKILL, and MUST only SIGKILL as the timeout fallback when the child has
     // not exited on its own. We test the pure ordering with a fake child that
     // records its calls — no real CommandChild (whose `kill(self)` consumes it
     // and whose exit is only observable over the plugin channel).
-    // -----------------------------------------------------------------------
 
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::Duration;
@@ -1135,8 +1105,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // F2: the INTERACTIVE end path must NOT block the caller.
+    // The INTERACTIVE end path must NOT block the caller.
     //
     // `end_agent_session` (UI Stop/Cancel) OFFLOADS the bounded drain to a
     // background task via `offload_drain`, so a wedged child can never freeze
@@ -1145,10 +1114,9 @@ mod tests {
     // forcing the drain down the full timeout→kill path, and prove:
     //   (1) `offload_drain` RETURNS before the drain completes (non-blocking),
     //   (2) the drain still eventually runs to completion with ordering
-    //       [SendEnd, Kill] (the INV-4 invariant is preserved off-thread).
+    //       [SendEnd, Kill] (the invariant is preserved off-thread).
     // Falsifiability: revert `offload_drain` to a `block_on` and assertion (1)
     // goes RED — the call would not return until after the kill fired.
-    // -----------------------------------------------------------------------
 
     /// A fake child that records calls AND fires a one-shot completion signal on
     /// `kill` (the terminal call of the timeout path), so a test can observe when
@@ -1211,7 +1179,7 @@ mod tests {
         );
 
         // (2) The offloaded drain still runs to completion on the background task,
-        // and the INV-4 ordering holds: SendEnd then (on timeout) Kill. Bound the
+        // and the ordering holds: SendEnd then (on timeout) Kill. Bound the
         // wait generously so a slow CI runtime does not flake.
         done_rx
             .recv_timeout(Duration::from_secs(5))
@@ -1225,8 +1193,7 @@ mod tests {
         drop(tx); // keep `tx` alive across the drain so the terminated rx never fired.
     }
 
-    // -----------------------------------------------------------------------
-    // Part D: the multimodal `user` wire line.
+    // The multimodal `user` wire line.
     //
     // `build_user_line` is the PURE builder for the `{type:"user", …}` stdin
     // line. Two load-bearing invariants:
@@ -1236,7 +1203,6 @@ mod tests {
     //     data}`, preserved in attach order (the multi-image numbering the
     //     sidecar relies on for `[Image #1] … [Image #N]` derives from this order).
     // Plus a serde field-name guard pinning the snake_case wire contract.
-    // -----------------------------------------------------------------------
 
     #[test]
     fn build_user_line_omits_images_key_when_none() {
@@ -1308,7 +1274,7 @@ mod tests {
 
     #[test]
     fn image_input_wire_rejects_camel_case() {
-        // WIRE CONTRACT GUARD (DA #4): ImageInput deserializes the BARE snake_case
+        // WIRE CONTRACT GUARD: ImageInput deserializes the BARE snake_case
         // shape the frontend sends (`{media_type, data}`) and MUST reject a
         // camelCase `mediaType` drift — otherwise a silent rename would break
         // deserialization without a compile error. Falsifiability: add

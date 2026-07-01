@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Phase 7 — self-contained shell tests for the embedded HOOK_SCRIPT (src-tauri/src/lib.rs).
+# Self-contained shell tests for the embedded HOOK_SCRIPT (src-tauri/src/lib.rs).
 #
 # WHAT THIS TESTS (end-to-end, against a SANDBOXED $HOME — never the real ~/.claude):
 #   1. Injection safety   — plan_text containing $(...), backticks, quotes, `rm -rf` is stored as
@@ -21,7 +21,6 @@ FAILS=0
 pass() { printf 'PASS: %s\n' "$1"; }
 fail() { printf 'FAIL: %s\n' "$1"; FAILS=$((FAILS + 1)); }
 
-# ── Extract HOOK_SCRIPT from lib.rs ──────────────────────────────────────────
 # The const is `const HOOK_SCRIPT: &str = r#"...."#;`. The opening line carries the shebang after
 # `r#"`; the body ends at the line that is exactly `"#;`. We emit everything between, restoring the
 # shebang on the first line.
@@ -53,9 +52,7 @@ fresh_home() {
   printf '%s' "$h"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CASE 1 — Injection safety
-# ─────────────────────────────────────────────────────────────────────────────
 case1() {
   local NAME="case1 injection-safety: plan_text stored as inert data, no command executed"
   local H; H="$(fresh_home)"
@@ -160,9 +157,7 @@ case1() {
   rm -rf "$H"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CASE 2 — Fast fallthrough when app not running (stale/absent heartbeat)
-# ─────────────────────────────────────────────────────────────────────────────
 case2() {
   local NAME="case2 fast-fallthrough: stale app.alive → exit 0 quickly, no request, no stdout"
   local H; H="$(fresh_home)"
@@ -199,9 +194,7 @@ case2() {
   rm -rf "$H"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CASE 3 — jq-missing fallthrough (fail OPEN)
-# ─────────────────────────────────────────────────────────────────────────────
 # APPROACH: the hook's FIRST functional line is `command -v jq >/dev/null 2>&1 || exit 0`. To make
 # a REAL end-to-end run see "no jq", we run it under a minimal PATH containing ONLY the coreutils
 # the hook needs (cat/date/stat/mkdir/printf/sleep/jot...) via symlinks — but deliberately WITHOUT
@@ -259,10 +252,8 @@ case3() {
   rm -rf "$H"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CASE 4 — Mid-review quit: app dies AFTER the request is written → hook falls
 #          through within ~10s (NOT the full 570s deadline), emitting NO decision.
-# ─────────────────────────────────────────────────────────────────────────────
 # The app is live when the hook starts (so it writes a request and begins polling).
 # Once the request file appears we remove app.alive to simulate the app quitting.
 # The in-loop staleness re-check must then fire (stat fails → MTIME=0 → huge age)

@@ -60,9 +60,7 @@ run_hook() {
   bash "$HOOK" < "$1" > "$2" 2>"$2.err"
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CASE A — app-owned tree: state.json present → byte-identical .plan-tree/
-# ─────────────────────────────────────────────────────────────────────────────
 caseA() {
   local NAME="caseA app-owned: state.json present → exit 0, .plan-tree/ byte-identical"
   local D="$BASE/app-owned"
@@ -104,9 +102,7 @@ caseA() {
   return 0
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CASE B — CLI tree, master-shaped plan: still writes master.md as before
-# ─────────────────────────────────────────────────────────────────────────────
 caseB() {
   local NAME="caseB cli-owned: no state.json + master-shaped plan → master.md written"
   local D="$BASE/cli-master"
@@ -140,9 +136,7 @@ body"
   return 0
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CASE C — CLI tree, ambiguous plan: still caches to .pending-*.md as before
-# ─────────────────────────────────────────────────────────────────────────────
 caseC() {
   local NAME="caseC cli-owned: no state.json + ambiguous plan → .pending-*.md written"
   local D="$BASE/cli-pending"
