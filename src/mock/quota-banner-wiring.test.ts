@@ -1,4 +1,4 @@
-// Mock-mode PHASE 5 test — the quota auto-resume banner through the REAL index.ts observer wiring.
+// Mock-mode test — the quota auto-resume banner through the REAL index.ts observer wiring.
 //
 // Boots the REAL main.ts via DOMContentLoaded against the mock Tauri shims + the mock fake orchestrator
 // (installed FIRST so getOrchestrator() returns it and index.ts subscribes its REAL quota observer to
@@ -133,7 +133,7 @@ describe("quota banner — REAL index.ts wiring via the mock observer", () => {
     expect((banners[0] as HTMLElement).dataset.state).toBe("exhausted");
   });
 
-  // ---- CROSS-BOUNDARY: banner + desktop notification together, through the REAL wiring ----------
+  // CROSS-BOUNDARY: banner + desktop notification together, through the REAL wiring
   //
   // These drive the REAL index.ts quota observer (subscribed to the fake orchestrator handle) which
   // BOTH renders the banner into #conversation-stream AND calls the REAL notify.ts → the recording

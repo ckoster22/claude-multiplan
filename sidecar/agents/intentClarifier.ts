@@ -1,6 +1,5 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 
-// --- intent-clarifier -------------------------------------------------------
 // Frontmatter: model: opus → kept on the capable model (intent steel-manning +
 // optional visual-prototype generation warrant the strong model).
 export const intentClarifier: AgentDefinition = {

@@ -1,4 +1,4 @@
-// Conversation domain — history reconstruction tests (Phase 1, falsifiable).
+// Conversation domain — history reconstruction tests (falsifiable).
 //
 // These assert the PURE `parseTranscript` transform (raw CLI jsonl records -> AgentStream
 // vocabulary) against the frozen types.ts shapes, and end-to-end through the real ConversationModel

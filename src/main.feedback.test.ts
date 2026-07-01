@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
 // the latest-wins count-request guard in refreshCommentCount.
 //
 // refreshCommentCount is fired un-awaited from open/reload/onCommentCountChanged; concurrent or
@@ -11,7 +10,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //   (b) same-plan A→A bursty reload: the EARLIER request resolving last must NOT win — the newer
 //       count must stand.
 // Falsify by dropping the `seq !== countReqSeq` bail → both go red (the stale value lands).
-// ---------------------------------------------------------------------------------------------
 
 type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
 function deferred<T>(): Deferred<T> {

@@ -12,7 +12,7 @@
 //
 // FALSIFIABILITY: if the fixture lines were empty (or the stem matched found:false), parseTranscript
 // would only synthesize the SystemInit (not a renderable node) and derive().nodes.length would be 0 —
-// the assertions below would fail. (Verified by temporarily emptying CHOMPY_LINES — see report.)
+// the assertions below would fail.
 
 import { describe, it, expect } from "vitest";
 import { invoke } from "./core";

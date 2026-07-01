@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
-// review2 c5 — LIVE-PATH test for the in-process "Request changes" review bar.
+// LIVE-PATH test for the in-process "Request changes" review bar.
 //
 // THE BUG THIS CATCHES (the "mocked test hid the real bug" trap): the original c5 tests asserted
 // `applyReviewBarState(...)` IN ISOLATION, which masked a real main.ts derivation bug — the mock-ANIMATE
@@ -16,7 +15,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // the RENDERED bar, not a pure helper in isolation. RED PROOF: omitting __setOpenPathForMock reproduces
 // the live summary-mode bug (label "1 plan awaiting review" + "Submit feedback"), captured by the
 // dedicated "RED proof" test below.
-// ---------------------------------------------------------------------------------------------
 
 const H = vi.hoisted(() => ({
   invokeCalls: [] as Array<{ cmd: string; args: Record<string, unknown> }>,

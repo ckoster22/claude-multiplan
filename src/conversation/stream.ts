@@ -299,7 +299,7 @@ export type ModelEvent =
       id: string;
     }
   | {
-      // The quota-banner singleton (Phase 5). Appended/updated by the orchestrator observer wiring on
+      // The quota-banner singleton. Appended/updated by the orchestrator observer wiring on
       // onQuotaPaused/onQuotaExhausted; cleared on onQuotaResumed. There is at most ONE in the event
       // list at a time — the model methods (appendQuotaBanner / updateQuotaBanner / clearQuotaBanner)
       // mutate THIS single accumulated event rather than pushing a second, so a pause-then-exhaust
@@ -907,8 +907,6 @@ export class ConversationModel {
     return { nodes: topNodes, permissionMode, complete, working };
   }
 }
-
-// ---- internal type guards / helpers --------------------------------------------------------
 
 function seqOf(ev: ModelEvent): number {
   return ev.seq;

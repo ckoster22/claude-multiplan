@@ -5,7 +5,7 @@
 // module is the storyboard-analogue for annotations — a SEPARATE, DOM-free module (mirroring the PURE
 // style of storyboard.ts's projectSurfaceState / projectPulseSet) so it is unit-testable without a
 // player. The player (index.ts) feeds an in-memory `AnnotationDoc` and projects the overlay as a pure
-// function of (doc, T) each paint; persistence + author UI live in later phases.
+// function of (doc, T) each paint.
 //
 // COORDINATES: stroke points are NORMALIZED to the viewport (0..1) plus the author's viewport size, so
 // replay/capture at that same size reproduces the markup faithfully over the same app layout. `denorm`

@@ -45,8 +45,6 @@ import { KNOBS, seedKnobDefaults, type Knob } from "./knobs";
 import { ConversationModel } from "../conversation/stream";
 import { renderTree } from "../conversation/render";
 
-// ---- shared helpers --------------------------------------------------------------------------
-
 async function flush(n = 30): Promise<void> {
   for (let i = 0; i < n; i++) await Promise.resolve();
 }
@@ -78,8 +76,8 @@ function knob(id: string): Knob {
 }
 
 // The SAME complete index.html main.ts's DOMContentLoaded wiring expects (sidebar, reader tabs, the full
-// review bar incl. prototype controls, the conversation pane, composer, resume banner, titlebar). Lifted
-// verbatim from reset.test.ts's bootDom so the live wiring matches the runtime exactly.
+// review bar incl. prototype controls, the conversation pane, composer, resume banner, titlebar), so the
+// live wiring matches the runtime exactly.
 function bootDom(): void {
   document.body.innerHTML = `
     <div class="titlebar"><div class="titlebar-controls">
@@ -154,7 +152,7 @@ beforeEach(() => {
   document.body.innerHTML = "";
   clearMockBuffer();
   resetState();
-  // Clear any persisted knob stash so the Fix-4 persistence tests don't leak across cases.
+  // Clear any persisted knob stash so the persistence tests don't leak across cases.
   try {
     window.sessionStorage?.clear();
   } catch {
@@ -170,9 +168,7 @@ beforeEach(() => {
   seedKnobDefaults();
 });
 
-// ---------------------------------------------------------------------------------------------
 // QUESTION CARD knobs — the four composite knobs each re-derive the whole card via driveQuestionCard.
-// ---------------------------------------------------------------------------------------------
 describe("knob.apply — question card knobs reflect their value (not the default)", () => {
   it("question.count apply(3) renders 3 question sections (default is 2)", async () => {
     bootDom();
@@ -249,9 +245,7 @@ describe("knob.apply — question card knobs reflect their value (not the defaul
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // REVIEW BAR knobs — protoRound (label) + comments (count label + submit-enabled).
-// ---------------------------------------------------------------------------------------------
 describe("knob.apply — review bar knobs reflect their value (not the default)", () => {
   it("review.protoRound apply('3') renders the bar label 'round 3' (default round 1)", async () => {
     bootDom();
@@ -301,12 +295,10 @@ describe("knob.apply — review bar knobs reflect their value (not the default)"
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // conv.session="none" routes the "__none" sentinel through the reload seam → a genuinely empty
 // LIVE conversation pane. Asserted via the fresh-subscriber (= post-reload model) pattern, the same way
 // reset.test.ts proves scene-jump cleanliness: after the jump the agent buffers are empty, so the model
 // a real reload would build renders NOTHING.
-// ---------------------------------------------------------------------------------------------
 describe("conv.session=none — clears the live conversation to a genuinely empty pane (reload seam)", () => {
   // NOTE on the LIVE reload routing: in the real app conv.session="none" routes through
   // routeConvJump({kind:"none"}) → location.replace(?mockjump=__none) so initConversation rebuilds a
@@ -364,11 +356,9 @@ describe("conv.session=none — clears the live conversation to a genuinely empt
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // the knob store (+ commentCount) round-trips through sessionStorage across a conversation-jump
 // reload: persistKnobsToSession() before location.replace, restoreKnobsFromSession() on boot. Tested at
 // the state-module seam (jsdom has window.sessionStorage but cannot actually reload).
-// ---------------------------------------------------------------------------------------------
 describe("knob store persistence across a conversation-jump reload (sessionStorage)", () => {
   it("persist → resetState (simulates the reload's fresh state) → restore brings the knobs back", () => {
     // Mutate the store the way the deck would after a user changes some non-global knobs.

@@ -7,14 +7,12 @@
 // DOM, the orchestrator wiring, and the Rust/sidecar surface all live elsewhere. Dependency-injected
 // storage keeps it unit-testable in jsdom. Mirrors src/model-picker.ts's settings discipline.
 
-// localStorage key for the persisted auto-resume choice.
 export const AUTO_RESUME_KEY = "plan-reader-auto-resume";
 
 // The two options, in display order. `as const` makes this the source of truth for both the runtime
 // membership check and the AutoResumeOption union.
 export const AUTO_RESUME_OPTIONS = ["off", "once"] as const;
 
-// Union of the two option ids.
 export type AutoResumeOption = (typeof AUTO_RESUME_OPTIONS)[number];
 
 // The option used when nothing valid is persisted. "Once" is the UI DEFAULT (a brand-new user gets
@@ -35,7 +33,6 @@ const OPTION_BUDGET: Readonly<Record<AutoResumeOption, number>> = {
   once: 1,
 };
 
-// Type guard: is `value` one of the known option ids?
 function isAutoResumeOption(value: unknown): value is AutoResumeOption {
   return (
     typeof value === "string" &&
@@ -82,7 +79,6 @@ export function initAutoResumeSetting(
 ): void {
   if (!select) return;
 
-  // Reflect the persisted choice (default when nothing valid is stored).
   select.value = readStoredAutoResume(storage);
 
   select.addEventListener("change", () => {

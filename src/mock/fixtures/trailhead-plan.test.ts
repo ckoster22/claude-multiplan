@@ -82,7 +82,7 @@ describe("trailhead-plan fixture — master doc renders a mermaid placeholder", 
 });
 
 describe("trailhead-plan fixture — revised master (V2) + comment anchor quotes", () => {
-  // The three comment quotes the Slice-06 storyboard anchors on the V1 master. Each MUST be verbatim V1
+  // The three comment quotes the storyboard anchors on the V1 master. Each MUST be verbatim V1
   // PROSE (outside the ```mermaid fence) so applyComments anchors it. Kept in sync with the storyboard's
   // TRAILHEAD_COMMENT_1/2/3 quotes.
   const ANCHOR_QUOTES = [
@@ -93,7 +93,7 @@ describe("trailhead-plan fixture — revised master (V2) + comment anchor quotes
 
   it("the V2 doc VISIBLY differs from V1 and is served at TRAILHEAD_MASTER_V2_PATH", () => {
     expect(TRAILHEAD_MASTER_V2_DOC).not.toBe(TRAILHEAD_MASTER_DOC);
-    // The visible diff: a "Difficulty badge" subsection + a "larger trail cards" note (Slice-04 feedback).
+    // The visible diff: a "Difficulty badge" subsection + a "larger trail cards" note.
     expect(TRAILHEAD_MASTER_V2_DOC).toContain("## Difficulty badge");
     expect(TRAILHEAD_MASTER_V2_DOC).toContain("larger trail cards");
     // V2 is served by the mock read_plan_contents but is NOT a sidebar row.

@@ -69,8 +69,8 @@ describe("defaultDeps().startSession forwards the resolved picker model/effort t
   });
 
   it("falls back to the default preset (Opus 4.8 / high) when nothing is persisted", async () => {
-    // Opus's static effort was superseded by the global plan-reader-opus-effort
-    // key (default "high"); an empty store now resolves Opus → effort "high".
+    // Opus's effort resolves from the global plan-reader-opus-effort key (default
+    // "high"); an empty store resolves Opus → effort "high".
     const deps = defaultDeps();
     await deps.startSession({ cwd: "/tmp/proj", permissionMode: "plan" });
 

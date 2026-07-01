@@ -1,9 +1,7 @@
 // Conversation domain — pure stream-model tests (falsifiable).
 //
 // These assert the model against ONLY the frozen vocabulary in CONTRACT.md. We do NOT assert
-// any Skill or subagent-NAME shape (unfrozen — deferred to live smoke). Each key behavior was
-// confirmed red-then-green by inverting it during development (mismatch ids, drop
-// parent_tool_use_id, etc.); see 02-summary.md for the falsification log.
+// any Skill or subagent-NAME shape (unfrozen — deferred to live smoke).
 
 import { describe, it, expect } from "vitest";
 import { ConversationModel } from "./stream";
@@ -18,8 +16,6 @@ import type {
   ToolPermissionRequested,
   SubagentStarted,
 } from "./types";
-
-// ---- frozen-shape fixture builders (snake_case, field-for-field from CONTRACT.md) ----------
 
 function sysInit(over: Partial<SystemInit> = {}): SystemInit {
   return {
@@ -183,7 +179,7 @@ describe("ConversationModel — a tool still running at turn end is interrupted,
     expect(tool!.type === "tool" && tool!.status).toBe("done");
   });
 
-  // ---- MULTI-TURN: the model is session-scoped (persists across the orchestrator's many sequential
+  // MULTI-TURN: the model is session-scoped (persists across the orchestrator's many sequential
   // sendMessage turns; reset() has no non-test callers). A `result` from turn 1 sets `complete` and it
   // never resets, so an UNSCOPED demotion would wrongly flip a turn-2 tool that is still legitimately
   // running. The demotion MUST be scoped to tools that precede the LATEST terminal frame (by seq).
@@ -228,12 +224,12 @@ describe("ConversationModel — the turn-end demotion respects the session-resum
 
   it("CROSS-RESUME (manual end): a tool running after a resume (fresh system_init + reset wire seq) stays 'running'", () => {
     const m = new ConversationModel();
-    // --- Segment 0 (first session): t1 is abandoned, then the session ends. The agent-exit carries the
+    // Segment 0 (first session): t1 is abandoned, then the session ends. The agent-exit carries the
     // controller's synthSeq (~1e9), exactly as index.ts stamps it (appendExit(..., synthSeq++)).
     m.appendStream(sysInit({ seq: 0 }));
     m.appendStream(toolUse(1, "t1", "Read")); // never receives a tool_result
     m.appendExit({ code: 0 }, 1_000_000_000); // session end at synthSeq
-    // --- Segment 1 (resume): a fresh sidecar emits a new system_init and RESETS its wire seq to 0.
+    // Segment 1 (resume): a fresh sidecar emits a new system_init and RESETS its wire seq to 0.
     m.appendStream(sysInit({ seq: 0 }));
     m.appendStream(toolUse(1, "t2", "Bash")); // genuinely running in the resumed session
     const t2 = m.derive().nodes.find((n) => n.type === "tool" && n.id === "t2");
@@ -257,13 +253,13 @@ describe("ConversationModel — the turn-end demotion respects the session-resum
 
   it("CROSS-RESUME (quota / clean prior turn): after a result-completed segment + resume, a new running tool stays 'running'", () => {
     const m = new ConversationModel();
-    // --- Segment 0: a turn completes cleanly (result). NOTE the result's seq (3) is a SMALL number —
+    // Segment 0: a turn completes cleanly (result). NOTE the result's seq (3) is a SMALL number —
     // the resumed wire seqs fall below it, so even without the synthSeq exit the naive gate misfires.
     m.appendStream(sysInit({ seq: 0 }));
     m.appendStream(toolUse(1, "t1", "Read"));
     m.appendStream(toolResult(2, "t1", "ok"));
     m.appendStream(result(3));
-    // --- Segment 1 (resume after the quota refreshed / a follow-up Send): fresh system_init, seq reset.
+    // Segment 1 (resume after the quota refreshed / a follow-up Send): fresh system_init, seq reset.
     m.appendStream(sysInit({ seq: 0 }));
     m.appendStream(toolUse(1, "t2", "Bash")); // running in the resumed segment
     const t2 = m.derive().nodes.find((n) => n.type === "tool" && n.id === "t2");
@@ -441,8 +437,6 @@ describe("ConversationModel — markers, denials, errors, exit", () => {
   });
 });
 
-// ---- PART B: status kind + working indicator (pure model) -------------------------------------
-
 import type { StatusMsg } from "./types";
 import { WORKING_SEED_LABEL } from "./stream";
 
@@ -511,8 +505,6 @@ describe("ConversationModel — status kind drives the working indicator (label 
   });
 });
 
-// ---- PART B2: waiting-for-input override (the agent is blocked on the user) --------------------
-
 import { WAITING_INPUT_LABEL } from "./stream";
 
 describe("ConversationModel — a pending interactive hold overrides the working label", () => {
@@ -522,7 +514,7 @@ describe("ConversationModel — a pending interactive hold overrides the working
     m.appendStream(statusMsg(2, "thinking…"));
     m.appendPermissionRequest(permReq(3, "p1", "ExitPlanMode"));
     // FALSIFY: drop the pendingInteractive override in the working derivation → the stale
-    // "thinking…" label survives the hold → RED. (Confirmed red 2026-06-12.)
+    // "thinking…" label survives the hold → RED.
     expect(m.derive().working).toEqual({ label: WAITING_INPUT_LABEL });
   });
 
@@ -676,8 +668,6 @@ describe("ConversationModel — appendUserMessage echoes a user node in stream o
   });
 });
 
-// ---- PART C: quota_exceeded is INERT in the reducer (Phase 2) ----------------------------------
-//
 // The non-fatal `quota_exceeded` agent-stream frame carries the orchestrator's reset signal but the
 // PURE reducer treats it as a no-op: no timeline node, no `complete` flip, no change to the working/
 // active indicator state. (The waiting banner + auto-resume are owned by the orchestrator observer

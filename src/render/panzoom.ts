@@ -196,10 +196,6 @@ export function svgContentSize(svg: SVGElement | null): {
   return { w: 0, h: 0 };
 }
 
-// ---------------------------------------------------------------------------
-// DOM adapter
-// ---------------------------------------------------------------------------
-
 export interface PanZoomOptions {
   min?: number;
   max?: number;
@@ -339,7 +335,7 @@ export function attachPanZoom(
     }
   }
 
-  // ---- wheel = zoom toward cursor (passive:false so preventDefault works) ----
+  // wheel = zoom toward cursor (passive:false so preventDefault works)
   function onWheel(e: WheelEvent): void {
     e.preventDefault();
     const r = viewportEl.getBoundingClientRect();
@@ -347,7 +343,7 @@ export function attachPanZoom(
     zoomAtViewport(factor, e.clientX - r.left, e.clientY - r.top);
   }
 
-  // ---- drag = pan (window listeners only during an active drag) ----
+  // drag = pan (window listeners only during an active drag)
   let drag: { px: number; py: number; ox: number; oy: number } | null = null;
 
   function onWindowMove(e: MouseEvent): void {

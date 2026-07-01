@@ -1,4 +1,4 @@
-// Conversation domain — past-conversation reconstruction (Phase 1).
+// Conversation domain — past-conversation reconstruction.
 //
 // PURE transform: raw Claude Code CLI transcript jsonl records -> the app's `AgentStream`
 // vocabulary (types.ts is the SINGLE SOURCE OF TRUTH for those frame shapes), replayed through the
@@ -12,8 +12,8 @@
 // `ConversationModel.appendUserMessageAt(text, seq)` — i.e. by their TRUE file position rather than
 // the live `lastWireSeq + 0.5` rule.
 //
-// Phase 1 scope: top-level conversation only. Every `parent_tool_use_id` is null; no ResultMsg is
-// fabricated (no turn/cost totals). Subagent nesting is deferred to Phase 3.
+// Scope: top-level conversation only. Every `parent_tool_use_id` is null; no ResultMsg is
+// fabricated (no turn/cost totals).
 
 import type { AgentStream } from "./types";
 import type { ConversationModel } from "./stream";
@@ -37,7 +37,7 @@ export interface TranscriptMeta {
   sessionId: string | null;
 }
 
-// ---- raw wire shapes (intentionally loose — this is the un-typed CLI jsonl layer) --------------
+// raw wire shapes (intentionally loose — this is the un-typed CLI jsonl layer)
 
 interface RawBlock {
   type?: unknown;
@@ -249,7 +249,7 @@ export function parseTranscript(lines: string[], meta: TranscriptMeta): HistoryE
         });
         continue;
       }
-      // Any other block type (thinking, image, etc.) is ignored in Phase 1.
+      // Any other block type (thinking, image, etc.) is ignored.
     }
   }
 

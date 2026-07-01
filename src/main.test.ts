@@ -285,8 +285,6 @@ describe("renderSidebar — collapse vs open click wiring", () => {
   });
 });
 
-// ---- Tabbed left panel + table of contents -----------------------------------------------
-
 // Mount the full sidebar DOM and fire DOMContentLoaded so main.ts's load block runs and binds
 // the module-level handles (readerScrollEl/readingPaneEl/tocListEl + tab wiring). buildToc's
 // click handler scrolls via those module globals, so they must be bound for the click test.
@@ -411,8 +409,6 @@ describe("buildToc — does NOT change the active tab (tab-state preservation)",
   });
 });
 
-// ---- Sidebar filter — wired through the real DOMContentLoaded setup ---------------
-
 // Boot the full sidebar DOM INCLUDING the filter control + count, with `list_plans` returning
 // `records`. Fires DOMContentLoaded so main.ts binds the module handles + filter listeners and
 // runs the initial refreshList. Returns once the initial async refresh microtasks have flushed.
@@ -519,8 +515,6 @@ describe("filter wiring — empty-state + clear", () => {
   });
 });
 
-// ---- a late-arriving cwd re-runs the filter (match + highlight) -------------
-//
 // A plan's cwd resolves AFTER the initial list render (the backend cache misses; resolve_cwds
 // returns it on a follow-up round-trip). patchAllCwds() syncs the resolved DISPLAY cwd onto the
 // in-memory record AND re-runs applyFilterAndRender(), so a filter query that only matches the
@@ -611,8 +605,6 @@ describe("renderSidebar — loud orphan guard", () => {
   });
 });
 
-// ---- Recursive nesting from nn_path prefixes (Phase 3) -------------------------------------
-//
 // `arrange_plans` returns each tree's subs PRE-ORDERED depth-first on the dotted id; visual
 // depth is built HERE from nn_path prefixes. A sub whose nn_path extends a preceding sub's
 // nn_path by exactly one segment nests inside that sub's `.children`; a sub with nested
@@ -776,8 +768,6 @@ describe("renderSidebar — legacy flat tree DOM is byte-identical (golden pin)"
   });
 });
 
-// ---- Bug A fix: the `.plan.placeholder` live-run sidebar row ----------------------------------
-
 describe("renderSidebar — live-run placeholder row", () => {
   const ph = { treeId: "tree-live", label: "New plan — drafting…", selected: true };
 
@@ -878,8 +868,6 @@ describe("renderSidebar — live-run placeholder row", () => {
   });
 });
 
-// ---- ONE shared placeholder-visibility predicate for both render sites ------------------
-
 describe("placeholderVisible — the single shared predicate", () => {
   it("true when set and NO record carries its tree_id; false when one does; false when null", () => {
     const ph = { treeId: "tree-live" };
@@ -911,8 +899,6 @@ describe("applyFilterAndRender — .filter-empty branch renders the placeholder 
   });
 });
 
-// ---- the agent-exit × placeholder treeId race — pure truth table ------------------------
-
 describe("shouldClearPlaceholderOnExit — clears ONLY a placeholder no ACTIVE orchestration claims", () => {
   // Falsifiability (verified): inverting the treeId comparison (=== instead of !==) flips (a)
   // vs (b)/(c) → all three go RED.
@@ -936,8 +922,6 @@ describe("shouldClearPlaceholderOnExit — clears ONLY a placeholder no ACTIVE o
   });
 });
 
-// ---- the Affordance precedence (prototype > acceptance > review > resume) -----------
-
 describe("computeAffordance — prototype > acceptance > review > resume (at most ONE active)", () => {
   // Falsifiability (verified): reordering any pair of branches in computeAffordance flips the matching
   // precedence assertion → RED.
@@ -957,8 +941,6 @@ describe("computeAffordance — prototype > acceptance > review > resume (at mos
     expect(computeAffordance({ prototype: false, acceptance: false, review: false, resume: false })).toBe("none");
   });
 });
-
-// ---- Bug B fix: the onActivity conversation-tab flip suppression -------------------------------
 
 describe("suppressConversationFlip — keyed STRICTLY on pendingApproval", () => {
   // A minimal gate-shaped object; the helper only null-checks the field, never reads into it.
@@ -985,8 +967,6 @@ describe("suppressConversationFlip — keyed STRICTLY on pendingApproval", () =>
   });
 });
 
-// ---- reading-pane render wiring (cooperative cancellation + popover invalidate) -
-//
 // These pin the PRODUCTION CALL SITES that activate two render-core fixes:
 //   settle(pane, _, isCurrent) must receive a predicate tied to the LIVE renderGuard, so an
 //        overlapping open/reload can cancel a superseded mermaid render mid-flight. (The cancellation

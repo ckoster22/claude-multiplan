@@ -118,8 +118,6 @@ export function initThemeToggle(
   });
 }
 
-// ---- Reading-pane text-size control (A− / A+) ----
-//
 // The whole reading pane scales from a single CSS custom property
 // (--reading-font-size on :root); every .md font-size is `em`-relative to it
 // (src/styles.css). The A−/A+ titlebar buttons step that value through a FIXED
@@ -131,7 +129,6 @@ export function initThemeToggle(
 
 // The fixed text-size ladder (px). Mirrored in index.html's anti-FOUC script.
 export const TEXT_SIZE_LADDER: readonly number[] = [13, 14, 15, 17, 19, 21];
-// localStorage key for the persisted reading-pane text size.
 export const TEXT_SIZE_KEY = "plan-reader-text-size";
 // Default (the original hard-coded .md base) used when nothing is persisted.
 export const DEFAULT_TEXT_SIZE = 15;

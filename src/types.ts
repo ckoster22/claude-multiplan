@@ -1,4 +1,4 @@
-// ---- Shared frontend types (cycle-free: imports from NEITHER main.ts NOR resolve.ts) ----
+// Shared frontend types (cycle-free: imports from NEITHER main.ts NOR resolve.ts).
 //
 // `PlanRecord` mirrors the Rust `PlanRecord` wire shape (see CONTRACT.md). `SidebarCtx` is the
 // pure rendering context `renderSidebar` takes. Two of `PlanRecord`'s string fields are BRANDED
@@ -6,7 +6,6 @@
 // the brands turn two bug classes (passing a raw path/stem, or swapping the two) into compile
 // errors. Brands are erased at compile time, so emitted JS is unchanged.
 
-// ---- Branded string types ----
 declare const brand: unique symbol;
 type Brand<B extends string> = string & { readonly [brand]: B };
 export type AbsPath = Brand<"AbsPath">;
@@ -14,14 +13,13 @@ export type Stem = Brand<"Stem">;
 export const asAbsPath = (s: string): AbsPath => s as AbsPath;
 export const asStem = (s: string): Stem => s as Stem;
 
-// ---- Frozen contract type (mirrors Rust PlanRecord in CONTRACT.md) ----
 export interface PlanRecord {
   absolute_path: AbsPath;
   filename_stem: Stem;
   mtime_ms: number;
   cwd: string | null;
   unread: boolean;
-  // ---- Nested-hierarchy fields. Records arrive PRE-ORDERED. ----
+  // Nested-hierarchy fields. Records arrive PRE-ORDERED.
   flavor: "master" | "sub" | "standalone";
   tree_id: string | null;
   nn: number | null;
@@ -37,8 +35,6 @@ export interface PlanRecord {
   h1s: string[];
 }
 
-// ---- comment record (mirrors Rust CommentRecord in CONTRACT.md) ---------------
-//
 // A single persisted comment for a plan. FROZEN 6-key wire shape (see CONTRACT.md §"Sub-Plan
 // 02 additions" / §"Highlight + comment with quoted-text anchoring"). `block_line` is
 // `number | null` (Rust `Option<i64>`, serde `null`), mirroring
@@ -55,8 +51,6 @@ export interface CommentRecord {
   id: number; // collision-free id = max(existing ids in this plan)+1; also the span's data-c value
 }
 
-// ---- cwd three-state read model ----------------------------------------------------------
-//
 // `cwdByStem: Map<Stem, string | null>` encodes three states via map-presence; this union is
 // the single READ model for them and `cwdState` is the single interpreter. All presence/null
 // interpretation MUST funnel through `cwdState`/`setCwd` — no scattered `.has()`/`?? null`/
@@ -82,8 +76,6 @@ export function setCwd(map: Map<Stem, string | null>, stem: Stem, value: string 
   map.set(stem, value);
 }
 
-// ---- Plan Review (ExitPlanMode hook) wire shapes (mirror the Rust structs / event payloads) ----
-//
 // snake_case keys MIRROR THE BACKEND'S SERIALIZED JSON exactly (same convention as `PlanRecord` /
 // `CommentRecord` above): these come straight off `invoke`/event payloads, so the TS keys must
 // equal the Rust serde keys 1:1 — no camelCase conversion. See CONTRACT.md §"Plan Review
@@ -132,7 +124,6 @@ export interface SidebarCtx {
   subCollapse: Map<string, boolean>;
   onOpen: (path: AbsPath, stem: Stem) => void;
   onToggleCollapse: (treeId: string, nextCollapsed: boolean) => void;
-  // ---- Live-run placeholder (additive — see CONTRACT.md §".plan.placeholder") ----------------
   // A running agent conversation has NO sidebar row until its plan file is written (and list_plans
   // can lag the write). When set AND no rendered record carries `tree_id === placeholder.treeId`,
   // renderSidebar prepends a `.plan.placeholder` row (data-tree-id, NO data-path) as the FIRST

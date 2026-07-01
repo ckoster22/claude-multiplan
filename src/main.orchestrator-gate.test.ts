@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
 // the approval-gate controller ↔ frozen OrchestratorHandle wiring (the live app's
 // consumer side). main.ts subscribes to the SHARED orchestrator's observer; when a sub-plan reaches
 // SUB_DRAFTED (awaiting approval) the controller opens the pointed-at plan file, flips to the Plan tab,
@@ -11,7 +10,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // SUB_DRAFTED gate via the handle's own dispatch funnel — exactly mirroring orchestrator.test.ts. The
 // fakeDeps record every effect (resolvePermission / setMode) so the button routing is asserted at the
 // command level. The ./render facade + the conversation facade are REAL (mirroring main.inproc-review).
-// ---------------------------------------------------------------------------------------------
 
 type Rec = { quote: string; comment: string; block_line: number | null; block_end_line: number | null; occurrence: number; id: number };
 
@@ -70,19 +68,18 @@ import {
   type PlanTreeEvent2,
 } from "./conversation/orchestrator";
 
-// "stage/phase" of the root node — the gen-2 spelling of the old master.phase assertions.
+// "stage/phase" of the root node.
 function rootPhase(h: OrchestratorHandle): string {
   const r = h.snapshot().root;
   return `${r.state.stage}/${r.state.phase}`;
 }
 
-// The active node's pathKey ("" = root) — the gen-2 spelling of the pointer assertions.
+// The active node's pathKey ("" = root).
 function activeKey(h: OrchestratorHandle): string | null {
   const p = h.snapshot().activePath;
   return p === null ? null : p.map((nn) => String(nn).padStart(2, "0")).join(".");
 }
 
-// ---- recording fake OrchestratorDeps (mirror orchestrator.test.ts) --------------------------
 interface Recorded {
   resolvePermission: Array<{ id: string; allow: boolean; message?: string }>;
   setMode: string[];
@@ -292,9 +289,6 @@ beforeEach(() => {
   __resetOrchestratorForTest();
 });
 
-// ---------------------------------------------------------------------------------------------
-// GATE OPENS — SUB_DRAFTED → bar in in-process mode (Approve & Build + "Request changes").
-// ---------------------------------------------------------------------------------------------
 describe("orchestrator gate — onAwaitingApproval opens the bar in in-process mode", () => {
   it("a SUB_DRAFTED gate opens the pointed-at plan, flips to Plan tab, and shows the in-process bar", async () => {
     const planPath = "/p/01.md";
@@ -322,14 +316,12 @@ describe("orchestrator gate — onAwaitingApproval opens the bar in in-process m
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // the placeholder stays the ACTIVE stand-in through the gate handler when the gate
 // plan's row is missing. The old ordering cleared placeholderSelected BEFORE refreshList ran
 // (and openPath only updates inside openPlan afterwards), so the intermediate render — which is
 // also the FINAL sidebar render here, no later re-render occurs — had ZERO active rows.
 // Falsifiability (verified): restoring `placeholderSelected = false` to before refreshList makes
 // the .active assertions go RED.
-// ---------------------------------------------------------------------------------------------
 describe("orchestrator gate — placeholder stays the active stand-in when the gate row is missing", () => {
   it("gate arrives while list_plans has NO row for its plan → the placeholder is the single .active row", async () => {
     H.rows = []; // list_plans lags the plan write — no [data-path] row exists for the gate plan
@@ -352,9 +344,6 @@ describe("orchestrator gate — placeholder stays the active stand-in when the g
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// APPROVE — #review-approve routes into the handle: allow + acceptEdits + Conversation tab.
-// ---------------------------------------------------------------------------------------------
 describe("orchestrator gate — #review-approve routes approve(nn) into the frozen handle", () => {
   it("one click → resolvePermission(allow) + setMode('acceptEdits') recorded; Conversation tab shown", async () => {
     const planPath = "/p/01.md";
@@ -384,10 +373,6 @@ describe("orchestrator gate — #review-approve routes approve(nn) into the froz
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// REQUEST CHANGES — add a comment → #review-submit routes requestChanges(nn, feedback): deny with
-// feedback, pointer unchanged, redraftCount === 1.
-// ---------------------------------------------------------------------------------------------
 describe("orchestrator gate — #review-submit routes requestChanges(nn, feedback) into the handle", () => {
   it("with >=1 comment → resolvePermission(deny, feedback); pointer unchanged; redraftCount === 1", async () => {
     const planPath = "/p/01.md";
@@ -427,14 +412,12 @@ describe("orchestrator gate — #review-submit routes requestChanges(nn, feedbac
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// GEN-2 ROOT decomposition gate routing. The root gate is the UNIFIED ApprovalGate2 (kind
+// ROOT decomposition gate routing. The root gate is the UNIFIED ApprovalGate2 (kind
 // "decomposition", path []) carried in pendingApproval like every other gate — the gen-1 master-
 // phase keying / viewingMasterGate / approveMaster surface is gone. Both review handlers route
 // through the ONE viewingGate() derivation into approve(pathKey)/requestChanges(pathKey); the
 // decomposition-vs-leaf branching lives INSIDE the orchestrator (pinned by the invariant tests in
 // orchestrator-gate-invariants.test.ts).
-// ---------------------------------------------------------------------------------------------
 describe("root gate — #review-approve routes approve(\"\") (the ROOT pathKey) into the handle", () => {
   it("at the root decomposition gate, a click calls approve(\"\") and fires the decomposition branch", async () => {
     const masterPath = "/p/null.md"; // writeAgentPlan(_,_,null) → `/p/null.md`
@@ -546,13 +529,11 @@ describe("root gate vs leaf gate — a leaf gate routes approve with the CHILD p
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // IDLE-WAITING HINT — the visual-prototype gate is TURN-COMPLETION signaled: the intent turn ends
 // with a `result` frame, the conversation session goes idle, and the facade's working indicator
 // would normally hide while the app is blocked on the user's approve/refine. main.ts's onSnapshot
 // propagates `pendingPrototype != null` to conversationHandle.setIdleWaitingHint so the indicator
 // shows "Waiting for your input…" at idle, and self-clears when the gate resolves.
-// ---------------------------------------------------------------------------------------------
 describe("orchestrator gate — pendingPrototype drives the conversation idle-waiting hint", () => {
   it("intent result with a prototype block → waiting label at idle; approvePrototype clears it", async () => {
     const { deps } = makeDeps();
@@ -606,14 +587,12 @@ describe("orchestrator gate — pendingPrototype drives the conversation idle-wa
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // "Resume newest" resumes the ORCHESTRATOR GATE. pendingCount + resumeNewestReview both
 // derive from pendingSurfaces() (pendingReviews + the orchestrator snapshot). With a held gate and the
 // open plan NOT the gate plan (SUMMARY mode), #review-resume re-opens gate.planPath via the SAME
 // open path onAwaitingApproval uses — NOT just the pendingReviews queue.
 // RED before the fix: resumeNewestReview only consulted newestPendingReview() (empty here), so the click
 // was a no-op and the gate plan never re-opened.
-// ---------------------------------------------------------------------------------------------
 describe("orchestrator gate — #review-resume resumes the held gate from SUMMARY mode (#5)", () => {
   it("a held gate + a DIFFERENT plan open → clicking #review-resume re-opens the gate's plan", async () => {
     const GATE = "/p/01.md";
@@ -669,7 +648,6 @@ describe("orchestrator gate — #review-resume resumes the held gate from SUMMAR
     ).toBe(false);
   });
 
-  // ---------------------------------------------------------------------------------------------
   // SUMMARY "Resume" TIE-BREAK — a held orchestrator gate AND a pending EXTERNAL review coexist.
   // pendingSurfaces() unions the external review (a tracked pendingReview) with the live held gate;
   // resumeNewestReview() resolves the GATE surface FIRST (openGatePlanFile) and only falls through to
@@ -684,7 +662,6 @@ describe("orchestrator gate — #review-resume resumes the held gate from SUMMAR
   // newestPendingReview() → #review-resume opens the external review ("external.md") instead of the
   // gate ("01.md"). Running ONLY this test then goes RED (the gate-basename assertion fails, opening
   // "external.md"); restoring main.ts exactly returns it to GREEN (opens "01.md").
-  // ---------------------------------------------------------------------------------------------
   it("a held gate + a NEWER pending external review → #review-resume opens the GATE's plan, not the review's", async () => {
     const GATE = "/p/01.md"; // the held orchestrator gate's plan (basename 01.md)
     const EXTERNAL = "/p/external.md"; // the pending external review's plan (a DIFFERENT, known basename)

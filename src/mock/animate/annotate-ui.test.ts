@@ -1,4 +1,4 @@
-// Mock-ANIMATE author-mode pure-logic tests (Phase 3) — the pin/normalize/delete helpers factored out
+// Mock-ANIMATE author-mode pure-logic tests — the pin/normalize/delete helpers factored out
 // of annotate-ui.ts so they need no live player or DOM. Each invariant is falsifiable: pin must stamp
 // the CURRENT T and keep stroke points normalized 0..1; two pins at the SAME tMs must collapse to one
 // tick group with count 2 (via the existing tickGroups); delete must remove exactly the right id.

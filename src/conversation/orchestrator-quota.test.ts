@@ -1,4 +1,4 @@
-// Multiplan orchestration domain — PHASE 4 quota auto-resume driver tests (falsifiable).
+// Multiplan orchestration domain — quota auto-resume driver tests (falsifiable).
 //
 // These tests exercise the orchestrator's quota_exceeded → pause → wall-clock-aware auto-resume path
 // with a FAKE OrchestratorDeps (no Tauri, no DOM): an injected fake timer seam (setTimeout/clearTimeout)
@@ -41,8 +41,6 @@ const path = (...ns: number[]): NodePath => ns.map(nnOf);
 vi.mock("./diag", () => ({ diag: vi.fn() }));
 
 import type { AgentStream, AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
-
-// ---- scripted frame builders -----------------------------------------------------------------
 
 let seqCounter = 0;
 const nextSeq = (): number => ++seqCounter;
@@ -115,8 +113,6 @@ const resumeFallbackFrame = (): AgentStream => ({
   reason: "transcript expired",
 });
 
-// ---- fake deps with injectable timers, clock, and wake seam ----------------------------------
-
 interface FakeTimer {
   fn: () => void;
   ms: number;
@@ -140,7 +136,7 @@ function makeDeps(
 ): { deps: OrchestratorDeps; rec: Rec } {
   const rec: Rec = { startSession: [], sendMessage: [], timers: [], wakeFns: [] };
   const deps: OrchestratorDeps = {
-    // PHASE 6 — the auto-resume budget seam start() dispatches at START. Present only when a budget
+    // the auto-resume budget seam start() dispatches at START. Present only when a budget
     // is supplied (so the "absent seam ⇒ no QUOTA_BUDGET_SET" path is also testable).
     ...(autoResumeBudget !== undefined
       ? { resolveAutoResumeBudget: () => ({ budget: autoResumeBudget }) }
@@ -265,7 +261,7 @@ describe("orchestrator — Phase 4 quota auto-resume", () => {
     await h.cancel();
   });
 
-  // DA-I5 (integration fix) — the SYNCHRONOUS pause-pending probe shared by BOTH agent-exit listeners
+  // The SYNCHRONOUS pause-pending probe shared by BOTH agent-exit listeners
   // (index.ts + main.ts). main.ts cannot read index.ts's private closure flag, so the pending state is
   // promoted onto the handle: quotaPaused() must read true the INSTANT markQuotaPausePending() is
   // called — BEFORE the microtask-deferred QUOTA_PAUSED dispatch (enqueueIngest) installs the
@@ -313,7 +309,7 @@ describe("orchestrator — Phase 4 quota auto-resume", () => {
     await h.cancel();
   });
 
-  // DA-I5 — the pending flag must also reset on cancel()/teardown (markTerminal → clearQuotaPause), so
+  // The pending flag must also reset on cancel()/teardown (markTerminal → clearQuotaPause), so
   // a pending flag set without an ensuing established pause cannot linger past the run's teardown.
   it("DA-I5: markQuotaPausePending() then cancel() resets quotaPaused() (no lingering pending flag)", async () => {
     const clock: Clock = { t: 1_000 };
@@ -883,8 +879,6 @@ function rootPhase(h: OrchestratorHandle): string {
   return `${r.state.stage}/${r.state.phase}`;
 }
 
-// ---- Phase 7: resume-context injection (the per-variant quotaResumePrompt + the buffer contract) --
-//
 // These tests DRIVE the live orchestrator to each in-flight variant, hit a quota wall, auto-resume,
 // and assert the EXACT resume message the driver sends. The message must be the variant's ORIGINAL
 // turn prompt (the same pure builder a never-interrupted turn used) WRAPPED with QUOTA_RESUME_NOTE —
@@ -1195,7 +1189,6 @@ describe("orchestrator — Phase 7 buffer contract (the carry-forward fix)", () 
   });
 });
 
-// ============================================================================================
 // THE TURN WATCHDOG IS RE-ARMED ON QUOTA RESUME. A captured summary / parent-review / intent
 // turn is a REAL generation turn again after the wall refreshes (the model re-emits its artifact),
 // so a silently-stuck RESUMED turn must drive to a loud terminal FATAL exactly as a never-paused
@@ -1204,7 +1197,6 @@ describe("orchestrator — Phase 7 buffer contract (the carry-forward fix)", () 
 // watchdog comes back fireable on resume, and that it is keyed PER TAG (parent-review on its
 // `parentPath`, NOT the generic capturedPath which is [] for parent-review — a root-keyed arm is
 // inert against a non-root parentPath in armTurnWatchdog's fire guard).
-// ============================================================================================
 
 const exitPlanMode = (id: string, plan: string): ToolPermissionRequested => ({
   seq: nextSeq(),

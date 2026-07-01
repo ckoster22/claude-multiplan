@@ -3,8 +3,7 @@
 // A path -> markdown map so the mock `read_plan_contents(path)` can return a real document for
 // each fixture plan. Rendered through the UNMODIFIED reading-pane pipeline (markdown-it +
 // highlight.js + DOMPurify; mermaid + images lazy/async), so these strings exercise the same code
-// the live app uses. Phase 3 fleshes out the mermaid/image/error variants; Phase 1 ships one rich
-// doc plus a doc per fixture plan so every sidebar row opens to something.
+// the live app uses.
 //
 // Keys MUST match the absolute_path values in src/mock/fixtures/plans.ts.
 
@@ -85,8 +84,6 @@ const SUB02 = `# Sub-Plan 02 — Conversation scenes
 
 Replay canned \`AgentStream\` frames through the real \`renderTree()\` pipeline.
 `;
-
-// ---- Phase 3 reading-pane variant docs (one render concern each) ----------------------------
 
 // A MERMAID-heavy doc: a ```mermaid fence the reading pane lazy-loads mermaid for and renders to an
 // SVG (then DOMPurify-sanitizes). Multi-line node labels exercise the foreignObject/HTML path.
@@ -174,14 +171,11 @@ The reading pane resolves this relative image through \`read_image_as_data_url\`
 Text after the image, so the pane shows the image is inlined mid-document.
 `;
 
-// ---- ANIMATE prototype-review beat — the visual prototype the gate previews INLINE ------------
-//
 // The TRAILHEAD_BEAT (src/mock/animate/storyboard.ts) opens THIS plan in the reading pane during the
 // prototype-gate window (its open_plan…open_plan{null} bracket). The prototype is rendered INLINE in
 // `#reading-pane` exactly as the REAL app does it: main.ts's onPrototypeReview → renderPrototypePreview
 // composes `composePreviewMarkdown(gate)` (a plain monospace ASCII fence) into the pane, with the
-// review bar in `.review-bar.proto` mode. There is NO floating overlay card — the previous
-// `#demo-proto-card` chrome (review2 c3: "this wouldn't appear in the app") was deleted.
+// review bar in `.review-bar.proto` mode. There is NO floating overlay card.
 //
 // TWO-WRITER DETERMINISM: two writers paint `#reading-pane` during this window —
 //   (a) the reconciler's reading-pane pass, which opens PROTO_PREVIEW_PATH → renders PROTO_PREVIEW_DOC,
@@ -254,7 +248,7 @@ export const MOCK_MARKDOWN: Record<string, string> = {
   [`${PLANS}/master-harness.md`]: MASTER,
   [`${PLANS}/harness-sub01.md`]: SUB01,
   [`${PLANS}/harness-sub02.md`]: SUB02,
-  // Phase 3 reading-pane variants (keys match the fixture plans in plans.ts).
+  // Reading-pane variants (keys match the fixture plans in plans.ts).
   [`${PLANS}/variant-mermaid.md`]: MERMAID_DOC,
   [`${PLANS}/variant-table.md`]: TABLE_DOC,
   [`${PLANS}/variant-code.md`]: CODE_DOC,
@@ -280,7 +274,7 @@ export function fallbackMarkdown(path: string): string {
 }
 
 // A sentinel path the mock can map to a simulated read FAILURE (the reading pane's raw-error
-// fallback). Phase 3 wires the deck to open it; for now it exists so callers have a stable handle.
+// fallback).
 export const ERROR_PLAN_PATH = `${PLANS}/__error__.md`;
 
 // A real, minimal 1x1 transparent PNG as a data: URL — returned by the mock read_image_as_data_url

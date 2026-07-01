@@ -27,8 +27,6 @@ const CWD = "/Users/mock/work/trailhead";
 
 export const TRAILHEAD_TREE_ID = "tree-trailhead-7f3a91c2";
 
-// ---- The master plan document --------------------------------------------------------------------
-//
 // Opened by the storyboard in the reading pane. Body STARTS with the H1 (NO leading `---` frontmatter
 // — this constant is the already-stripped body, not a raw on-disk file). Short Context + Decomposition
 // prose plus a real ```mermaid fence: a `flowchart TD` ARCHITECTURE diagram with subgraphs (Navigation
@@ -99,8 +97,6 @@ flowchart TD
 Subplans run in order; the trail-detail leaves (04.01–04.04) compose into the detail screen last.
 `;
 
-// ---- The REVISED master plan document (V2) -------------------------------------------------------
-//
 // The Slice-06 "Comment & iterate" beat opens THIS after the user leaves three comments on V1: the
 // revised plan that folds the Slice-04 feedback in. It is NOT a sidebar row (not in TRAILHEAD_PLANS);
 // it only flows into TRAILHEAD_MARKDOWN so the mock read_plan_contents can serve it when the
@@ -172,8 +168,6 @@ flowchart TD
 Subplans run in order; the trail-detail leaves (04.01–04.04) compose into the detail screen last.
 `;
 
-// ---- node descriptors (mirror of nested.ts's NestedNode) -----------------------------------------
-//
 // `title` is the displayed sidebar label (the mock derives the sidebar title from `filename_stem`, so
 // we set the stem to the title text). `markdown` is the served body; only the master is seeded (the
 // subs are optional — the storyboard never opens them).

@@ -29,7 +29,6 @@ export function isReviewTool(toolName: string): boolean {
   return INTERACTIVE_TOOLS.has(toolName);
 }
 
-// ---------------------------------------------------------------------------
 // Host-asserted policy backstop.
 //
 // The SDK silently flips its own permission mode out of "plan" the moment an
@@ -38,7 +37,6 @@ export function isReviewTool(toolName: string): boolean {
 // The host (frontend orchestrator) is the authority on the flow's phase: it asserts
 // the policy via the `set-permission-mode` command, and the gate consults that
 // policy (via an injected getter) to deny MUTATING tools while it is "plan".
-// ---------------------------------------------------------------------------
 
 // The host-asserted policy. "plan" denies the mutating tools; "acceptEdits" allows them;
 // "prototype" allows them ONLY for paths strictly under `<cwd>/.plan-tree/prototype/`
@@ -72,7 +70,7 @@ export const PROTOTYPE_POLICY_WRITE_DENY =
 // BEST-EFFORT BLOCKLIST, NOT A SANDBOX (this is the "plan" tier ONLY — "prototype" uses the
 // fail-closed ALLOWLIST in bashDecisionFor below). The "plan" tier must PRESERVE the documented
 // test-run capability (`cargo test` / `npm test` / `npx vitest`), so it stays a blocklist; the
-// holes the S1+S2 finding identified (no-space/clobber redirects, `python -c`/`node -e` style
+// holes identified (no-space/clobber redirects, `python -c`/`node -e` style
 // interpreters, archive/file-write tools) are closed here. Quoting tricks can still slip a
 // blocklist — the interrupt-bounded approval window + SDK plan mode are the primary mitigations,
 // and the durable boundary is the named OS `sandbox-exec` follow-on.
@@ -82,7 +80,7 @@ export const PROTOTYPE_POLICY_WRITE_DENY =
 // `>&f` where the target is a FILE). The ONLY redirects that are NOT file writes are fd-DUP/close
 // (`2>&1`, `>&2`, `2>&-`): a `>{1,2}` whose target is `&<digit>` or `&-`. The negative lookahead
 // `(?!&[0-9-])` excludes exactly those, so a digit/`&` BEFORE `>` is no longer mistaken for a
-// non-write (the DA-found escape: `echo x 1>/tmp/evil`, `cat foo 1>out`, `echo x &>file`).
+// non-write (the escape: `echo x 1>/tmp/evil`, `cat foo 1>out`, `echo x &>file`).
 //
 // A redirect whose TARGET is the bit-bucket `/dev/null` is a DISCARD, not a tree write — it is the
 // idiomatic way to silence stderr/stdout on a read-only command. This holds for BOTH the truncate
@@ -149,14 +147,12 @@ export function isWriteShapedBashCommand(command: unknown): boolean {
   return BASH_WRITE_DENY_PATTERNS.some((p) => p.test(command));
 }
 
-// ---------------------------------------------------------------------------
-// FAIL-CLOSED prototype Bash allowlist (INV-1).
+// FAIL-CLOSED prototype Bash allowlist.
 //
 // Under "prototype" the only window agent with Bash is `intent-clarifier`, which writes its
 // artifacts through the CONTAINED Write tool (the prototype dir is pre-created host-side via
 // OrchestratorDeps.ensurePrototypeDir, so `mkdir` is never needed). So Bash here may run ONLY
 // when every segment is a PROVABLY READ-ONLY command. Anything unrecognized fails closed → deny.
-// ---------------------------------------------------------------------------
 
 // Read-only leading verbs that never write (a redirect is rejected separately). `echo` is in the
 // same class but, like the others, only when no output redirect follows.
@@ -192,7 +188,7 @@ const PROTOTYPE_GIT_READONLY_SUBCMDS: ReadonlySet<string> = new Set([
 // Covers the COMPLETE findutils EXEC family (`-exec`, `-execdir`, `-ok`, `-okdir` — each runs an
 // arbitrary command; `-okdir` is the interactive twin of `-execdir`), `-delete`, and the COMPLETE
 // `-f*` FILE-WRITE family (`-fls`, `-fprint`, `-fprint0`, `-fprintf` — each takes a FILE argument
-// and writes it). Omitting any (the Medium escape) let e.g. `find . -fls out.txt` or
+// and writes it). Omitting any let e.g. `find . -fls out.txt` or
 // `find . -okdir cat {} ;` slip through the fail-closed prototype allowlist. NOTE the read-only
 // `-f*` primaries (`-fstype` TEST, `-follow` option) and the stdout actions (`-print`, `-print0`,
 // `-printf`, `-ls`) are deliberately NOT here — they do not write a file, and exact-equality
@@ -253,7 +249,7 @@ function isReadOnlyPrototypeSegment(rawSegment: string): boolean {
 // two tiers cannot drift. Returns a deny-reason string, or null to ALLOW.
 //   - "acceptEdits" → unrestricted (always allow).
 //   - "plan"        → blocklist (preserve test runs; deny the extended write set). Non-string
-//                     command → allow (the backstop never throws on shape — matches legacy).
+//                     command → allow (the backstop never throws on shape).
 //   - "prototype"   → FAIL-CLOSED ALLOWLIST: allow only when every segment is provably read-only
 //                     and there is no command-substitution. Non-string / unrecognized → DENY.
 // INVARIANT[dual-tier-no-drift] (runtime-guard): the PreToolUse hook and the canUseTool gate apply the same prototype/plan decision via one shared bashDecisionFor.
@@ -363,7 +359,6 @@ export function isPrototypeWritePath(cwd: string, filePath: unknown): boolean {
   return root.every((seg, i) => resolved[i] === seg);
 }
 
-// ---------------------------------------------------------------------------
 // PreToolUse HOOK tier enforcement for the "prototype" policy.
 //
 // The canUseTool gate above is the LAST tier in the SDK's permission precedence:
@@ -379,7 +374,6 @@ export function isPrototypeWritePath(cwd: string, filePath: unknown): boolean {
 // Under "plan" the hook passes through: SDK "plan" mode blocks writes at the mode tier,
 // which also precedes allow rules (and the canUseTool backstop covers the rest).
 // Under "acceptEdits" the hook passes through: that policy is intentionally permissive.
-// ---------------------------------------------------------------------------
 
 // The pure decision: deny-reason string, or null to pass through. Reuses the SAME
 // predicates the canUseTool gate applies under "prototype" — MUTATING_TOOLS targets must
@@ -436,7 +430,6 @@ export function createPrototypePreToolUseHook(
   };
 }
 
-// ---------------------------------------------------------------------------
 // Interactive-hold SERIALIZATION.
 //
 // At most ONE interactive hold (ExitPlanMode / AskUserQuestion) may be live at a
@@ -447,7 +440,6 @@ export function createPrototypePreToolUseHook(
 // the model as a tool error telling it to ask sequentially); the FIRST proceeds and
 // holds. Non-interactive tools are never affected (they auto-allow in-process). When
 // the live hold resolves (allow/deny) or aborts, the slot frees for the next request.
-// ---------------------------------------------------------------------------
 
 // The deny message handed back to the model when a second interactive request collides
 // with a live interactive hold. Instructs it to retry sequentially after the first resolves.
@@ -497,7 +489,6 @@ export function resolveAllowInput(
   return stored;
 }
 
-// ---------------------------------------------------------------------------
 // Interactive permission GATE — the canUseTool seam, factored out of index.ts so its
 // full register / serialize / free behavior is unit-testable. State (the pending-hold
 // map) is closed over per-instance; there is NO module-level side effect.
@@ -510,7 +501,6 @@ export function resolveAllowInput(
 //     IMMEDIATELY with SEQUENTIAL_INTERACTIVE_DENY; do NOT register a second hold.
 //   - resolve(id, result) frees the slot and settles the awaiting promise.
 //   - abort (interrupt) frees the slot and settles with deny("interrupted").
-// ---------------------------------------------------------------------------
 
 type PermResolver = (r: PermissionResult) => void;
 interface PendingHold {
@@ -653,10 +643,8 @@ export function createInteractivePermissionGate(
   };
 }
 
-// ---------------------------------------------------------------------------
 // Status-label mapping for low-level progress signals (thinking / subagent tasks /
 // rate-limit). Label-only — never the underlying text (privacy + noise).
-// ---------------------------------------------------------------------------
 
 // Map a low-level SDK progress signal to a SHORT status label, or null if the signal is not a
 // recognized progress signal (caller drops + logs the unknown). `key` is the signal's discriminator

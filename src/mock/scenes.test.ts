@@ -1,4 +1,4 @@
-// Mock-mode SCENE tests (Phase 2) — vitest + jsdom.
+// Mock-mode SCENE tests — vitest + jsdom.
 //
 // Three falsifiable properties:
 //   1. PER-SCENE SIGNATURE: every scene in the registry, fed through the REAL ConversationModel →
@@ -58,9 +58,7 @@ beforeEach(() => {
   clearMockBuffer();
 });
 
-// ---------------------------------------------------------------------------------------------
 // 1. Per-scene signature (falsifiable per scene).
-// ---------------------------------------------------------------------------------------------
 describe("scenes — each scene yields its signature node through the real pipeline", () => {
   for (const name of SCENE_NAMES) {
     it(`${name} → ${SIGNATURE[name]}`, () => {
@@ -126,14 +124,12 @@ describe("scenes — each scene yields its signature node through the real pipel
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // 2. Scene-switch buffer-scoping (the buffer-leak regression guard).
 //
 // Mimics the controller's subscribe → model → rerender wiring against the REAL mock event bus, so
 // the test exercises clearAgentBuffers + replay-on-subscribe + renderTree exactly as the live app
 // does. A subscriber that attaches AFTER both scenes are played (the boot/teardown race) must see
 // ONLY the most-recently-loaded scene's frames.
-// ---------------------------------------------------------------------------------------------
 describe("scenes — scene switch does not leak the prior scene's frames", () => {
   // A minimal live harness: subscribe to the two render channels, feed the model, render on each
   // frame. Returns the container so the test can query the rendered DOM after a late subscribe.
@@ -170,7 +166,7 @@ describe("scenes — scene switch does not leak the prior scene's frames", () =>
   });
 
   it("FALSIFY: WITHOUT the per-scene clear, scene A's frames leak into the late subscriber", async () => {
-    // Emit BOTH scenes' frames onto the bus WITHOUT clearing between them (the broken Phase-1
+    // Emit BOTH scenes' frames onto the bus WITHOUT clearing between them (the broken
     // behavior). The late subscriber then replays BOTH scenes — scene A's subagent group leaks in.
     // This is the proof the clear is load-bearing: with it (the test above) A is absent; without it
     // (here) A is present.
@@ -185,13 +181,11 @@ describe("scenes — scene switch does not leak the prior scene's frames", () =>
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // 3. Question card — pending → answered, resolve_tool_permission receives the chosen labels.
 //
 // Drives the REAL renderQuestionCard via renderTree with an onSubmitQuestion handler that mirrors the
 // controller's submitQuestion: it invokes resolve_tool_permission, appends question_answered, and
 // re-renders so the card flips to its answered state.
-// ---------------------------------------------------------------------------------------------
 describe("scenes — questionCard renders interactive, answering flips to answered + resolves", () => {
   it("pending .conv-question → answer → .conv-question-answered with chosen labels in resolve", () => {
     const resolveSpy = vi.fn();
@@ -258,7 +252,6 @@ describe("scenes — questionCard renders interactive, answering flips to answer
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // 4. AgentStream UNION EXHAUSTIVENESS GUARD.
 //
 // THE INVARIANT (two-layered, rot-proof + falsifiable): every discriminant of the REAL
@@ -277,7 +270,6 @@ describe("scenes — questionCard renders interactive, answering flips to answer
 //     (derived by iterating the builders and by driving the real core handlers through invoke()). So a
 //     bogus extra discriminant, or removing a covered kind from every scene, flips a check RED — the
 //     classification can never drift from what the mock genuinely drives.
-// ---------------------------------------------------------------------------------------------
 describe("scenes — AgentStream union exhaustiveness guard", () => {
   // The single conscious classification of every AgentStream discriminant. Keyed by the REAL union's
   // `kind`, so tsc rejects a missing/typo'd/bogus key — the compile-time half of the guard.

@@ -1,4 +1,4 @@
-// RECOVERY MODEL TESTS — the TOTAL `recoveryFor` classifier (Phase 1 of the recovery refactor).
+// RECOVERY MODEL TESTS — the TOTAL `recoveryFor` classifier.
 //
 // `recoveryFor(node, path, ledger?, decompositionArtifactExists?)` maps EVERY active (stage,phase)
 // to a RecoveryAction — there is NO dead-end variant. These tests pin:
@@ -26,7 +26,7 @@ import {
   EXECUTING_REWIND_HAZARD,
 } from "./plan-tree";
 
-// The leaf/executing rewind hazard — pinned from plan-tree.ts (DA Finding 4 action-risk copy).
+// The leaf/executing rewind hazard — pinned from plan-tree.ts.
 const EXEC_HAZARD = EXECUTING_REWIND_HAZARD;
 import type {
   TreeNode,
@@ -38,8 +38,6 @@ import type {
   RewindTarget,
   DecompositionArtifactExists,
 } from "./plan-tree";
-
-// ---- minimal fixture builders -----------------------------------------------------------------
 
 const nnOf = (n: number) => parseNn(n);
 const path = (...ns: number[]): NodePath => ns.map(nnOf);
@@ -83,8 +81,6 @@ function splitNode(
   });
 }
 const summarizedChild = () => leafNode(1, "summarized", { summaryPath: fileOf("/s.md") });
-
-// ---- (1) the decomposing disk-probe branch ----------------------------------------------------
 
 describe("recoveryFor — open/decomposing is disk-probe aware", () => {
   it("artifact PRESENT → the SAME decomposition gate as awaiting-decomposition-approval (re-present, do NOT re-draft)", () => {
@@ -151,7 +147,7 @@ describe("recoveryFor — open/decomposing is disk-probe aware", () => {
   });
 });
 
-// ---- (1b) INV-3 coherence: the re-presented gate and node phase stay coherent on resume --------
+// Coherence: the re-presented gate and node phase stay coherent on resume
 //
 // recoveryFor returns the SAME opaque decomposition-gate ResumePlan for BOTH open/decomposing and
 // open/awaiting-decomposition-approval (proven above). On resume the driver re-presents the gate and
@@ -196,7 +192,7 @@ describe("INV-3 — GATE_RE_PRESENTED makes the re-presented decomposition gate 
     if (after.root.state.stage !== "open") throw new Error("unreachable");
     expect(after.root.state.phase).toBe("awaiting-decomposition-approval");
 
-    // PHASE-ONLY: NO effects (no persist, no notify) — the driver already presented the gate on
+    // The re-arm is PHASE-ONLY: NO effects (no persist, no notify) — the driver already presented the gate on
     // resume; re-running DECOMPOSITION_DRAFTED would double-fire it. FALSIFY: emit persist/notify here
     // → effects non-empty → RED.
     expect(effects).toEqual([]);
@@ -219,7 +215,7 @@ describe("INV-3 — GATE_RE_PRESENTED makes the re-presented decomposition gate 
   });
 });
 
-// ---- (2) TOTALITY over every representable stage/phase ----------------------------------------
+// TOTALITY over every representable stage/phase
 //
 // Build a node for EVERY (stage,phase) and assert recoveryFor returns a RecoveryAction (never throws)
 // whose kind is one of the three variants. This is the runtime totality witness; the compile-time
@@ -236,7 +232,7 @@ interface PhaseFixture {
 // totality does not depend on activePathOf (recoveryFor takes the node + path directly).
 const everyPhase: PhaseFixture[] = [
   { name: "open/clarifying-intent", node: openNode(1, "clarifying-intent"), path: path(), expectKind: "restart" },
-  // PHASE 2: prototype-review is now a `resume` carrying the dedicated `prototype-gate` plan (durable
+  // Prototype-review is now a `resume` carrying the dedicated `prototype-gate` plan (durable
   // `.plan-tree/prototype/` + INTENT.md re-presented), NOT the genesis `restart` clarify lumps it with.
   { name: "open/prototype-review", node: openNode(1, "prototype-review"), path: path(), expectKind: "resume" },
   { name: "open/pending", node: openNode(1, "pending"), path: path(), expectKind: "rewind" },
@@ -318,8 +314,6 @@ describe("recoveryFor — TOTALITY (every stage/phase yields a RecoveryAction)",
   });
 });
 
-// ---- rewind/restart placeholder shapes (minimal, exercised by Phases 2-3) ----------------------
-
 describe("recoveryFor — rewind/restart placeholder shapes carry the legacy reason as hazard/anchor", () => {
   it("PHASE 3: leaf/executing → OFFERABLE rewind to leaf-approval, HAZARDOUS (requiresConfirm), carrying the leaf planPath", () => {
     const action = recoveryFor(
@@ -396,7 +390,7 @@ describe("recoveryFor — rewind/restart placeholder shapes carry the legacy rea
   });
 });
 
-// ---- (3) COMPILE-TIME exhaustiveness guard ----------------------------------------------------
+// COMPILE-TIME exhaustiveness guard
 //
 // `recoveryFor` ends each stage switch in `assertNeverRecovery(state: never)`. If a NodeState
 // stage/phase were left unclassified, the residual union would NOT narrow to `never` and the call
@@ -415,7 +409,7 @@ it("compile-time exhaustiveness: a non-never value is rejected at the assertNeve
   expect(() => assertNeverMirror(notNever)).toThrow();
 });
 
-// ---- PHASE 3 — adapter: leaf/executing renders RESUMABLE with the confirm flag exposed ----------
+// Adapter: leaf/executing renders RESUMABLE with the confirm flag exposed
 //
 // resumeScopeForRoot is the adapter that maps recoveryFor's RecoveryAction onto the UI ResumeScope.
 // Phase 3 turns leaf/executing from a BLOCKED verdict into a RESUMABLE rewind that carries
@@ -430,7 +424,7 @@ describe("resumeScopeForRoot — PHASE 3 hazardous executing rewind surfaces req
     expect(live && pathKey(live)).toBe(pathKey(path()));
 
     const scope = resumeScopeForRoot(root);
-    // RESUMABLE now (was a blocked verdict in Phase 2).
+    // RESUMABLE now (was a blocked verdict).
     expect(scope.resumable).toBe(true);
     if (!scope.resumable) throw new Error("unreachable");
     expect(scope.plan.kind).toBe("rewind");

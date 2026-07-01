@@ -376,10 +376,9 @@ describe("sidecar permissions — Bash write-deny backstop under 'plan' (best-ef
   });
 });
 
-// ---------------------------------------------------------------------------
-// INV-1 — Prototype Bash containment is FAIL-CLOSED (S1+S2).
+// Prototype Bash containment is FAIL-CLOSED.
 //
-// The accepted High findings: under the "prototype" policy the old BLOCKLIST let the
+// Under the "prototype" policy the old BLOCKLIST let the
 // no-space/clobber redirects (`echo x>/f`, `cat a>>b`, `>|f`) and the interpreters
 // (`python3 -c`, `node -e`, `tar -x`, `install`, …) slip through to write the tree.
 // The fix replaces the prototype blocklist with a FAIL-CLOSED ALLOWLIST in one shared
@@ -387,7 +386,6 @@ describe("sidecar permissions — Bash write-deny backstop under 'plan' (best-ef
 // gate call (so they cannot drift). Under "plan" the documented test-run capability
 // (`cargo test`/`npm test`/`npx vitest`) is PRESERVED, but the same named write escapes
 // are additionally denied.
-// ---------------------------------------------------------------------------
 describe("sidecar permissions — bashDecisionFor under 'prototype' is fail-closed (INV-1)", () => {
   // null = allow (provably read-only); a string = the deny reason.
   it("prototype_bash_fail_closed_denies_escapes: redirects/interpreters/git stash/find -delete/subshell/env-prefix are DENIED", () => {
@@ -458,7 +456,7 @@ describe("sidecar permissions — bashDecisionFor under 'prototype' is fail-clos
   });
 
   it("prototype_bash_separator_escapes_denied: bare &, newline, process-substitution, grouping (F1/S1)", () => {
-    // The confirmed HIGH (F1/S1): the segment splitter MISSED separators, so an allowlisted leading
+    // The segment splitter MISSED separators, so an allowlisted leading
     // verb (`ls`) could carry a chained write through a separator the splitter didn't recognize —
     // bare `&` (background), a literal newline, process-substitution `<(…)`/`>(…)`, and `|&`. Each of
     // these WRONGLY returned ALLOW (the write segment was never split out / was hidden inside a
@@ -552,10 +550,10 @@ describe("sidecar permissions — bashDecisionFor under 'prototype' is fail-clos
   });
 
   it("prototype: find -fls/-fprintf/-fprint0 (file-write actions) are DENIED (Medium escape)", () => {
-    // The confirmed Medium escape: FIND_WRITE_ACTIONS omitted the -f* file-write actions
+    // FIND_WRITE_ACTIONS omitted the -f* file-write actions
     // (`-fls FILE`, `-fprintf FILE FORMAT`, `-fprint0 FILE`), so `find . -fls out.txt` wrote
     // an arbitrary file yet returned ALLOW under the fail-closed prototype allowlist — defeating
-    // INV-1 containment (writes confined to <cwd>/.plan-tree/prototype/) with no Write/Edit.
+    // the containment (writes confined to <cwd>/.plan-tree/prototype/) with no Write/Edit.
     // FALSIFY: revert FIND_WRITE_ACTIONS to {-exec,-execdir,-delete,-ok,-fprint} → these
     // file-writing find forms return null (allow) → every assertion below goes RED.
     const denied = [
@@ -590,7 +588,7 @@ describe("sidecar permissions — bashDecisionFor under 'prototype' is fail-clos
   });
 
   it("prototype: an fd-to-FILE redirect is a WRITE (DENY); only an fd-DUP/close is a non-write (ALLOW)", () => {
-    // The DA-found escape: a numbered/`&`-form fd redirect to a FILE writes arbitrary paths.
+    // A numbered/`&`-form fd redirect to a FILE writes arbitrary paths.
     // FALSIFY: exclude any `[0-9]`/`&` before `>` from the write detector → these PASS (verb
     // `echo`/`cat` recognized, redirect undetected) → RED, the escape is open.
     const fdWritesDenied = [
@@ -613,7 +611,6 @@ describe("sidecar permissions — bashDecisionFor under 'prototype' is fail-clos
   });
 });
 
-// ---------------------------------------------------------------------------
 // /dev/null discard is NOT a write + `cd` is read-only.
 //
 // a redirect whose TARGET is the bit-bucket `/dev/null` is a DISCARD, not a tree write
@@ -622,7 +619,6 @@ describe("sidecar permissions — bashDecisionFor under 'prototype' is fail-clos
 //   target (`> out.txt`, `2> err.log`, `>> log`) still matches and stays DENIED.
 // `cd <dir> && rg …` was denied under PROTOTYPE because `cd` was absent from the read-only
 //   verb set; the per-segment write check still runs, so adding `cd` opens no write hole.
-// ---------------------------------------------------------------------------
 describe("sidecar permissions — /dev/null discard is NOT a write", () => {
   it("isWriteShapedBashCommand: a /dev/null target is a DISCARD, not a write (plan ALLOWS)", () => {
     // FALSIFY: revert OUTPUT_REDIRECT to `/(?:[0-9]*|&)>{1,2}\|?(?!&[0-9-])/` → the `/dev/null`
@@ -757,7 +753,7 @@ describe("sidecar permissions — bashDecisionFor under 'plan' preserves test ru
       "cat a>>b", // no-space append redirect
       ">|f", // clobber redirect
       "echo hi > out.txt", // the original space-separated form still denied
-      // fd-to-FILE redirects (the DA-found escape) — these WRITE files, not dup fds.
+      // fd-to-FILE redirects — these WRITE files, not dup fds.
       "echo x 1>out",
       "echo x 2>out",
       "echo x &>out",
@@ -795,7 +791,7 @@ describe("sidecar permissions — bashDecisionFor under 'plan' preserves test ru
       // and `dir`) did NOT match it, so it escaped. `ok(dir)?` closes it.
       "find . -okdir cat {} ;",
       "find /etc -okdir cat {} +",
-      // the -f* file-write find actions (the Medium escape) — the plan-tier regex must deny these
+      // the -f* file-write find actions — the plan-tier regex must deny these
       // too. The trailing-\b pitfall in the old /…-(…|fprint)\b/ let `-fprintf` slip (the \b cannot
       // sit between `fprint` and the trailing `f`), and `-fls`/`-fprint0` were absent entirely.
       "find . -fls out.txt",
@@ -956,7 +952,7 @@ describe("sidecar permissions — the gate under the 'prototype' policy", () => 
     // FALSIFY: scope the Bash check to "plan" only → this flips to allow → RED.
     const r = await gate.canUseTool("Bash", { command: "rm -rf build" }, opts("pb1"));
     expect(r).toEqual({ behavior: "deny", message: PLAN_POLICY_WRITE_DENY });
-    // INV-1: anything NOT provably read-only is denied — including the test runners that "plan"
+    // Anything NOT provably read-only is denied — including the test runners that "plan"
     // intentionally permits. `cargo test` is not on the prototype read-only allowlist.
     const cargo = await gate.canUseTool("Bash", { command: "cargo test --lib" }, opts("pb1b"));
     expect(cargo).toEqual({ behavior: "deny", message: PLAN_POLICY_WRITE_DENY });
@@ -1129,10 +1125,8 @@ describe("sidecar permissions — createPrototypePreToolUseHook (SDK deny-shape 
   });
 });
 
-// ---------------------------------------------------------------------------
-// INV-1 — the HOOK tier and the canUseTool GATE must return IDENTICAL Bash decisions
+// The HOOK tier and the canUseTool GATE must return IDENTICAL Bash decisions
 // for the same command (no drift). Both route through the ONE shared bashDecisionFor.
-// ---------------------------------------------------------------------------
 describe("sidecar permissions — hook tier and canUseTool gate agree on Bash (INV-1, no drift)", () => {
   const cwd = "/Users/alice/proj";
   function opts(id: string): { signal: AbortSignal; toolUseID: string } {
@@ -1155,16 +1149,16 @@ describe("sidecar permissions — hook tier and canUseTool gate agree on Bash (I
     "install x y",
     "git stash",
     "find . -delete",
-    "find . -fls out.txt", // -f* file-write find action (deny) — both tiers must agree (Medium escape)
+    "find . -fls out.txt", // -f* file-write find action (deny) — both tiers must agree
     "find . -fprintf out.txt %p", // -fprintf writes to a FILE (deny)
-    "find . -okdir cat {} ;", // -okdir exec primary (deny) — both tiers must agree (uncovered escape)
+    "find . -okdir cat {} ;", // -okdir exec primary (deny) — both tiers must agree
     "find . -fstype apfs -name x", // -fstype is a read-only TEST (allow) — must not over-deny
     "find . -ls", // -ls is a STDOUT action (allow) — must not over-deny
     "FOO=bar sh -c '...'",
     "rm -rf build",
     "echo x 1>out", // fd-to-file write (deny)
     "ls 2>&1", // fd-dup (allow under the read-only verb)
-    "ls & rm build", // bare-& background chain (deny) — both tiers must agree (F1/S1)
+    "ls & rm build", // bare-& background chain (deny) — both tiers must agree
   ];
 
   it("for every command, the hook deny-reason and the gate allow/deny verdict coincide", async () => {

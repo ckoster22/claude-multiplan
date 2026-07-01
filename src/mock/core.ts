@@ -5,15 +5,15 @@
 // call sites use (derived by grepping `invoke[<(]` across src/) is enumerated in the `MockCommand`
 // discriminated union below.
 //
-// WHAT THE UNION DOES AND DOES NOT CATCH (corrected — the earlier note overstated this): `tsc` does
+// WHAT THE UNION DOES AND DOES NOT CATCH: `tsc` does
 // NOT link the app's UNTYPED `invoke(cmd, args)` call sites (cmd is a plain string) to MockCommand,
 // so a renamed or reshaped command is NOT a compile error here. The union only documents the handled
-// command surface and its arg shapes, and feeds HANDLED_COMMANDS below (the value the Phase-5
+// command surface and its arg shapes, and feeds HANDLED_COMMANDS below (the value the
 // registry canary diffs against the grepped call sites). Command-name / arg drift is caught by that
 // registry canary at test time, NOT by the compiler. (`tsc --noEmit` over src/mock/** DOES catch
 // render-data drift in the typed AgentStream fixtures — a different gate.)
 //
-// Two tiers (see the plan):
+// Two tiers:
 //   • BOOT-CRITICAL — must return a SHAPED value (never undefined where the caller dereferences).
 //   • FIRE-AND-FORGET — resolve as a no-op.
 // An UNKNOWN command warns + returns a benign default (never throws).
@@ -44,17 +44,14 @@ import {
   sentinelStateJson,
 } from "./fixtures/sentinel";
 
-// One-time boot log so Phase 5 can confirm the alias actually applied (a real @tauri-apps module
+// One-time boot log so we can confirm the alias actually applied (a real @tauri-apps module
 // would never print this). Runs on first import of this shim — which only happens if the alias
 // took effect.
 console.log("[mock] Tauri IPC aliased to src/mock");
 
-// ---- MockCommand: the union of every command name + its args the app invokes ----
-//
 // Grouped by tier for readability. Args mirror the real call sites' shapes. `void`-result commands
 // are the fire-and-forget tier; the others return shaped values.
 type MockCommand =
-  // ---- boot-critical (shaped returns) ----
   | { cmd: "list_plans"; args?: undefined }
   | { cmd: "agent_auth_status"; args?: undefined }
   | { cmd: "resolve_cwds"; args: { stems: string[] } }
@@ -69,13 +66,11 @@ type MockCommand =
       args: { stem: string };
     }
   // The backend command that returns a pending review's plan text by id. Not invoked by the current
-  // frontend (the review opens the real plan file via read_plan_contents), but the backend exposes it
-  // and the brief asks the mock to cover it — seeded from the review fixture.
+  // frontend (the review opens the real plan file via read_plan_contents), but the backend exposes it,
+  // seeded from the review fixture.
   | { cmd: "read_review_plan"; args: { reviewId: string } }
-  // ---- comment mutations (shaped returns) ----
   | { cmd: "set_comments"; args: { path: string; comments: CommentRecord[] } }
   | { cmd: "clear_comments"; args: { path: string } }
-  // ---- fire-and-forget (no-op) ----
   | { cmd: "set_open_plan"; args: { path: string } }
   | { cmd: "mark_viewed"; args: { path: string } }
   | { cmd: "set_tree_collapsed"; args: { treeId: string; collapsed: boolean } }
@@ -86,7 +81,6 @@ type MockCommand =
   | { cmd: "open_prototype"; args: { cwd: string; path: string } }
   | { cmd: "set_agent_oauth_token"; args: { token: string } }
   | { cmd: "hook_status"; args?: undefined }
-  // ---- agent / orchestrator commands — Phase 2 drives these through scene playback ----
   // start_agent_session / send_agent_message / resolve_tool_permission etc. replay canned
   // AgentStream frames via emitMockEvent (see the dispatch cases below).
   | { cmd: "start_agent_session"; args: { cwd: string; permissionMode: string } }
@@ -109,7 +103,7 @@ type MockCommand =
   | { cmd: "ensure_baseline_dir"; args: { cwd: string } }
   | { cmd: "freeze_baseline"; args: { cwd: string } };
 
-// The exhaustive set of command names this mock HANDLES. Exported (and asserted in Phase 5's
+// The exhaustive set of command names this mock HANDLES. Exported (and asserted in the
 // registry canary) so a new real call site without a mock handler is caught. Derived from the
 // union above by listing each `cmd` literal exactly once.
 export const HANDLED_COMMANDS = [
@@ -158,8 +152,6 @@ export const HANDLED_COMMANDS = [
 // A Set form for O(1) membership checks (used by the canary + the runtime dispatch guard).
 export const HANDLED_COMMAND_SET: ReadonlySet<string> = new Set(HANDLED_COMMANDS);
 
-// ---- scene playback (agent-command tier) ----
-//
 // start_agent_session / playScene both route here: stage the active scene fresh. clearAnswers()
 // drops any prior scene's recorded answers; playSceneFrames() clears the agent event buffers FIRST
 // (scene-scoping — so a switched-to scene never replays the prior scene's frames to a later
@@ -183,8 +175,6 @@ function emitStream(frame: AgentStream): void {
   emitMockEvent("agent-stream", frame);
 }
 
-// ---- invoke ----
-//
 // The runtime entry point. `cmd` is a string (call sites are untyped); `args` is unknown. We narrow
 // per command inside the switch. Returns `Promise<T>` to match the real API's generic signature.
 export async function invoke<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> {
@@ -195,7 +185,6 @@ export async function invoke<T = unknown>(cmd: string, args?: Record<string, unk
 // switch can return concrete shapes without fighting the generic.
 async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (cmd) {
-    // ---- boot-critical ----
     case "list_plans":
       return getPlans() satisfies PlanRecord[];
 
@@ -235,7 +224,7 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
 
     case "read_plan_contents": {
       const path = String(args?.path ?? "");
-      // Phase 3 raw-error fallback: the sentinel path REJECTS so openPlan's catch sets
+      // Raw-error fallback: the sentinel path REJECTS so openPlan's catch sets
       // #reading-pane.raw. The real backend rejects when a file is missing / outside the plans dir.
       if (path === ERROR_PLAN_PATH) {
         throw new Error("simulated read failure (mock error-fallback plan)");
@@ -253,7 +242,7 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
       // The synthetic-sentinel tree is the ONLY tree with a `.plan-tree/` the mock models: its cwd
       // serves a schema-2 state.json (so detectResumable yields a resumable resend → the resume
       // banner) and an INTENT.md (so the sentinel placeholder pane renders the original request). Any
-      // other tree / file → null (the backend's "file absent" answer), unchanged from before.
+      // other tree / file → null (the backend's "file absent" answer).
       const cwd = String(args?.cwd ?? "");
       const name = String(args?.name ?? "");
       if (cwd === SENTINEL_CWD) {
@@ -264,24 +253,24 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
     }
 
     case "read_plan_transcript":
-      // Phase 3 history replay: return a canned transcript for the designated history stem, found-but-
+      // History replay: return a canned transcript for the designated history stem, found-but-
       // empty for the no-content stem, and found:false for everything else (the no-transcript empty
       // state). The conversation controller feeds `lines` through the REAL parseTranscript path.
       return transcriptFor(String(args?.stem ?? "")) satisfies PlanTranscriptResult;
 
     case "read_review_plan":
       // The backend returns a pending review's plan text by id. Seed it from the review fixture so the
-      // command is covered (the current frontend opens the real file instead, but the brief asks for it).
+      // command is covered (the current frontend opens the real file instead).
       return MOCK_REVIEW.plan_text;
 
-    // ---- comment mutations: echo back the would-be persisted set ----
+    // Comment mutations: echo back the would-be persisted set.
     case "set_comments":
       return ((args?.comments as CommentRecord[] | undefined) ?? []) satisfies CommentRecord[];
 
     case "clear_comments":
       return [] satisfies CommentRecord[];
 
-    // ---- fire-and-forget: resolve as no-ops ----
+    // Fire-and-forget: resolve as no-ops.
     case "set_open_plan":
     case "mark_viewed":
     case "set_tree_collapsed":
@@ -297,7 +286,7 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
       // The app expects a boolean; report "not installed".
       return false;
 
-    // FINDING 6: write_agent_plan must round-trip its plan text. The live in-process review flow
+    // write_agent_plan must round-trip its plan text. The live in-process review flow
     // (main.ts handleToolPermissionRequested) calls write_agent_plan({ plan: input.plan }) and then
     // opens the RETURNED path via read_plan_contents — so the Plan tab must show THAT text, not the
     // fallback. We register the plan text at a deterministic written path under the plans dir and
@@ -309,14 +298,14 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
       return writtenPath;
     }
 
-    // ---- other write paths: return a canned path (the real API returns the written file's path) ----
+    // Other write paths: return a canned path (the real API returns the written file's path).
     case "write_plan_tree_file":
     case "ensure_prototype_dir":
     case "ensure_baseline_dir":
     case "freeze_baseline":
       return "/Users/mock/.plan-tree/mock-path";
 
-    // ---- agent / orchestrator: drive scene playback through the event bus (Phase 2) ----
+    // Agent / orchestrator: drive scene playback through the event bus.
 
     case "start_agent_session":
       // A run begins: replay the ACTIVE scene's canned frames so the real ConversationModel +
@@ -423,7 +412,6 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
     case "reset_plan_tree_dir":
       return undefined;
 
-    // ---- unknown ----
     default:
       console.warn("[mock] unhandled invoke:", cmd, args);
       return undefined;

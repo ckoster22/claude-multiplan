@@ -4,14 +4,12 @@ import { describe, it, expect } from "vitest";
 // unit-testable in isolation with no mocks.
 import { applyReviewBarState } from "./review";
 
-// ─────────────────────────────────────────────────────────────────────────────
 // FALSIFIABILITY (read before trusting these tests):
 //   `applyReviewBarState` has THREE mutually-exclusive modes. The assertions below pin EVERY
 //   field on EACH mode boundary, so a regression that collapses two modes, drops a visibility
 //   flag, or removes the `viewedCommentCount === 0` Submit-disable gate makes a specific test go
-//   RED. Demonstrated red→green in the task report: forcing `submitDisabled` to a constant fails
+//   RED. Demonstrated red→green: forcing `submitDisabled` to a constant fails
 //   the zero-comment case; forcing `mode` to "viewing" always fails the summary case.
-// ─────────────────────────────────────────────────────────────────────────────
 
 describe("applyReviewBarState — derived #review-bar state (three modes)", () => {
   it("pendingCount === 0 → everything hidden (no blocking hook to act on)", () => {
@@ -90,13 +88,11 @@ describe("applyReviewBarState — derived #review-bar state (three modes)", () =
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // source-aware affordances (#review-approve + submitLabel).
 //   FALSIFIABILITY: each assertion pins a NEW field on a source boundary. If approve were tied to
 //   submitDisabled it would vanish at 0 comments (test 1 catches it). If the default source were not
 //   "external" the existing snapshot would drift (test 2 catches it, byte-for-byte). If approve leaked
 //   into hidden/summary the last test catches it.
-// ─────────────────────────────────────────────────────────────────────────────
 describe("applyReviewBarState — source-aware approve + submit label", () => {
   it("in-process + viewing + 0 comments → approve VISIBLE, label 'Request changes', Submit DISABLED", () => {
     const s = applyReviewBarState({ pendingCount: 1, viewing: true, viewedCommentCount: 0, source: "in-process" });
@@ -158,16 +154,14 @@ describe("applyReviewBarState — source-aware approve + submit label", () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // in-flight submit lock (the "submitting" mode).
 //   A fast double-click on Submit double-submits because the pure model has no representable
 //   "a submit is already in flight" state — the bar stays enabled across the network round-trip.
 //   `submitInFlight` adds a fourth, terminal mode that wins over viewing/summary: while a submit
 //   is in flight the bar disables Submit and hides Approve so neither path can fire a second time.
-//   FALSIFIABILITY (demonstrated in the task report): ignoring submitInFlight (returning the
+//   FALSIFIABILITY (demonstrated): ignoring submitInFlight (returning the
 //   plain "viewing" mode) leaves submitDisabled:false / approveVisible:true and fails these
 //   assertions; the default (false/absent) leaves every existing case byte-identical.
-// ─────────────────────────────────────────────────────────────────────────────
 describe("applyReviewBarState — in-flight submit lock", () => {
   it("submitInFlight while viewing an in-process review → 'submitting' mode, Submit DISABLED, Approve HIDDEN", () => {
     const s = applyReviewBarState({

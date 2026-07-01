@@ -107,7 +107,7 @@ import {
   B4_SIZER_RESULT_MS,
   B4_OUTCOME_MS,
   EXEC_BASE_MS,
-  // (c5) in-process "Request changes" review-bar constants.
+  // in-process "Request changes" review-bar constants.
   REVIEW_GATE_ON_MS,
   REVIEW_GATE_OFF_MS,
   REVIEW_SUBMIT_MOVE_MS,
@@ -251,7 +251,7 @@ describe("storyboard — applyUpToTime invariants", () => {
   });
 });
 
-// ---- TRAILHEAD_BEAT — interactive question + labeled subagent chapters -------------------------
+// TRAILHEAD_BEAT — interactive question + labeled subagent chapters
 //
 // These assert the CONTENT shape the two-chapter beat must hold, independent of frame counts:
 //   (a) while the question is open (request shown, answer not yet applied) the card has answers===null
@@ -332,7 +332,7 @@ describe("storyboard — TRAILHEAD_BEAT interactive + subagent content", () => {
   });
 });
 
-// ---- TRAILHEAD_BEAT — P3 rewritten FRONT (beats 1-4): opening, clarify, scope×20, plan-sizer ----
+// TRAILHEAD_BEAT — FRONT (beats 1-4): opening, clarify, scope×20, plan-sizer
 //
 // Beats 1-4 replace the old pre-filled prompt with the real composer flow, drive the question answer
 // through the card's Other input, expand scope-recon to ~20 atomic leaf tools, and add a plan-sizer
@@ -464,7 +464,7 @@ describe("storyboard — P3 front (opening / clarify / scope×20 / plan-sizer)",
     for (const t of leafTools) expect(t.status).not.toBe("running");
   });
 
-  // (c2 — review2) the plan-sizer is now a RUNNING SUBAGENT group (Task tool_use + subagent_started label
+  // the plan-sizer is now a RUNNING SUBAGENT group (Task tool_use + subagent_started label
   // + atomic leaf pairs + an in-group summary + a DEFERRED top-level Task tool_result carrying the SPLIT
   // decision), mirroring the scope-recon / intent-clarifier groups — NOT a bare atomic pair. Every leaf is
   // parented to PLAN_SIZER_ID and is ATOMIC (use+result share a tMs). The group's seqs are FRACTIONAL
@@ -619,7 +619,7 @@ describe("storyboard — P3 front (opening / clarify / scope×20 / plan-sizer)",
   });
 });
 
-// ---- TRAILHEAD_BEAT — Prototype-review chapter -------------------------------------------------
+// TRAILHEAD_BEAT — Prototype-review chapter
 //
 // The final chapter narrates a visual prototype, brackets it with an open_plan + prototype_gate
 // window (so both the gate AND the active tab are pure fns of T), then lands feedback + an approval
@@ -630,7 +630,7 @@ describe("storyboard — P3 front (opening / clarify / scope×20 / plan-sizer)",
 //   • projectSurfaceState makes prototypeGate.on AND activeTab="plan" true exactly inside the window;
 //   • the terminal result is still STRICTLY the last frame (highest seq AND tMs).
 
-// ---- TRAILHEAD_BEAT — intent-clarifier RUNNING beat (before the question card) ----------
+// TRAILHEAD_BEAT — intent-clarifier RUNNING beat (before the question card)
 //
 // Before the clarify question card lands (B2_QUESTION_MS) the intent-clarifier agent is shown RUNNING:
 // a top-level `intent-clarifier` Task + a `subagent_started` label + >=3 atomic leaf tool pairs + an
@@ -833,7 +833,7 @@ describe("storyboard — TRAILHEAD_BEAT prototype-review chapter", () => {
       (sf) => sf.frame.t === "pulse" && sf.frame.target === "#reading-pane",
     );
     expect(panePulses.length).toBeGreaterThanOrEqual(2);
-    // REGRESSION GUARD (review2 c3): the deleted floating overlay (#demo-proto-card) must NEVER reappear in
+    // REGRESSION GUARD: the deleted floating overlay (#demo-proto-card) must NEVER reappear in
     // ANY frame. Re-adding the card path (a pulse/cursor/anything targeting it) turns this RED.
     const cardRefs = TRAILHEAD_BEAT.filter(
       (sf) => "target" in sf.frame && (sf.frame as { target?: string }).target === "#demo-proto-card",
@@ -909,7 +909,7 @@ describe("storyboard — TRAILHEAD_BEAT prototype-review chapter", () => {
   });
 });
 
-// ---- TRAILHEAD_BEAT — "Nested plan" reveal chapter --------------------------------------------
+// TRAILHEAD_BEAT — "Nested plan" reveal chapter
 //
 // The closing chapter reveals the drafted Trailhead plan tree: the sidebar is EMPTY for the whole
 // beat (an explicit empty plan_changed at tMs 0) until the plan_changed at 19800 pops TRAILHEAD_PLANS
@@ -987,7 +987,7 @@ describe("storyboard — TRAILHEAD_BEAT nested-plan reveal chapter", () => {
   });
 });
 
-// ---- (P1) TRAILHEAD_BEAT — PROGRESSIVE multiplan reveal (the structural core) ------------------
+// (P1) TRAILHEAD_BEAT — PROGRESSIVE multiplan reveal (the structural core)
 //
 // The back half now plays PROGRESSIVELY: the master appears alone, then each subplan's ROW materializes
 // ONE AT A TIME (a fresh `plan_changed` snapshot = the tree grown so far) just before that subplan is
@@ -1178,7 +1178,7 @@ describe("storyboard — (P1) progressive multiplan reveal", () => {
   });
 });
 
-// ---- TRAILHEAD_BEAT — "Comment & iterate" chapter (Slice 06) ----------------------------------
+// TRAILHEAD_BEAT — "Comment & iterate" chapter
 //
 // With the V1 master still open on the Plan tab, the user leaves THREE comments (set_comments ×3, full
 // set growing [c1] → [c1,c2] → [c1,c2,c3]); projectSurfaceState.comments follows 1 → 2 → 3 (the
@@ -1203,14 +1203,14 @@ describe("storyboard — TRAILHEAD_BEAT comment-and-iterate chapter", () => {
   // PROTO_ACT_SHIFT).
   // + CLARIFIER_SHIFT: the intent-clarifier beat slid the whole back half (incl. this comment chapter)
   // later by CLARIFIER_SHIFT, applied via the DOWNSTREAM_AFTER_PROTOTYPE splice .map.
-  // (c4) + C4_SHIFT: the c4 ToC-navigation beat (which now plays BEFORE the comments) is longer than the
+  // + C4_SHIFT: the ToC-navigation beat (which now plays BEFORE the comments) is longer than the
   // old generic slow-scroll beat it replaced, so the comment chapter slid later by C4_SHIFT (applied in
   // the DOWNSTREAM splice loop to every comment-chapter frame).
   const CMT_SHIFT = PROTO_ACT_SHIFT + CLARIFIER_SHIFT + SIZER_SHIFT + C4_SHIFT;
   const C1_PAINT_MS = 59800 + CMT_SHIFT;
   const C2_PAINT_MS = 63800 + CMT_SHIFT;
   const C3_PAINT_MS = 67800 + CMT_SHIFT;
-  // (c5) The V2 reveal slid from literal 69000 → 69500 (the in-process review-bar dwell + the slower
+  // The V2 reveal slid from literal 69000 → 69500 (the in-process review-bar dwell + the slower
   // cursor travel to "Request changes" + the gate-OFF frame now sit between the 3rd comment and V2).
   const V2_OPEN_MS = 69500 + CMT_SHIFT;
 
@@ -1225,7 +1225,7 @@ describe("storyboard — TRAILHEAD_BEAT comment-and-iterate chapter", () => {
   });
 
   it("(P2) COMMENT-ACT-COUNT — ALL THREE comments have a typed-text act: 3 popover-on overlays + 3 #sp-text field_types, each preceding its highlight", () => {
-    // (P2) EVERY comment now gets a full popover act (c2 was previously a plain set_comments with NO act).
+    // (P2) EVERY comment now gets a full popover act.
     // Assert the ordering popover-on → typing → highlight for all three. FALSIFIABILITY: remove c2's act
     // (delete its popover-on + #sp-text field_type frames) and these length-3 assertions go RED (back to 2).
     const popoverOns = TRAILHEAD_BEAT.filter(
@@ -1316,9 +1316,9 @@ describe("storyboard — TRAILHEAD_BEAT comment-and-iterate chapter", () => {
   });
 });
 
-// ---- (c5 — review2) IN-PROCESS "Request changes" review bar ------------------------------------
+// IN-PROCESS "Request changes" review bar
 //
-// review2 c5: the comment chapter was MISSING the review surface the real app shows at the TOP of the
+// the comment chapter was MISSING the review surface the real app shows at the TOP of the
 // reading column. We now drive the REAL in-process #review-bar (VIEWING / IN-PROCESS mode → Submit
 // "Request changes") for the OPEN master, THEN travel the cursor to "Request changes" + click. The bar
 // must coexist with the inline comment highlights at the SAME T (the c5 invariant), Submit must be
@@ -1385,7 +1385,7 @@ describe("storyboard — (c5) in-process Request-changes review bar", () => {
 
   it("FALSIFIABILITY — the EXTERNAL source yields 'Submit' (NOT 'Request changes'): the in-process source is load-bearing", () => {
     // The naive/wrong path (emitReviewRequested → source "external") produces the WRONG label. This
-    // pins WHY the c5 surface must be in-process. If applyReviewBarState ever returned "Request changes"
+    // pins WHY the surface must be in-process. If applyReviewBarState ever returned "Request changes"
     // for an external review, this goes RED.
     const ext = applyReviewBarState({ pendingCount: 1, viewing: true, viewedCommentCount: 3, source: "external" });
     expect(ext.submitLabel).toBe("Submit");
@@ -1407,7 +1407,7 @@ describe("storyboard — (c5) in-process Request-changes review bar", () => {
     // The cursor's move + click target #review-submit (the "Request changes" button).
     const moves = TRAILHEAD_BEAT.filter((sf) => sf.frame.t === "cursor_move" && sf.frame.target === "#review-submit");
     const clicks = TRAILHEAD_BEAT.filter((sf) => sf.frame.t === "cursor_click" && sf.frame.target === "#review-submit");
-    // (one #review-submit move/click also lives in the prototype chapter — assert the c5 pair lands in
+    // (one #review-submit move/click also lives in the prototype chapter — assert the pair lands in
     // the comment-chapter window, after the gate turns on).
     expect(moves.some((sf) => sf.tMs >= GATE_ON_MS && sf.tMs <= GATE_OFF_MS)).toBe(true);
     expect(clicks.some((sf) => sf.tMs >= GATE_ON_MS && sf.tMs <= GATE_OFF_MS)).toBe(true);
@@ -1421,7 +1421,7 @@ describe("storyboard — (c5) in-process Request-changes review bar", () => {
   });
 });
 
-// ---- (P2) projectScroll — PURE scroll-timeline projection + scrub-revert ------------------------
+// (P2) projectScroll — PURE scroll-timeline projection + scrub-revert
 //
 // projectScroll(story, T) returns the active scroll window's {target, frac} lerped fromFrac→toFrac over
 // [fromMs, toMs), or null outside any window. These tests pin to the named SCROLL_* constants and assert
@@ -1495,7 +1495,7 @@ describe("storyboard — (P2) projectScroll purity + scrub-revert", () => {
   });
 
   it("(c4) the two scroll windows DO NOT overlap (projectScroll is last-window-wins)", () => {
-    // The c4 beat replaced the generic slow-scroll with a down→up pair paired to the ToC-entry clicks.
+    // The beat is a down→up scroll pair paired to the ToC-entry clicks.
     // If the two scroll windows overlapped, the later (up) window would silently mask the (down) one for
     // any T inside the overlap — projectScroll is last-active-window-wins. Assert the down window CLOSES
     // (toMs) at or before the up window OPENS (fromMs), in the LIVE shifted beat. FALSIFIABILITY: widen
@@ -1513,15 +1513,15 @@ describe("storyboard — (P2) projectScroll purity + scrub-revert", () => {
   });
 });
 
-// ---- (c4) Contents-tab ToC navigation beat — sidebar-tab projection + sequence ordering ---------
+// Contents-tab ToC navigation beat — sidebar-tab projection + sequence ordering
 //
-// (c4 — review2) BEFORE commenting, the demo clicks the SIDEBAR "Contents" tab (revealing the ToC),
+// BEFORE commenting, the demo clicks the SIDEBAR "Contents" tab (revealing the ToC),
 // clicks a LOW ToC entry (pane scrolls down), clicks the "Context" ToC entry (pane scrolls back up),
 // then restores the Plans tab. projectSidebarTab is a PURE last-≤-T fn (default "plans"); the cursor
 // visibly targets the real `.toc-item` / tab elements. These tests pin the live (shifted) frame times.
 
 describe("storyboard — (c4) Contents-tab ToC navigation beat", () => {
-  // The c4 frames live in DOWNSTREAM_HEAD (literal < the comment-chapter boundary), so the splice .map
+  // The frames live in DOWNSTREAM_HEAD (literal < the comment-chapter boundary), so the splice .map
   // shifts them by + PROTO_ACT_SHIFT + CLARIFIER_SHIFT + SIZER_SHIFT (NOT + C4_SHIFT — that extra is
   // comment-chapter only). The switch constants are authored in that literal space, so the LIVE time adds
   // the head shift.
@@ -1570,7 +1570,7 @@ describe("storyboard — (c4) Contents-tab ToC navigation beat", () => {
     expect(contentsTab!).toBeLessThan(lowEntry!);
     expect(lowEntry!).toBeLessThan(contextEntry!);
     expect(contextEntry!).toBeLessThan(plansTab!);
-    // The whole c4 beat precedes the first comment's #sp-text typing.
+    // The whole beat precedes the first comment's #sp-text typing.
     const firstCommentType = TRAILHEAD_BEAT.find(
       (sf) => sf.frame.t === "field_type" && sf.frame.target === "#sp-text",
     )!.tMs;
@@ -1592,7 +1592,7 @@ describe("storyboard — (c4) Contents-tab ToC navigation beat", () => {
   });
 });
 
-// ---- TRAILHEAD_BEAT — "Execution" chapter (the FINAL beat, P5: per-subplan subagents) ----------
+// TRAILHEAD_BEAT — "Execution" chapter (the FINAL beat, P5: per-subplan subagents)
 //
 // (P5) The plan is approved → the assistant EXECUTES it as a SEQUENCE OF SUBAGENTS: subplans 01/02/03 +
 // the 04.01–04.04 trail-detail leaves, EACH run via its OWN `Task` subagent (top-level Task tool_use +
@@ -1770,7 +1770,7 @@ describe("storyboard — TRAILHEAD_BEAT execution chapter (the final beat)", () 
   });
 });
 
-// ---- TRAILHEAD comment quotes anchor as inline highlights (the KEY falsifiable test) ----------
+// TRAILHEAD comment quotes anchor as inline highlights (the KEY falsifiable test)
 //
 // The reconciler's reading-pane rebuild is: renderInto(pane, markdown, dir) then applyComments(pane,
 // records). This test exercises that EXACT real path in jsdom: render the V1 master through the real
@@ -1866,7 +1866,7 @@ describe("storyboard — comment quotes anchor as .cmt-hl highlights (real rende
   });
 });
 
-// ---- Token reveal (pure fn of T) ---------------------------------------------------------------
+// Token reveal (pure fn of T)
 //
 // A single revealMs assistant_text frame streams a PREFIX of its text while tMs <= T < tMs+revealMs,
 // the full text once past the window. The prefix length is a pure fn of T (floor of the linear
@@ -1918,8 +1918,6 @@ describe("storyboard — token reveal", () => {
   });
 });
 
-// ---- Backward seek == from-zero rebuild --------------------------------------------------------
-
 describe("storyboard — backward seek equals from-zero rebuild", () => {
   it("scrubbing forward then back to T equals a fresh rebuild at T (no residue)", () => {
     // T inside the seq-2 reveal window [B1_REPLY_MS, +900) — a mid-stream prefix, richer than an idle T.
@@ -1935,7 +1933,7 @@ describe("storyboard — backward seek equals from-zero rebuild", () => {
   });
 });
 
-// ---- (P6) Overlay projections are PURE fns of T — scrub-revert across the WHOLE timeline ----------
+// (P6) Overlay projections are PURE fns of T — scrub-revert across the WHOLE timeline
 //
 // EXTENDS the backward-seek-equals-rebuild guarantee (above, for the conversation MODEL) to the new
 // overlay PROJECTIONS. The conversation model is rebuilt from scratch each apply; the overlay
@@ -1950,7 +1948,7 @@ describe("storyboard — backward seek equals from-zero rebuild", () => {
 // FALSIFIABILITY (verified): temporarily wrapping projectModalState with a module-level `let last` that
 // returns the cached value when `T < lastT` (a forward-delta accumulator instead of a re-derivation)
 // makes the forward-then-back result for an EARLIER T differ from the direct result → this test goes
-// RED. Restoring the pure projection turns it green again. Confirmed locally before commit.
+// RED. Restoring the pure projection turns it green again.
 describe("storyboard — (P6) overlay projections are pure fns of T (forward-then-back == direct)", () => {
   // Serialize each projection's result into a stable, deep-comparable string. Set/Map have no useful
   // JSON.stringify, so normalize them to SORTED arrays of entries (order-independent equality).
@@ -2009,7 +2007,7 @@ describe("storyboard — (P6) overlay projections are pure fns of T (forward-the
   });
 });
 
-// ---- Model-direct variants (question / user / system / permission_resolved) --------------------
+// Model-direct variants (question / user / system / permission_resolved)
 //
 // A small fixture story exercising each new ModelFrame variant. The QUESTION INVARIANT holds:
 // request.seq (1) < answer.seq (3) AND request.tMs (1000) <= answer.tMs (3000). The user_message (seq
@@ -2123,7 +2121,7 @@ describe("storyboard — model-direct variants under reset+replay", () => {
   });
 });
 
-// ---- Model memo: terminal result entering yields working===null --------------------------------
+// Model memo: terminal result entering yields working===null
 
 describe("storyboard — model memo & terminal result", () => {
   it("modelSignature differs the instant ONLY the terminal result newly enters, and working derives null", () => {
@@ -2141,7 +2139,7 @@ describe("storyboard — model memo & terminal result", () => {
   });
 });
 
-// ---- Surface projection (pure) -----------------------------------------------------------------
+// Surface projection (pure)
 
 describe("storyboard — projectSurfaceState purity + reversion", () => {
   const PLAN = "/Users/mock/.claude/plans/x.md";
@@ -2217,13 +2215,12 @@ describe("storyboard — projectSurfaceState purity + reversion", () => {
   });
 });
 
-// ---- Overlay projections (PURE fns of (story, T)) ----------------------------------------------
+// Overlay projections (PURE fns of (story, T))
 //
-// P0 of the mock-animate fidelity rewrite: four pure projections of the new OverlayFrame family
+// Four pure projections of the new OverlayFrame family
 // (pulse / cursor / field_type / overlay_modal). Each is a full re-derivation from the frame set so it
 // scrubs forward AND backward cleanly. NO DOM — selectors stay symbolic (resolved to pixels later in
-// the reconciler). Every assertion below was verified FALSIFIABLE: after writing it, the cited
-// projection inversion was applied, the test was confirmed to go RED, then the projection was restored.
+// the reconciler).
 
 describe("storyboard — projectPulseSet (additive half-open windows)", () => {
   // Two pulses; the second OVERLAPS the first so an interior T can have BOTH present (additive, not
@@ -2526,7 +2523,7 @@ describe("storyboard — projectModalState (last-≤-T per kind, backward scrub)
   });
 });
 
-// ---- (P2) Quota-wall scene — the real quota-exhaustion flow between subplan 03 and 04 -------------
+// (P2) Quota-wall scene — the real quota-exhaustion flow between subplan 03 and 04
 //
 // A "Usage limit reached" WAITING banner whose countdown STARTS at 3h 04m and races to 0:00:00 as a PURE
 // fn of scrub-time T (held readable, then compressed over ~8s), then a tombstone + a visible "resuming"

@@ -44,8 +44,8 @@ export interface ComposerElements {
   request: HTMLTextAreaElement | null;
   dirField: HTMLInputElement | null; // read-only path display
   chooseDirBtn: HTMLButtonElement | null;
-  // DEPRECATED: the Plan/Build segmented toggle was removed (composer is plan-only). Kept on the
-  // interface (always null in production) so existing callers/tests keep compiling; unused by Composer.
+  // Always null in production (the composer is plan-only). Retained on the interface so existing
+  // callers/tests keep compiling; unused by Composer.
   modeToggle: HTMLElement | null;
   startBtn: HTMLButtonElement | null;
   cancelBtn: HTMLButtonElement | null;
@@ -61,7 +61,7 @@ export interface ComposerElements {
   attachStrip?: HTMLElement | null;
   attachBtn?: HTMLElement | null;
   fileInput?: HTMLInputElement | null;
-  // Auto-resume-after-quota select (Phase 6). Optional so older tests/callers compile. When present,
+  // Auto-resume-after-quota select. Optional so older tests/callers compile. When present,
   // init() wires it via initAutoResumeSetting (self-persists to localStorage on change); the chosen
   // value is read at session START by the orchestrator's defaultDeps adapter (resolveAutoResumeBudget),
   // NOT by the composer — the composer only needs to surface + persist the control.
@@ -70,7 +70,7 @@ export interface ComposerElements {
 
 // Injection seam for the Start action (tests stub it).
 //
-// the composer no longer fires start_agent_session + send_agent_message itself — it
+// The composer does not fire start_agent_session + send_agent_message itself — it
 // delegates to a SINGLE `start({cwd, request})` thunk that the orchestrator owns (index.ts binds it
 // to getOrchestrator().start(...)). The thunk returns TRUE when a run was really started and FALSE
 // on the idempotent no-op (a run is already active). The composer runs onStarted()/close() ONLY on
@@ -107,14 +107,14 @@ export class Composer {
   private cwd = "";
   // The image-attachment controller (null when the surface has no attach elements / no factory).
   private attachments: ImageAttachments | null = null;
-  // DISPATCH GATE (Phase B): a Start is in flight. This is the composer's slice of the dispatch
+  // DISPATCH GATE: a Start is in flight. This is the composer's slice of the dispatch
   // dimension — set the instant validation passes and cleared in start()'s finally, so a rapid
   // double-click / double-Enter on Start dispatches EXACTLY ONE run. The synchronous early-return on
   // this flag — not the orchestrator's idempotent start() boolean — is what makes the double-fire safe.
   private starting = false;
-  // Build mode removed (user decision: plan-only for now). The composer ALWAYS starts sessions in
-  // "plan" mode; the only path to acceptEdits is the post-review #review-approve handler in main.ts
-  // (set_agent_permission_mode). This is a fixed constant, not user-selectable.
+  // The composer ALWAYS starts sessions in "plan" mode; the only path to acceptEdits is the
+  // post-review #review-approve handler in main.ts (set_agent_permission_mode). This is a fixed
+  // constant, not user-selectable.
   private readonly mode: StartingMode = "plan";
 
   constructor(
@@ -155,13 +155,11 @@ export class Composer {
     this.els.request?.addEventListener("input", () => this.clearError());
     this.els.tokenInput?.addEventListener("input", () => this.clearError());
 
-    // Build mode removed — there is no Plan/Build toggle to wire (mode is the fixed "plan" constant).
-
     // Multimodal: build the image-attachment controller (paste/drop/file-pick → chips). Null when the
     // surface has no attach elements (older callers) — Start then forwards no images.
     this.attachments = this.attachmentsFactory(this.els);
 
-    // Auto-resume-after-quota select (Phase 6): reflect the persisted choice + self-persist on change.
+    // Auto-resume-after-quota select: reflect the persisted choice + self-persist on change.
     // No-op when the element is absent (older callers). The composer's DirStorage (get/set) satisfies
     // the setting's storage seam structurally, so the choice persists through the SAME store the
     // last-dir memory uses. The VALUE is consumed at START by the orchestrator's defaultDeps adapter
@@ -169,7 +167,7 @@ export class Composer {
     initAutoResumeSetting(this.els.autoResume ?? null, this.storage);
   }
 
-  // Open the modal, pre-filling the remembered last directory. Mode is always "plan" (Build removed).
+  // Open the modal, pre-filling the remembered last directory.
   open(): void {
     this.cwd = this.loadLastDir();
     if (this.els.dirField) this.els.dirField.value = this.cwd;
@@ -205,7 +203,7 @@ export class Composer {
     return this.els.error?.textContent ?? "";
   }
 
-  // Starting mode (test reader). Always "plan" now (Build removed).
+  // Starting mode (test reader).
   startingMode(): StartingMode {
     return this.mode;
   }

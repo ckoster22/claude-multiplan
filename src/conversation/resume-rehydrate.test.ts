@@ -1,6 +1,6 @@
 // Multiplan orchestration domain — RESUME rehydration & scope tests (falsifiable, PURE).
 //
-// Covers the Phase-2 resume helpers appended to plan-tree.ts: rehydrateState2, resumeScopeForRoot,
+// Covers the Phase-2 resume helpers in plan-tree.ts: rehydrateState2, resumeScopeForRoot,
 // activePhaseLabel. For EVERY representable active stage×phase we build a COHERENT tree in that
 // phase (assertCoherent2 passes by construction), then:
 //   (a) ROUND-TRIP: toLedger2 → JSON.parse(JSON.stringify(...)) → rehydrateState2, asserting the
@@ -37,8 +37,6 @@ import type {
   ClarifyGate,
   PrototypeGate,
 } from "./plan-tree";
-
-// ---- fixtures ---------------------------------------------------------------------------------
 
 const nnOf = (n: number) => parseNn(n);
 const path = (...ns: number[]): NodePath => ns.map(nnOf);
@@ -122,7 +120,7 @@ function diskRoundTrip(state: PlanTreeState2): PlanTreeState2 {
   return rehydrateState2(onDisk);
 }
 
-// ---- per-phase roots (each coherent by construction) -------------------------------------------
+// Per-phase roots (each coherent by construction)
 //
 // `active` is the path the test expects activePathOf to resolve. For root-active phases that is [];
 // for child-active phases the deeper path. `stage`/`phase` are the active node's expected state.
@@ -146,9 +144,9 @@ const LEAF_PLAN = "/abs/.claude/plans/agent-plan-tree-x-00-DEADBEEF.md";
 const LEAF_DIR = "/abs/.claude/plans/agent-plan-tree-x-00-DEADBEEF.md";
 
 const cases: PhaseCase[] = [
-  // ---- open phases (root-active) ----
+  // open phases (root-active)
   {
-    // PHASE 2: the genesis clarify window is now a FORWARD `restart` resume (re-run the clarify turn),
+    // The genesis clarify window is now a FORWARD `restart` resume (re-run the clarify turn),
     // no longer the "genesis phase — start a new plan" dead-end.
     name: "open/clarifying-intent (genesis) → restart resume",
     root: openNode(1, "clarifying-intent"),
@@ -159,7 +157,7 @@ const cases: PhaseCase[] = [
     label: "Clarifying intent",
   },
   {
-    // PHASE 2: the prototype gate has durable `.plan-tree/prototype/` + INTENT.md artifacts, so it is a
+    // The prototype gate has durable `.plan-tree/prototype/` + INTENT.md artifacts, so it is a
     // FORWARD resume via the dedicated `prototype-gate` plan (re-present the gate), not a restart.
     name: "open/prototype-review (genesis gate) → prototype-gate resume",
     root: openNode(1, "prototype-review"),
@@ -188,7 +186,7 @@ const cases: PhaseCase[] = [
     label: "Sizing",
   },
   {
-    // RECOVERY REFACTOR (Phase 1): open/decomposing is now DISK-PROBE aware. With NO probe injected
+    // Open/decomposing is now DISK-PROBE aware. With NO probe injected
     // (the default `resumeScopeForRoot(root)` path these cases exercise), the artifact is treated as
     // ABSENT → resumable via resend("decompose") (re-send the decompose step fresh). The
     // artifact-PRESENT branch (re-present the decomposition gate) is covered in the dedicated
@@ -221,7 +219,7 @@ const cases: PhaseCase[] = [
     label: "Awaiting decomposition approval",
   },
 
-  // ---- leaf phases ----
+  // leaf phases
   {
     name: "leaf/drafting → resend draft",
     root: leafNode(1, "drafting"),
@@ -251,7 +249,7 @@ const cases: PhaseCase[] = [
     label: "Awaiting your approval of the plan",
   },
   {
-    // PHASE 3 — leaf/executing is now an OFFERABLE-but-HAZARDOUS rewind (the user may continue, but
+    // Leaf/executing is now an OFFERABLE-but-HAZARDOUS rewind (the user may continue, but
     // edits from the in-flight turn may be partially applied — invariant I3 — so the banner gates it
     // behind a confirm via `requiresConfirm`). It rewinds to this leaf's approval gate, carrying the
     // leaf's own planPath.
@@ -274,7 +272,7 @@ const cases: PhaseCase[] = [
     label: "Executing",
   },
 
-  // ---- split phases (need multi-node coherent trees; active node is the split itself) ----
+  // split phases (need multi-node coherent trees; active node is the split itself)
   {
     // ROLL-UP WINDOW: a NON-ROOT split running-children with ALL children summarized is the active
     // node (activePathOf returns the split path). The root is split running-children with this
@@ -373,8 +371,6 @@ const deepDecompGate: PhaseCase = {
 
 const allCases = [...cases, deepLeafGate, deepDecompGate];
 
-// ---- round-trip + rehydrate ---------------------------------------------------------------------
-
 describe("rehydrateState2 (disk round-trip preserves active node, nulls transients)", () => {
   for (const c of allCases) {
     it(c.name, () => {
@@ -398,7 +394,7 @@ describe("rehydrateState2 (disk round-trip preserves active node, nulls transien
       expect(rehydrated.pendingApproval).toBeNull();
       expect(rehydrated.pendingClarify).toBeNull();
       expect(rehydrated.pendingPrototype).toBeNull();
-      // PHASE 5 — the transient forced-acceptance gate is nulled on rehydrate too (re-minted from the
+      // The transient forced-acceptance gate is nulled on rehydrate too (re-minted from the
       // tree shape + baseline_, never restored from a persisted gate). FALSIFY: carry it through
       // rehydrateState2 → non-null here → RED.
       expect(rehydrated.pendingAcceptance).toBeNull();
@@ -411,7 +407,7 @@ describe("rehydrateState2 (disk round-trip preserves active node, nulls transien
   }
 });
 
-// ---- resume scope verdict + label --------------------------------------------------------------
+// Resume scope verdict + label
 //
 // THE load-bearing assertion: for every phase the exact resumable/blocked verdict. Falsifiability is
 // demonstrated by the dedicated inversion test below (flip a mapping → a case goes RED).
@@ -436,7 +432,7 @@ describe("resumeScopeForRoot verdict + activePhaseLabel", () => {
   }
 });
 
-// ---- PHASE 5: the forced acceptance window resume scope ----------------------------------------
+// The forced acceptance window resume scope
 //
 // The ROOT resting running-children with ALL children summarized is the forced-acceptance hold. It is
 // STRUCTURALLY identical to a non-root roll-up window, so resumeScopeForRoot needs the run-level facts
@@ -506,8 +502,6 @@ describe("resumeScopeForRoot — PHASE 5 forced acceptance window", () => {
   });
 });
 
-// ---- done / empty edge cases -------------------------------------------------------------------
-
 describe("resumeScopeForRoot edge cases", () => {
   it("a done tree (root summarized) → not resumable, reason 'already complete', label 'Complete'", () => {
     const root = leafNode(1, "summarized", { summaryPath: fileOf("/s.md") });
@@ -535,7 +529,7 @@ describe("resumeScopeForRoot edge cases", () => {
   });
 });
 
-// ---- FALSIFIABILITY GUARD ----------------------------------------------------------------------
+// FALSIFIABILITY GUARD
 //
 // Proves the verdict assertions are not vacuous: every resumable case is genuinely resumable and
 // every blocked case is genuinely blocked under the CURRENT code — so flipping any single mapping in
@@ -556,7 +550,7 @@ describe("resume scope partition is exactly as the v1 table specifies (falsifiab
 
     // Concretely: within `allCases` EVERY phase is now resumable — recon/sizer/draft/decompose, leaf+
     // decomp gates, acceptance, clarify(restart), prototype-gate, (DEFECT FIX) non-root-rollup/reviewing
-    // which resend their in-flight turn, AND (PHASE 3) leaf/executing which is now an offerable hazardous
+    // which resend their in-flight turn, AND leaf/executing which is now an offerable hazardous
     // rewind (requiresConfirm). (The torn-leaf and no-active-node DEGENERATE shapes are honestly BLOCKED,
     // asserted in their own describe blocks, not in `allCases`.)
     for (const c of allCases) {
@@ -566,12 +560,12 @@ describe("resume scope partition is exactly as the v1 table specifies (falsifiab
   });
 });
 
-// ---- PHASE 2: the newly-FORWARD phases (clarify/prototype/rollup/reviewing/degenerate/torn) --------
+// The newly-FORWARD phases (clarify/prototype/rollup/reviewing/degenerate/torn)
 //
-// Each of these was BLOCKED before Phase 2; resumeScopeForRoot now returns resumable:true with the
+// Each of these was BLOCKED; resumeScopeForRoot now returns resumable:true with the
 // expected plan kind. Falsifiability: each test pins BOTH the resumable flag AND the discriminating
-// plan.kind, so reverting the mapping to blocked (or to the wrong kind) goes RED. leaf/executing is the
-// PHASE-3 case — now an offerable HAZARDOUS rewind (requiresConfirm), no longer blocked.
+// plan.kind, so reverting the mapping to blocked (or to the wrong kind) goes RED. leaf/executing is
+// now an offerable HAZARDOUS rewind (requiresConfirm), no longer blocked.
 
 describe("PHASE 2 — formerly-blocked phases now resolve to FORWARD resumable verdicts", () => {
   it("clarifying-intent → resumable restart (was 'genesis phase — start a new plan')", () => {
@@ -642,7 +636,7 @@ describe("PHASE 2 — formerly-blocked phases now resolve to FORWARD resumable v
   });
 });
 
-// ---- baseline_ (working-reference) round-trip (Phase 3) ----------------------------------------
+// baseline_ (working-reference) round-trip
 //
 // The frozen working-reference record must survive the disk round-trip (toLedger2 → JSON →
 // rehydrateState2) so a resumed run still knows the baseline was frozen. Falsifiable both ways: a
@@ -674,8 +668,6 @@ describe("rehydrateState2 carries the baseline_ working-reference record", () =>
     expect(ledger.baseline_).toEqual({ frozen: true, frozen_ms: 1234 });
   });
 });
-
-// ---- helpers ----
 
 function nodeAtPathOrThrow(root: TreeNode, p: NodePath): TreeNode {
   let cur: TreeNode = root;

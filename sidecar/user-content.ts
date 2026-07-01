@@ -4,7 +4,7 @@
 // Extracted into its own SDK-free module so it can be unit-tested in isolation: the
 // sidecar entry (`index.ts`) imports the bundled `claude` native binary, so importing
 // it from a test triggers the bundler to choke on that binary (OOM). These builders are
-// PURE and import nothing heavy — the load-bearing test seam (DA #6) lives here and is
+// PURE and import nothing heavy — the load-bearing test seam lives here and is
 // re-exported from `index.ts`.
 
 /** One inbound image: snake_case `media_type` + base64 `data` (no `data:` prefix). */

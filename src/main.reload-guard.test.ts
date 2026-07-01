@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
 // Locks the central correctness invariant of the ToC feature: the ToC rebuild
 // (rebuildTocFromPane → extractToc + buildToc) must run ONLY AFTER the FINAL
 // `if (!renderGuard.isCurrent(gen)) return;` check in reloadOpenPlan. A render superseded by a
@@ -11,7 +10,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // would make hoisting the rebuild above the guard ship green). renderInto is mocked to write its
 // markdown arg into #reading-pane so extractToc sees real <h1>/<h2> headings; settle is mocked to
 // a CONTROLLABLE deferred so we can interleave two reloads and resolve them out of order.
-// ---------------------------------------------------------------------------------------------
 
 // Controllable deferred for settle() — created per reload so we can resolve A and B in any order.
 type Deferred = { promise: Promise<void>; resolve: () => void };

@@ -53,8 +53,6 @@ export type ConvFrame = Extract<
   { kind: "assistant_text" | "tool_use" | "tool_result" | "subagent_started" | "result" }
 >;
 
-// ---- ModelFrame variants -----------------------------------------------------------------------
-//
 // Every ModelFrame applies DIRECTLY onto the ConversationModel through one of its real append*
 // methods. The exhaustive switch in applyModelFrame keeps every variant honest.
 export type ModelFrame =
@@ -75,17 +73,15 @@ export type ModelFrame =
   | { t: "system_message"; text: string; seq: number }
   // The held permission `id` was resolved (allow/deny) — appended via appendPermissionResolved(id, seq).
   | { t: "permission_resolved"; id: string; seq: number }
-  // (P2) The quota-exhaustion WAITING banner — appended via appendQuotaBanner(). Its reveal time (the
+  // The quota-exhaustion WAITING banner — appended via appendQuotaBanner(). Its reveal time (the
   // StoryFrame.tMs handed to applyModelFrame as `tMs`) is the scene's quotaStartMs; the banner's
   // frozenRemainingMs is a PURE fn of (tMs, T) via quotaFrozenRemainingMs, so the countdown races 3h04m→0
   // as scrub-time advances. Carries no seq — appendQuotaBanner places the singleton at lastWireSeq + 0.5.
   | { t: "quota_banner" }
-  // (P2) The quota refreshed — appended via clearQuotaBanner() (tombstones the singleton → buildTree
+  // The quota refreshed — appended via clearQuotaBanner() (tombstones the singleton → buildTree
   // drops the banner node). Carries no seq.
   | { t: "quota_resumed" };
 
-// ---- SurfaceFrame variants ---------------------------------------------------------------------
-//
 // SurfaceFrames are NEVER applied to the model (applyModelFrame treats them as no-ops). They are
 // projected by projectSurfaceState and reconciled onto the real host seam.
 export type SurfaceFrame =
@@ -100,7 +96,7 @@ export type SurfaceFrame =
   | { t: "pending_reviews"; reviews: ReviewRequest[] }
   // The prototype gate state: on/off (+ optional round 1..3 when on).
   | { t: "prototype_gate"; on: boolean; round?: number }
-  // (c5) The IN-PROCESS approval-review gate state: when ON with a `planPath`, main.ts's #review-bar
+  // The IN-PROCESS approval-review gate state: when ON with a `planPath`, main.ts's #review-bar
   // shows in VIEWING / IN-PROCESS mode (Submit relabeled "Request changes") for the plan at `planPath`
   // — which MUST equal the currently-open plan so viewingGate() matches WITHOUT a re-open (a re-open
   // would wipe the inline comment highlights). Submit is DISABLED at 0 comments, ENABLED once the open
@@ -109,8 +105,6 @@ export type SurfaceFrame =
   // by reconcileReviewGate (drives the in-process orchestrator gate seam + pushes the comment count).
   | { t: "review_gate"; on: boolean; planPath: string | null };
 
-// ---- OverlayFrame variants ---------------------------------------------------------------------
-//
 // OverlayFrames are NEVER applied to the model (applyModelFrame treats them as no-ops, exactly like
 // SurfaceFrames) AND they are excluded from the model signature (an overlay frame entering the ≤T set
 // must NOT re-render the conversation pane — it drives a cosmetic overlay seam, not conv content).
@@ -134,7 +128,7 @@ export type OverlayFrame =
   // Projected by projectScroll (last-active window, lerped) and reconciled by the setScroll seam,
   // which resolves the fraction to pixels (frac * (scrollHeight - clientHeight)) against the live DOM.
   | { t: "scroll"; target: string; fromFrac: number; toFrac: number; fromMs: number; toMs: number }
-  // (c4) The SIDEBAR tab (Plans / Contents) shown at this point. A real, deterministic surface (the
+  // The SIDEBAR tab (Plans / Contents) shown at this point. A real, deterministic surface (the
   // c4 navigation choreography clicks the Contents tab to reveal the plan's ToC, then restores Plans
   // before commenting). Projected by projectSidebarTab (last-≤-T, default "plans") and reconciled by
   // the setSidebarTab seam, which clicks the real `.tab-row .tab[data-tab=…]` so main.ts's initTabs
@@ -190,8 +184,6 @@ function clamp01(x: number): number {
   return x < 0 ? 0 : x > 1 ? 1 : x;
 }
 
-// ---- (P2) Quota-wall scene timing — a PURE, scrub-driven countdown ------------------------------
-//
 // The quota-exhaustion beat between subplan 03 and 04: a "Usage limit reached" banner whose countdown
 // STARTS at 3h 04m and races to 0:00:00 as a pure function of scrub-time T (compressed over ~8s of demo
 // time). The banner first holds READABLE for QUOTA_READ_HOLD_MS (so it lands on 03:04:00 long enough to
@@ -255,7 +247,7 @@ export function applyModelFrame(
       model.appendPermissionResolved(frame.id, frame.seq);
       break;
     case "quota_banner": {
-      // (P2) The waiting banner. `tMs` is the scene's quotaStartMs; frozenRemainingMs is a PURE fn of
+      // The waiting banner. `tMs` is the scene's quotaStartMs; frozenRemainingMs is a PURE fn of
       // (tMs, T) so the countdown races as scrub-time advances. The singleton lands at lastWireSeq + 0.5.
       model.appendQuotaBanner({
         state: "waiting",
@@ -267,7 +259,7 @@ export function applyModelFrame(
       break;
     }
     case "quota_resumed":
-      // (P2) Quota refreshed — tombstone the singleton so buildTree drops the banner node.
+      // Quota refreshed — tombstone the singleton so buildTree drops the banner node.
       model.clearQuotaBanner();
       break;
     // SurfaceFrames are model no-ops — projected by projectSurfaceState, never applied here.
@@ -326,8 +318,6 @@ export function storyDurationMs(story: ReadonlyArray<StoryFrame>): number {
   return max;
 }
 
-// ---- Surface projection (PURE fn of T) ---------------------------------------------------------
-
 // The host SURFACE state projected at scrub time T. Every field is the last-≤-T SurfaceFrame value;
 // `plans` falls back to the fixture seed before any plan_changed frame; `activeTab` is "plan" iff a
 // plan is open, else "conversation".
@@ -337,7 +327,7 @@ export interface SurfaceState {
   plans: PlanRecord[];
   pendingReviews: ReviewRequest[];
   prototypeGate: { on: boolean; round: number };
-  // (c5) The IN-PROCESS approval-review gate: when on with a planPath, the #review-bar shows in VIEWING /
+  // The IN-PROCESS approval-review gate: when on with a planPath, the #review-bar shows in VIEWING /
   // IN-PROCESS mode ("Request changes") for that plan. Last-≤-T review_gate frame; off/null by default.
   reviewGate: { on: boolean; planPath: string | null };
   activeTab: "plan" | "conversation";
@@ -353,7 +343,7 @@ export function projectSurfaceState(story: ReadonlyArray<StoryFrame>, T: number)
   let plans: PlanRecord[] | null = null;
   let pendingReviews: ReviewRequest[] = [];
   let prototypeGate: { on: boolean; round: number } = { on: false, round: 1 };
-  // (c5) The in-process review gate — last-≤-T review_gate frame; off/null before any.
+  // The in-process review gate — last-≤-T review_gate frame; off/null before any.
   let reviewGate: { on: boolean; planPath: string | null } = { on: false, planPath: null };
   // Comments keyed by path so the open-plan's comments are the last set_comments for THAT path.
   const commentsByPath = new Map<string, CommentRecord[]>();
@@ -403,8 +393,6 @@ export function projectSurfaceState(story: ReadonlyArray<StoryFrame>, T: number)
   };
 }
 
-// ---- Overlay projections (PURE fns of (story, T)) ----------------------------------------------
-//
 // Each projects ONE overlay primitive at scrub time T from the OverlayFrames in the story. All four
 // are pure (no DOM, no selectors resolved to pixels — that happens later in the reconciler). They
 // scrub forward AND backward cleanly because they are full re-derivations from the frame set, not
@@ -588,8 +576,6 @@ export function projectSidebarTab(story: ReadonlyArray<StoryFrame>, T: number): 
   return tab;
 }
 
-// ---- Model signature (memo key) ----------------------------------------------------------------
-
 // An INJECTIVE string over the applied MODEL-frame SET at T plus the in-progress reveal prefix. The
 // reconciler re-renders the conversation pane ONLY when this changes. It is keyed on (a) how many
 // model frames are ≤ T (the frame SET grows monotonically as T advances) and (b) the in-progress
@@ -629,18 +615,16 @@ export function modelSignature(story: ReadonlyArray<StoryFrame>, T: number): str
   return `${countModelFramesLeqT}|${revealPrefixLen}${quotaKey}`;
 }
 
-// ---- TRAILHEAD_BEAT — a fictional, public-safe conversation beat -----------------------------
-//
 // A two-chapter beat for a fictional React-Native "Trailhead" hiking app. It exercises the FULL
 // interactive + subagent surface the live app renders, all through the REAL ConversationModel:
 //
-//   P3 REWRITTEN FRONT (beats 1-4) — the cosmetic-cursor / frame-driven-truth interaction model:
+//   Beats 1-4 — the cosmetic-cursor / frame-driven-truth interaction model:
 //   every cursor click is COSMETIC (a `#demo-cursor` press animation); the named state change is driven
 //   by the frame next to it, and the reconciler owns any real DOM it touches. The named B1_/B2_/B3_/B4_
 //   tMs constants above pin every dwell; the tests reference THOSE constants (not magic numbers).
 //
 //   Chapter "Clarify" — Beat 1 + Beat 2 (seq 1..5):
-//     Beat 1 (new-plan opening, REPLACES the old pre-filled prompt): the cursor moves to #new-plan-btn
+//     Beat 1 (new-plan opening): the cursor moves to #new-plan-btn
 //     and cosmetically clicks; overlay_modal opens the composer (reconciler-owned `.hidden`); a ~2s
 //     pulse dwells on the empty composer; the cursor moves to #composer-request and field_type TYPES the
 //     Trailhead request over ~2.5s; the cursor clicks #composer-start (cosmetic) and overlay_modal closes
@@ -659,7 +643,7 @@ export function modelSignature(story: ReadonlyArray<StoryFrame>, T: number): str
 //     END, flipping the top-level Task tool node running→done — WITHOUT it the Task row stays "running"
 //     forever (the no-stuck-tool invariant fails). seq 52 is the in-group summary, seq 54 the wrap-up.
 //
-//   Chapter "Plan sizer" — Beat 4 (seq 55..58, NEW):
+//   Chapter "Plan sizer" — Beat 4 (seq 55..58):
 //     A short narration announces the right-sizing gate, then a top-level `plan-sizer` Task (atomic
 //     tool_use seq 56 + tool_result seq 57, shared tMs) returns the SPLIT decision ("master + 3 subplans;
 //     subplan 04 decomposed into 4 leaves"). A brief pulse marks the plan-sizer row; seq 58 narrates the
@@ -692,7 +676,7 @@ export function modelSignature(story: ReadonlyArray<StoryFrame>, T: number): str
 //     on the open V1 prose. The pane then switches to the REVISED master (open_plan{TRAILHEAD_MASTER_V2}
 //     at 24800, LEFT OPEN — no closing null) — because comments are scoped to the open path and V2 has
 //     none, the highlights clear to 0 on the revised doc (a clean iteration reveal, Plan tab). A system
-//     echo (seq 26) announces the revision. (c5) BEFORE the comments land, an IN-PROCESS review_gate
+//     echo (seq 26) announces the revision. BEFORE the comments land, an IN-PROCESS review_gate
 //     turns ON for the OPEN master so the REAL #review-bar shows in VIEWING / IN-PROCESS mode (Submit
 //     relabeled "Request changes", DISABLED at 0 comments → ENABLED as the set_comments grow); the
 //     cursor then travels to "Request changes" (#review-submit) and clicks. The gate is fanned through
@@ -700,16 +684,24 @@ export function modelSignature(story: ReadonlyArray<StoryFrame>, T: number): str
 //     NOT the external pending_reviews path — so it does NOT re-open the plan and the inline highlights
 //     SURVIVE alongside the bar (the c5 invariant). The gate turns OFF just before the V2 reveal.
 //
-//   Chapter "Execution" + "Done" (open_plan{null} + seq 27..49):
-//     The plan is approved and the assistant EXECUTES the four 04.* trail-detail leaves FLAT (per-leaf,
-//     no Task wrapper). The first execution frame is a SURFACE open_plan{null} (tMs 27000): it closes the
-//     reading pane (the V2 master is no longer shown) so projectSurfaceState flips activeTab "plan" →
-//     "conversation" for the whole chapter — the execution conversation owns the foreground. Each leaf is
-//     one atomic Write tool_use/tool_result pair (shared tMs, correlated by a per-leaf WRITE_*_ID), a
-//     top-level OUTPUT assistant_text, and a DEMO-AUTHORED `[context] → NN.NN: …` system_message that
-//     threads the next leaf (scripted authoring, NOT a live orchestrator). An integration wrap-up (seq
-//     48) and the terminal `result` (seq 49 / tMs 40000, "Done") close the turn — STRICTLY the highest
-//     seq AND tMs (so `working` is non-null for every mid-run T but null at duration: a finished thought).
+//   Chapter "Execution" + "Done" (open_plan{null} + seq EXEC_SEQ_BASE..TERMINAL_SEQ):
+//     The plan is approved and the assistant EXECUTES it as a SEQUENCE OF SUBAGENTS — NOT four flat
+//     per-leaf writes. buildExecution() walks EXEC_SUBPLANS (the three top-level subplans 01/02/03 PLUS
+//     the four 04.* trail-detail decomposition leaves — SEVEN entries, each its OWN spanning `Task`
+//     subagent) and, per subplan, emits: (a) the subplan's ROW appearing (a plan_changed snapshot of the
+//     tree grown so far), (b) a just-in-time PLANNING beat (narration + a spanning planning Task whose
+//     atomic recon/sizing leaves + DEFERRED tool_result ARE the subplan drafted now), (c) the EXECUTION
+//     beat (a spanning Task + its ATOMIC leaf tool pairs — a Read/Write/Edit/Bash/Grep mix, each pair
+//     sharing a tMs — an in-group summary, and a DEFERRED top-level Task tool_result that flips the
+//     spanning Task running→done and names the produced artifact), and (e) a parent-review narration
+//     queueing the next. Each subplan's narration + Task prompt reference the PRIOR subplan's produced
+//     artifact VERBATIM (the context-threading invariant), and a quota-wall scene is spliced in at the
+//     03→04 boundary. The first execution frame is a SURFACE open_plan{null} (tMs EXEC_BASE_MS): it closes
+//     the reading pane (the V2 master is no longer shown) so projectSurfaceState flips activeTab "plan" →
+//     "conversation" for the whole chapter — the execution conversation owns the foreground. An integration
+//     wrap-up and the terminal `result` (seq TERMINAL_SEQ / tMs TERMINAL_MS, "Done") close the turn —
+//     STRICTLY the highest seq AND tMs (so `working` is non-null for every mid-run T but null at duration:
+//     a finished thought).
 //
 //   PROTOTYPE-REVIEW DESIGN RATIONALE (load-bearing): in production the gate force-switches to the
 //   Plan tab (onPrototypeReview → switchToPlanTab); the review bar + reading pane live on the Plan tab
@@ -748,14 +740,14 @@ const QUESTION_ID = "toolu_trailhead_ask_platform";
 // The plan-sizer right-sizing gate's tool id (Beat 4). Top-level Task; its result lands atomically.
 const PLAN_SIZER_ID = "toolu_trailhead_plan_sizer";
 
-// ---- Named beat tMs constants (load-bearing; tests pin to THESE, not magic numbers) -------------
+// Named beat tMs constants (load-bearing; tests pin to THESE, not magic numbers).
 //
-// Beats 1-4 (the rewritten front) introduce real viewer DWELLS — the cursor moves, the composer opens
+// Beats 1-4 introduce real viewer DWELLS — the cursor moves, the composer opens
 // and is read, text is typed character-by-character, the question is read and answered. Every dwell is
 // a tMs GAP that the player's hold-state spans; a `pulse` window straddling the gap tells the viewer
 // where to look. These constants make a re-time a one-line change instead of churn across the tests.
 //
-// Beat 1 — New plan opening (the composer flow REPLACES the old pre-filled seq-1 prompt):
+// Beat 1 — New plan opening (the composer flow):
 export const B1_NEWPLAN_MOVE_MS = 600; // cursor travels to #new-plan-btn
 export const B1_NEWPLAN_CLICK_MS = 1300; // cosmetic click on #new-plan-btn
 export const B1_COMPOSER_OPEN_MS = 1500; // overlay_modal{composer,on} — the modal opens (reconciler-owned)
@@ -764,9 +756,9 @@ export const B1_COMPOSER_PULSE_TO = 3700; //   … for ~2s (a real dwell: the vi
 export const B1_REQUEST_MOVE_MS = 3700; // cursor travels to #composer-request
 export const B1_REQUEST_TYPE_FROM = 4300; // field_type #composer-request begins …
 export const B1_REQUEST_TYPE_TO = 6800; //   … typed over ~2.5s
-// (review2 c1) PACING: the reviewer at tMs≈8508 could not SEE the textbox→Start move — it
+// PACING: a viewer scrubbing to tMs≈8508 could not SEE the textbox→Start move — it
 // completed ~600ms earlier and there was no textbox dwell to establish the origin, so the cursor read as
-// "already rested on the button". The beat is now re-centered ON the commented frame:
+// "already rested on the button". The beat is re-centered on that frame:
 //   1. right after typing ends the cursor RE-ANCHORS at the request field (fresh origin waypoint) and a
 //      pulse on #composer-request marks "the cursor is IN the textbox" during a real dwell;
 //   2. it then travels SLOWLY to #composer-start over ~1.1s, and the travel WINDOW STRADDLES 8508 so a
@@ -804,7 +796,7 @@ export const B1B_SUMMARY_MS = 14800; // the clarifier's closing in-group summary
 export const B1B_TASK_RESULT_MS = 15300; // the clarifier Task's OWN deferred tool_result (flips it done)
 
 // CLARIFIER_SHIFT (load-bearing): the intent-clarifier running beat (B1B_*, above) is INSERTED
-// between the seq-2 reply (B1_REPLY_MS) and the (formerly tMs-11000) clarify question. It adds TIME only
+// between the seq-2 reply (B1_REPLY_MS) and the clarify question. It adds TIME only
 // (its model frames carry FRACTIONAL 2.x seqs, so no seq renumbering). EVERYTHING downstream of the reply
 // — the question (B2_*), scope-recon (B3_*), plan-sizer (B4_*), prototype review (PROTO_*), and the
 // programmatic Execution chapter (EXEC_BASE_MS) — slides later by exactly this much. The B2_/B3_/B4_/
@@ -843,7 +835,7 @@ export const B3_SUMMARY_MS = 31000 + CLARIFIER_SHIFT; // the subagent's closing 
 export const B3_TASK_RESULT_MS = 31900 + CLARIFIER_SHIFT; // the Task's OWN deferred tool_result (flips it done)
 export const B3_WRAPUP_MS = 32800 + CLARIFIER_SHIFT; // the top-level wrap-up
 
-// Beat 4 — Plan-sizer (c2 — review2): the right-sizing gate between scope-recon and the drafted plan,
+// Beat 4 — Plan-sizer: the right-sizing gate between scope-recon and the drafted plan,
 // now shown as a RUNNING SUBAGENT (a small mirror of the scope-recon / intent-clarifier groups) instead
 // of a bare atomic tool_use/tool_result pair. The assistant launches a top-level `plan-sizer` Task,
 // streams a `subagent_started` label, runs a few atomic leaf tool pairs (Read the plan template,
@@ -860,7 +852,7 @@ export const B4_SIZER_PULSE_FROM = 35600 + CLARIFIER_SHIFT; // brief pulse on th
 export const B4_SIZER_PULSE_TO = 37200 + CLARIFIER_SHIFT; //   … ~1.6s
 export const B4_SIZER_SUMMARY_MS = 37800 + CLARIFIER_SHIFT; // the sizer's closing in-group summary
 export const B4_SIZER_RESULT_MS = 38300 + CLARIFIER_SHIFT; // seq 57 the sizer Task's OWN DEFERRED tool_result (carries the SPLIT decision, flips it done)
-// SIZER_SHIFT (load-bearing, c2): widening the plan-sizer beat into a running subagent group (the leaf
+// SIZER_SHIFT (load-bearing): widening the plan-sizer beat into a running subagent group (the leaf
 // pairs + summary + deferred result above) pushes its TAIL — the split-outcome narration (B4_OUTCOME_MS)
 // — later by this much. Everything downstream of the outcome (the prototype-review chapter PROTO_*, the
 // HEAD_SHIFT-spliced nested-plan/comment chapters, and the programmatic Execution chapter EXEC_BASE_MS)
@@ -878,7 +870,7 @@ export const B4_OUTCOME_MS = 37600 + CLARIFIER_SHIFT + SIZER_SHIFT; // seq 58 na
 export const SEQ_SHIFT = 38; // old downstream seqs 21..49 → 59..87
 export const EXEC_SHIFT = 26800; // old downstream tMs 13000..40000 → 39800..66800
 
-// PROTO_ACT_SHIFT (load-bearing, P4): the rewritten "Prototype review" chapter is LONGER than the
+// PROTO_ACT_SHIFT (load-bearing): the rewritten "Prototype review" chapter is LONGER than the
 // original instant feedback/approval — it now scripts the full prototype ACT (pulse the narration
 // bubble ~2s, show the round-1 trail card + pulse it, TYPE the feedback into #prototype-feedback ~2.5s,
 // cosmetic-click #review-submit, morph to the round-2 card + pulse it ~2s, cosmetic-click #review-approve).
@@ -888,24 +880,22 @@ export const EXEC_SHIFT = 26800; // old downstream tMs 13000..40000 → 39800..6
 // literals). The prototype chapter's OWN seq-60/61/62 model frames are written at their new in-act tMs.
 export const PROTO_ACT_SHIFT = 9600; // pushes nested-plan (was 45800) → 55400, after the act ends (~52400).
 
-// COMMENT_ACT_SHIFT (load-bearing, P4): the rewritten "Comment & iterate" chapter now SCRIPTS the
+// COMMENT_ACT_SHIFT (load-bearing): the rewritten "Comment & iterate" chapter now SCRIPTS the
 // selection-popover act for two comments (cursor → block, popover open + pulse, type into #sp-text,
 // cosmetic #sp-save click, popover close, THEN the highlight paints). That act carries NO new seqs (all
-// overlay frames) and shifts the (P4) nested-plan/comment-and-iterate tMs by + PROTO_ACT_SHIFT only.
-// (Before P5 the Execution chapter also shifted by + COMMENT_ACT_SHIFT; P5 REWROTE Execution as a
-// programmatic subagent sequence built directly at FINAL tMs/seq from EXEC_BASE_MS / EXEC_SEQ_BASE
-// below, so this constant now only documents the comment-act length used to choose EXEC_BASE_MS.)
+// overlay frames) and shifts the nested-plan/comment-and-iterate tMs by + PROTO_ACT_SHIFT only.
+// (This constant now only documents the comment-act length used to choose EXEC_BASE_MS.)
 export const COMMENT_ACT_SHIFT = 5000;
 
-// ---- (P5) Execution chapter base — built directly at FINAL tMs/seq ------------------------------
+// Execution chapter base — built directly at FINAL tMs/seq.
 //
-// The P4 "Comment & iterate" chapter's last model frame lands at final tMs 68000 (pre-shift 58400 +
-// PROTO_ACT_SHIFT) at seq 64. The P5 Execution chapter (a SEQUENCE OF SUBAGENTS) is generated by the
+// The "Comment & iterate" chapter's last model frame lands at final tMs 68000 (pre-shift 58400 +
+// PROTO_ACT_SHIFT) at seq 64. The Execution chapter (a SEQUENCE OF SUBAGENTS) is generated by the
 // EXEC_SUBPLANS builder below at FINAL tMs/seq (NO further shift) starting just after that. EXEC_BASE_MS
 // is the Execution open_plan{null} tMs; EXEC_SEQ_BASE is the first Execution model seq (the exec-open
 // narration). The builder steps from there; TERMINAL_MS / TERMINAL_SEQ are COMPUTED from its output
 // (see after EXEC_FRAMES) so a re-time/re-count is a one-line base change, never a literal edit.
-// (c4) The comment-and-iterate chapter (COMMENT_AND_V2) is pushed by PROTO_ACT_SHIFT + CLARIFIER_SHIFT +
+// The comment-and-iterate chapter (COMMENT_AND_V2) is pushed by PROTO_ACT_SHIFT + CLARIFIER_SHIFT +
 // C4_SHIFT (the c4 ToC-navigation beat now plays BEFORE the comments and is longer than the old generic
 // slow-scroll beat it replaced). The comment act's last model frame (the seq-64 system echo, literal
 // 69400) therefore lands at final 69400 + PROTO_ACT_SHIFT + CLARIFIER_SHIFT + C4_SHIFT = 85400.
@@ -913,13 +903,13 @@ export const COMMENT_ACT_SHIFT = 5000;
 export const EXEC_BASE_MS = 82000 + CLARIFIER_SHIFT + SIZER_SHIFT; // Execution open_plan{null}; > the comment act's last frame (shifted by SIZER_SHIFT too).
 export const EXEC_SEQ_BASE = 65; // first Execution model seq (= old 64 + 1, contiguous after the comment chapter).
 
-// ---- (c4) Contents-tab ToC navigation beat constants (tests pin to THESE) -----------------------
+// Contents-tab ToC navigation beat constants (tests pin to THESE).
 //
-// (c4 — review2) BEFORE the user comments, the demo NAVIGATES the plan's table of contents: it clicks
+// BEFORE the user comments, the demo NAVIGATES the plan's table of contents: it clicks
 // the SIDEBAR "Contents" tab (revealing the ToC built from the open master), clicks a LOW ToC entry so
 // the reading pane scrolls way down, then clicks the "Context" ToC entry so it scrolls back to the top
-// — only THEN does the commenting begin. This REPLACES the old generic slow-scroll beat (the demo now
-// scrolls by DRIVING the real ToC entries the cursor visibly clicks, not an anonymous scroll sweep).
+// — only THEN does the commenting begin. The demo scrolls by DRIVING the real ToC entries the cursor
+// visibly clicks, not an anonymous scroll sweep.
 //
 // The scroll itself is still the PURE `scroll` primitive (projectScroll, lerped, scrub-revertable) over
 // #reader-scroll, so it is deterministic and reverts on a back-scrub; the cursor merely TARGETS the
@@ -970,8 +960,7 @@ export const C4_TOC_CONTEXT_SELECTOR = '#toc-list .toc-item[data-line="2"]';
 export const C4_CONTENTS_TAB_SELECTOR = '.tab-row .tab[data-tab="contents"]';
 export const C4_PLANS_TAB_SELECTOR = '.tab-row .tab[data-tab="plans"]';
 
-// ---- (c5 — review2) IN-PROCESS "Request changes" review bar -------------------------------------
-// review2 c5: the comment chapter was MISSING the review surface the real app shows at the TOP of the
+// The comment chapter was MISSING the review surface the real app shows at the TOP of the
 // reading column while the user reviews a plan they are VIEWING. We now drive the REAL in-process
 // #review-bar (VIEWING / IN-PROCESS mode → Submit relabeled "Request changes") for the OPEN master,
 // then travel the cursor to "Request changes" (#review-submit) and click it. Authored in COMMENT_AND_V2
@@ -983,8 +972,7 @@ export const C4_PLANS_TAB_SELECTOR = '.tab-row .tab[data-tab="plans"]';
 // FAITHFUL SURFACE (load-bearing): this is the orchestrator's held APPROVAL gate (pendingApproval) whose
 // planPath EQUALS the open master — fanned through main.ts's onSnapshot observer ONLY (NOT
 // onAwaitingApproval, which re-opens + wipes highlights). The bar coexists with the inline comment
-// highlights the SAME T (the c5 invariant). The cursor move/click below REPLACE the old bare
-// #review-submit cursor beat (which drove no review surface at all).
+// highlights the SAME T (the c5 invariant).
 export const REVIEW_GATE_ON_MS = 56000; // review_gate{on} for the open master — bar appears (0 comments → Submit disabled)
 export const REVIEW_BAR_DWELL_FROM = 67900; // pulse #review-bar after the 3rd comment lands (count=3 → Submit enabled) …
 export const REVIEW_BAR_DWELL_TO = 68900; //   … through the cursor's arrival at "Request changes"
@@ -992,11 +980,11 @@ export const REVIEW_SUBMIT_MOVE_MS = 68500; // cursor → "Request changes" (#re
 export const REVIEW_SUBMIT_CLICK_MS = 69000; // cosmetic press on #review-submit ("Request changes")
 export const REVIEW_GATE_OFF_MS = 69300; // review_gate{off} — the gate resolves (the bar reverts) just before V2 loads
 
-// ---- Named tMs constants for the P4 prototype ACT (tests pin to THESE, not magic numbers) -------
+// Named tMs constants for the prototype ACT (tests pin to THESE, not magic numbers).
 // The prototype chapter narration (seq 59) lands at PROTO_NARR_MS; the act then plays out as a sequence
 // of dwells (pulses spanning tMs gaps) the player's hold-state covers. All overlay frames; no seqs.
 // (All PROTO_* add + PROTO_BASE_SHIFT = CLARIFIER_SHIFT + SIZER_SHIFT — the intent-clarifier beat AND the
-// c2 plan-sizer running-group widening each slid the whole back half later; the pre-shift literal stays
+// plan-sizer running-group widening each slid the whole back half later; the pre-shift literal stays
 // visible as documentation, tests pin to the constants.)
 export const PROTO_BASE_SHIFT = CLARIFIER_SHIFT + SIZER_SHIFT; // the cumulative front-block widening above the prototype chapter
 export const PROTO_NARR_MS = 39800 + PROTO_BASE_SHIFT; // seq 59 "I put together a quick visual prototype…"
@@ -1027,7 +1015,7 @@ export const PROTO_APPROVE_CLICK_MS = 51900 + PROTO_BASE_SHIFT; // cosmetic clic
 export const PROTO_CLOSE_MS = 52050 + PROTO_BASE_SHIFT; // prototype_gate{off} + open_plan{null} → card hides, tab flips back
 export const PROTO_FEEDBACK_MS = 52200 + PROTO_BASE_SHIFT; // seq 60 user feedback bubble + seq 61 approval echo (land together)
 export const PROTO_ACK_MS = 52400 + PROTO_BASE_SHIFT; // seq 62 assistant ack (UNCHANGED — the approve act fits before it)
-// (P5) The Execution chapter is now a SEQUENCE OF SUBAGENTS — one Task subagent per subplan, each with
+// The Execution chapter is now a SEQUENCE OF SUBAGENTS — one Task subagent per subplan, each with
 // 4–6 atomic leaf tool calls + a deferred top-level Task tool_result. The per-subplan Task ids and the
 // leaf-tool ids are generated by the EXEC_SUBPLANS builder below (no hand-authored WRITE_* ids).
 
@@ -1037,7 +1025,7 @@ export const PROTO_ACK_MS = 52400 + PROTO_BASE_SHIFT; // seq 62 assistant ack (U
 const TRAILHEAD_REQUEST =
   "I want to build Trailhead — a mobile app that helps hikers find and log trails. Can you plan it?";
 
-// The prototype feedback the user TYPES into #prototype-feedback during the P4 prototype act and that
+// The prototype feedback the user TYPES into #prototype-feedback during the prototype act and that
 // then lands as the seq-60 user bubble — the SAME string is both the typed feedback AND the chat row
 // (mirrors Beat 1's compose-then-echo). It literally names the two changes the round-2 card makes
 // (larger card + difficulty badge), so the typed feedback and the card morph are coherent.
@@ -1049,8 +1037,6 @@ const PLATFORM_QUESTION = "Which platform should the first cut target?";
 // The free-text "Other" answer the user typed (matches NO option label → the "Other…" demonstration).
 const PLATFORM_ANSWER = "Android first — that's where most of our trail users are";
 
-// ---- Slice-06 "Comment & iterate" comment records ----------------------------------------------
-//
 // Three comments the user leaves on the STILL-OPEN V1 master (TRAILHEAD_MASTER_PATH). Each `quote` is
 // a VERBATIM phrase from the V1 master's PROSE (outside the ```mermaid fence), so applyComments anchors
 // it as a `.cmt-hl` highlight in the reading pane. `block_line: null` ⇒ whole-pane occurrence scan
@@ -1060,7 +1046,7 @@ const PLATFORM_ANSWER = "Android first — that's where most of our trail users 
 // reconciler's applyComments → inline `.cmt-hl` highlights. They DO NOT use the EXTERNAL
 // `pending_reviews` path — that path (emitReviewRequested) makes main.ts AUTO-OPEN the review's plan
 // and re-render the pane, WIPING the freshly-applied highlights, and labels Submit "Submit" (NOT
-// "Request changes"). (c5) The review surface is instead the IN-PROCESS approval gate (the `review_gate`
+// "Request changes"). The review surface is instead the IN-PROCESS approval gate (the `review_gate`
 // SurfaceFrame, fanned through main.ts's onSnapshot observer whose pendingApproval.planPath EQUALS the
 // already-open master): viewingGate() matches WITHOUT a re-open, so the inline highlights and the
 // "Request changes" bar coexist at the SAME T. This slice delivers the highlights + the in-process bar
@@ -1093,7 +1079,6 @@ export const TRAILHEAD_COMMENT_3: CommentRecord = {
 };
 
 export const TRAILHEAD_BEAT: StoryFrame[] = [
-  // ---- Chapter "Clarify" -----------------------------------------------------------------------
   {
     // SURFACE (tMs 0) — start with an EMPTY sidebar. projectSurfaceState falls back to the fixture
     // seed (clonePlans) before any plan_changed frame, which would show the unrelated harness/Chompy
@@ -1104,15 +1089,9 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     frame: { t: "plan_changed", plans: [] },
   },
 
-  // ================================================================================================
-  // Chapter "Clarify" — Beat 1 (new-plan opening) + Beat 2 (entering the Other answer)
-  // ================================================================================================
-  //
-  // Beat 1 REPLACES the old pre-filled seq-1 prompt. The user OPENS a new plan through the real
+  // The user OPENS a new plan through the real
   // composer flow — all cursor clicks are COSMETIC; the modal open/close and the chat bubble are driven
   // by frames (overlay_modal / user_message), the reconciler being the exclusive owner of #composer-modal.
-  //
-  // ---- Beat 1: cursor → #new-plan-btn (cosmetic click) → composer opens → read → type request → start
   {
     // OVERLAY — the cursor travels to the New-plan button.
     tMs: B1_NEWPLAN_MOVE_MS,
@@ -1161,7 +1140,7 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     frame: { t: "cursor_move", target: "#composer-request", moveMs: 200 },
   },
   {
-    // OVERLAY (review2 c1) — pulse #composer-request DURING the dwell so the viewer registers the cursor is
+    // OVERLAY — pulse #composer-request DURING the dwell so the viewer registers the cursor is
     // IN THE TEXTBOX (the origin of the travel below). This is what was missing: the field→button move now
     // departs from a clearly-established origin instead of reading as "already on the button".
     tMs: B1_REQUEST_DWELL_PULSE_FROM,
@@ -1173,7 +1152,7 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     },
   },
   {
-    // OVERLAY (review2 c1) — the cursor travels SLOWLY (B1_START_MOVE_DUR ~1.1s) from
+    // OVERLAY — the cursor travels SLOWLY (B1_START_MOVE_DUR ~1.1s) from
     // #composer-request to the Start button. The move WINDOW (7900→9000) STRADDLES the commented frame
     // 8508, so a viewer scrubbing there sees the cursor mid-flight (t01 ≈ 0.55), not a rested cursor.
     tMs: B1_START_MOVE_MS,
@@ -1228,10 +1207,6 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     },
   },
 
-  // ================================================================================================
-  // Chapter "Clarify" — Beat 1.5: intent-clarifier RUNNING beat
-  // ================================================================================================
-  //
   // BEFORE the question card lands, the intent-clarifier agent is shown RUNNING — a small mirror of the
   // scope-recon group (Task + subagent_started label + atomic leaf tool pairs + an in-group summary + a
   // DEFERRED top-level Task tool_result that flips it done). So the viewer sees the clarifier scan the
@@ -1457,7 +1432,6 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     },
   },
 
-  // ---- Beat 2: clarify — show the user ENTERING the Other answer --------------------------------
   {
     // seq 3 — an interactive AskUserQuestion permission request (the question card). While it is the
     // latest unresolved hold, derive() shows the WAITING_INPUT_LABEL working indicator.
@@ -1555,10 +1529,6 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     frame: { t: "user_message", seq: 5, text: PLATFORM_ANSWER },
   },
 
-  // ================================================================================================
-  // Chapter "Scope recon" — Beat 3: ~20 atomic leaf tool pairs under the scope-recon Task
-  // ================================================================================================
-  //
   // The assistant launches a `scope-recon` SUBAGENT (a Task). A `subagent_started` frame LABELS the
   // group. Inside it the subagent runs ~20 LEAF tool pairs (Glob×3 / Read×8 / Grep×4 / Bash×3) plus two
   // intermediate in-group notes, EACH tool_use+tool_result pair sharing a tMs (atomic — no lingering
@@ -2306,17 +2276,13 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
     },
   },
 
-  // ================================================================================================
-  // Chapter "Plan sizer" — Beat 4 (c2 — review2): the right-sizing gate, shown as a RUNNING SUBAGENT
-  // ================================================================================================
-  //
   // Between scope-recon and the drafted plan the assistant launches a `plan-sizer` Task and the viewer
   // sees it WORK — a `subagent_started` label, a first-words line, a few ATOMIC leaf tool pairs (Read the
   // plan template, Glob/Grep to gauge the surface size), a brief in-group summary — then the Task's OWN
   // DEFERRED top-level tool_result returns the SPLIT decision ("master + 3 subplans; subplan 04 decomposed
   // into 4 leaves") and flips the spanning Task done. This MIRRORS the scope-recon / intent-clarifier
-  // groups (atomic leaf pairs sharing one tMs; a DEFERRED parent result; a subagent_started label) instead
-  // of the old bare atomic tool_use/tool_result pair. The group's seqs are FRACTIONAL (56.x — strictly
+  // groups (atomic leaf pairs sharing one tMs; a DEFERRED parent result; a subagent_started label). The
+  // group's seqs are FRACTIONAL (56.x — strictly
   // between the seq-56 Task tool_use and the seq-57 deferred result), so NOTHING downstream renumbers (the
   // outcome stays seq 58, EXEC_SEQ_BASE is untouched). The deferred result lands BEFORE the seq-58 outcome
   // narration (no-stuck-tool: the Task never lingers "running" into the next beat).
@@ -2540,8 +2506,6 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
       },
     },
   },
-  // ---- Chapter "Prototype review" (P4: the scripted prototype ACT) -----------------------------
-  //
   // The assistant narrates a visual prototype; the storyboard then PLAYS the act: pulse the narration
   // bubble (a ~2s read), show the ROUND-1 trail card INLINE in #reading-pane (exactly as the real app
   // does — main.ts's renderPrototypePreview composes the ASCII trail card via composePreviewMarkdown,
@@ -2723,9 +2687,7 @@ export const TRAILHEAD_BEAT: StoryFrame[] = [
   },
 ];
 
-// ---- (P1) PROGRESSIVE PLAN-TREE SNAPSHOTS — the sidebar grows ONE node at a time ----------------
-//
-// Phase 1 conveys progression by NODE APPEARANCE (the real sidebar has no queued/active/done node
+// Progression is conveyed by NODE APPEARANCE (the real sidebar has no queued/active/done node
 // styling — PlanRecord is a frozen wire contract). So instead of injecting the whole TRAILHEAD_PLANS
 // tree at once, the storyboard emits a SEQUENCE of `plan_changed` snapshots, each a FULL, PRE-ORDERED
 // `PlanRecord[]` = the tree grown SO FAR. The growth is derived from TRAILHEAD_PLANS by FILTERING it
@@ -2750,15 +2712,12 @@ function treeThrough(revealedPaths: ReadonlySet<string>): PlanRecord[] {
   return TRAILHEAD_PLANS.filter((p) => p.flavor === "master" || (p.nn_path !== null && revealedPaths.has(p.nn_path)));
 }
 
-// ---- DOWNSTREAM (P4-shifted): nested plan … comment & iterate … execution … terminal ------------
-//
-// These chapters keep their ORIGINAL shape + seqs but are shifted by + PROTO_ACT_SHIFT in tMs (the P4
+// These chapters keep their ORIGINAL shape + seqs but are shifted by + PROTO_ACT_SHIFT in tMs (the
 // prototype ACT above is longer than the original instant feedback). The shift is applied PROGRAMMATICALLY
-// by the .map at the bottom (never hand-edited literals) — exactly the named-constant discipline P3 used
+// by the .map at the bottom (never hand-edited literals) — exactly the named-constant discipline used
 // for EXEC_SHIFT, extended one level. Every tMs literal below is written at its pre-PROTO_ACT_SHIFT value
 // (= old + EXEC_SHIFT); the .map adds PROTO_ACT_SHIFT so the tests can pin `old + EXEC_SHIFT + PROTO_ACT_SHIFT`.
 const DOWNSTREAM_AFTER_PROTOTYPE: StoryFrame[] = [
-  // ---- Chapter "Nested plan" -------------------------------------------------------------------
   {
     // seq 25 — the assistant announces the drafted plan tree (streams via revealMs ~1200). This bubble
     // lives on the Conversation tab and narrates the nested plan the storyboard is about to reveal in
@@ -2778,7 +2737,7 @@ const DOWNSTREAM_AFTER_PROTOTYPE: StoryFrame[] = [
     },
   },
   {
-    // SURFACE — (P1) ONLY the MASTER row pops into the (until-now empty) sidebar — NOT the whole tree.
+    // SURFACE — ONLY the MASTER row pops into the (until-now empty) sidebar — NOT the whole tree.
     // The drafted subplan rows appear ONE AT A TIME later, during the progressive Execution chapter (each
     // subplan's row materializes at its turn). projectSurfaceState takes the last-≤-T plan_changed, so for
     // any T in [0, 19800+shift) the sidebar is [] and for T ≥ that it is the master alone (TREE_MASTER_ONLY)
@@ -2795,9 +2754,7 @@ const DOWNSTREAM_AFTER_PROTOTYPE: StoryFrame[] = [
     frame: { t: "open_plan", path: TRAILHEAD_MASTER_PATH },
   },
 
-  // ---- (c4) Contents-tab ToC navigation beat ---------------------------------------------------
-  //
-  // Before the user comments, the demo NAVIGATES the plan's table of contents (review2 c4): click the
+  // Before the user comments, the demo NAVIGATES the plan's table of contents: click the
   // SIDEBAR "Contents" tab → the ToC (built from the open master by the real extractToc→buildToc, via
   // the player's TOC-populate seam) shows; click a LOW ToC entry → the reading pane scrolls way down;
   // click the "Context" ToC entry → it scrolls back to the top. The cursor visibly TARGETS the real
@@ -2899,18 +2856,15 @@ const DOWNSTREAM_AFTER_PROTOTYPE: StoryFrame[] = [
   },
 ];
 
-// ---- (c4) The comment-and-iterate chapter — pushed an EXTRA + C4_SHIFT later ---------------------
-//
+// The comment-and-iterate chapter is pushed an EXTRA + C4_SHIFT later.
 // Authored at its ORIGINAL literals (continuing the EXEC_SHIFT scheme); the splice loop adds
 // PROTO_ACT_SHIFT + CLARIFIER_SHIFT + C4_SHIFT to every frame here. Split OUT of DOWNSTREAM_AFTER_PROTOTYPE
 // (which now ends at the c4 Plans-restore) so the c4 beat and the comment chapter get DIFFERENT shifts
 // cleanly — a per-array push, not a literal-tMs boundary (the c4 beat's tail literal exceeds the first
 // comment's literal, so a single tMs threshold could not separate them).
 const COMMENT_AND_V2: StoryFrame[] = [
-  // ---- Chapter "Comment & iterate" (P2: every comment gets a full popover ACT) ------------------
-  //
   // The master (TRAILHEAD_MASTER_PATH) is still open on the Plan tab. The user now leaves THREE comments
-  // on it — and (P2) the demo SCRIPTS a full act for EACH (c1, c2, c3): the target block is EMPHASIZED
+  // on it — and the demo SCRIPTS a full act for EACH (c1, c2, c3): the target block is EMPHASIZED
   // (a pulse on the block), the cursor moves to it, the selection popover opens under it (#sel-popover,
   // driven by overlay_modal{popover,on,target} — the reconciler is its exclusive writer, setting
   // #sp-quote + positioning it), the popover is pulsed, the comment is TYPED into #sp-text, a cosmetic
@@ -2923,7 +2877,6 @@ const COMMENT_AND_V2: StoryFrame[] = [
   // Context paragraph = line 4 carries BOTH c1's and c2's quotes; the closing paragraph = line 53 carries
   // c3's quote). c1 + c2 share the Context block; c3 anchors the distinct closing block.
 
-  // ---- (c5) IN-PROCESS review bar appears (Submit DISABLED at 0 comments) ----
   {
     // SURFACE — drive the REAL in-process #review-bar (VIEWING / IN-PROCESS mode → "Request changes")
     // for the OPEN master. It appears at the TOP of the reading column BEFORE the user comments, so the
@@ -2935,7 +2888,6 @@ const COMMENT_AND_V2: StoryFrame[] = [
     frame: { t: "review_gate", on: true, planPath: TRAILHEAD_MASTER_PATH },
   },
 
-  // ---- Comment 1 act (anchors to the Context paragraph, data-source-line="4") ----
   {
     // OVERLAY — EMPHASIZE the target block before typing (pulse the Context block ~1s).
     tMs: 56200,
@@ -2985,7 +2937,6 @@ const COMMENT_AND_V2: StoryFrame[] = [
     frame: { t: "set_comments", path: TRAILHEAD_MASTER_PATH, comments: [TRAILHEAD_COMMENT_1] },
   },
 
-  // ---- Comment 2 act (P2: now a FULL act; anchors to the SAME Context block, data-source-line="4") ----
   {
     // OVERLAY — EMPHASIZE the target block before typing (pulse the Context block ~1s).
     tMs: 60200,
@@ -3032,7 +2983,6 @@ const COMMENT_AND_V2: StoryFrame[] = [
     frame: { t: "set_comments", path: TRAILHEAD_MASTER_PATH, comments: [TRAILHEAD_COMMENT_1, TRAILHEAD_COMMENT_2] },
   },
 
-  // ---- Comment 3 act (anchors to the closing paragraph, data-source-line="53") ----
   {
     // OVERLAY — EMPHASIZE the target block before typing (pulse the closing block ~1s).
     tMs: 64200,
@@ -3083,27 +3033,26 @@ const COMMENT_AND_V2: StoryFrame[] = [
     },
   },
   {
-    // (c5) OVERLAY — DWELL on the in-process review bar now that all 3 comments are in (Submit ENABLED):
+    // OVERLAY — DWELL on the in-process review bar now that all 3 comments are in (Submit ENABLED):
     // a pulse over #review-bar draws the eye to the "Request changes" surface before the cursor arrives.
     tMs: REVIEW_BAR_DWELL_FROM,
     frame: { t: "pulse", target: "#review-bar", fromMs: REVIEW_BAR_DWELL_FROM, toMs: REVIEW_BAR_DWELL_TO },
   },
   {
-    // (c5) OVERLAY — the cursor travels (slow, legible) to "Request changes" (#review-submit) — the REAL
-    // in-process review-bar button — to send the 3 comments back. This REPLACES the old bare
-    // #review-submit beat (which drove no review surface). The bar shows Submit relabeled "Request
+    // OVERLAY — the cursor travels (slow, legible) to "Request changes" (#review-submit) — the REAL
+    // in-process review-bar button — to send the 3 comments back. The bar shows Submit relabeled "Request
     // changes" + ENABLED (count=3); the highlights are still painted at this SAME T (the c5 invariant).
     tMs: REVIEW_SUBMIT_MOVE_MS,
     frame: { t: "cursor_move", target: "#review-submit", moveMs: 400 },
   },
   {
-    // (c5) OVERLAY — a COSMETIC press on #review-submit ("Request changes"); the V2 load below is
+    // OVERLAY — a COSMETIC press on #review-submit ("Request changes"); the V2 load below is
     // frame-driven (the real requestChanges handler stays inert in the mock).
     tMs: REVIEW_SUBMIT_CLICK_MS,
     frame: { t: "cursor_click", target: "#review-submit" },
   },
   {
-    // (c5) SURFACE — the in-process gate RESOLVES (the user requested changes): turn review_gate OFF so
+    // SURFACE — the in-process gate RESOLVES (the user requested changes): turn review_gate OFF so
     // the bar reverts before the revised plan loads. Mirrors the real flow (requestChanges clears the
     // pendingApproval gate → the next snapshot reverts the bar).
     tMs: REVIEW_GATE_OFF_MS,
@@ -3128,10 +3077,8 @@ const COMMENT_AND_V2: StoryFrame[] = [
   },
 ];
 
-// ---- (P5) EXECUTION CHAPTER — a SEQUENCE OF PER-SUBPLAN SUBAGENTS -------------------------------
-//
 // The plan (master + subplans 01/02/03 + 04 decomposed into 04.01–04.04) is approved → the assistant
-// EXECUTES it. P5 REWROTE this chapter from four flat Write leaves into a SEQUENCE OF SUBAGENTS: each
+// EXECUTES it. This chapter is a SEQUENCE OF SUBAGENTS: each
 // subplan runs via its OWN `Task` subagent — a top-level Task tool_use + a `subagent_started` label +
 // the subplan's 4–6 LEAF tool calls (a realistic Read/Write/Edit/Bash mix) nested under that Task's id,
 // an in-group summary `assistant_text`, and a DEFERRED top-level Task `tool_result` (mirroring the
@@ -3139,7 +3086,7 @@ const COMMENT_AND_V2: StoryFrame[] = [
 // leaf tool_use+tool_result pair shares a tMs (ATOMIC — no lingering "running" leaf, so the recursive
 // no-stuck-tool invariant holds).
 //
-// CONTEXT THREADING (load-bearing, replaces P4's hand-wavy `[context]` system echoes): each subplan
+// CONTEXT THREADING (load-bearing): each subplan
 // produces a named ARTIFACT (e.g. 01 → `TrailRepository.ts` exposing a `Trail` type + difficulty
 // palette {easy/moderate/hard}; 04.01 → `<DifficultyBadge>`). The NEXT subplan's launch narration AND
 // its `Task.input.prompt` VERBATIM reference the prior subplan's produced artifact (e.g. 02's prompt
@@ -3162,11 +3109,11 @@ interface ExecSubplan {
   id: string; // subplan id label, e.g. "01" / "04.01"
   taskId: string; // the Task tool_use id (= the subagent group key)
   description: string; // Task description / subagent_started description
-  // (P1) The nn_path(s) this subplan's row APPEARANCE adds to the cumulative revealed set, in pre-order.
+  // The nn_path(s) this subplan's row APPEARANCE adds to the cumulative revealed set, in pre-order.
   // Usually just the subplan's own nn_path; for 04.01 it is ["04","04.01"] (the 04 DECOMPOSITION parent
   // must appear WITH — and before — its first leaf so the snapshot stays parent-before-child).
   reveals: string[];
-  planBeat: ExecPlanBeat; // (P1) the just-in-time planning beat (recon/sizing/draft) before execution
+  planBeat: ExecPlanBeat; // the just-in-time planning beat (recon/sizing/draft) before execution
   narration: string; // top-level launch narration (threads the prior artifact)
   prompt: string; // Task.input.prompt (threads the prior artifact)
   leaves: ExecLeaf[]; // 4–6 atomic leaf tool calls
@@ -3174,7 +3121,7 @@ interface ExecSubplan {
   taskResult: string; // deferred top-level Task tool_result (names the produced artifact)
 }
 
-// (P1) The just-in-time planning beat for ONE subplan: the narration the agent emits while DRAFTING that
+// The just-in-time planning beat for ONE subplan: the narration the agent emits while DRAFTING that
 // subplan's plan (recon/sizing), plus a small atomic tool-call group representing the drafting work. The
 // `draftResult` is the in-group note that the subplan's own plan was written NOW (just before execution).
 interface ExecPlanBeat {
@@ -3187,7 +3134,7 @@ interface ExecPlanBeat {
 }
 
 // The seven subplan subagents, in execution order. Subplans 01/02/03 are top-level subplans; 04.01–04.04
-// are the trail-detail decomposition leaves — each rendered as its OWN Task subagent per the P5 spec.
+// are the trail-detail decomposition leaves — each rendered as its OWN Task subagent.
 // THREADING: every subplan after the first names the IMMEDIATELY-PRIOR subplan's artifact VERBATIM in
 // BOTH its narration AND its Task prompt (the substrings the falsifiable test pins).
 const EXEC_SUBPLANS: ExecSubplan[] = [
@@ -3414,9 +3361,7 @@ const EXEC_SUBPLANS: ExecSubplan[] = [
   },
 ];
 
-// ---- (P1) Programmatic PROGRESSIVE Execution-chapter builder (FINAL tMs/seq, no further shift) ---
-//
-// Phase 1 makes the back half play PROGRESSIVELY. The builder walks EXEC_SUBPLANS and, PER SUBPLAN,
+// The back half plays PROGRESSIVELY. The builder walks EXEC_SUBPLANS and, PER SUBPLAN,
 // emits in order:
 //   (a) the subplan's ROW(s) appear — a `plan_changed` snapshot = the tree grown SO FAR (treeThrough),
 //   (b) a just-in-time PLANNING beat — narration + a small spanning planning Task (recon/sizing leaves)
@@ -3450,13 +3395,13 @@ function buildExecution(): {
     tMs += EXEC_STEP_MS;
   };
 
-  // (P2) The quota-wall scene bounds, captured from the running cursor when the beat is emitted at the
+  // The quota-wall scene bounds, captured from the running cursor when the beat is emitted at the
   // 03→04 boundary (see emitQuotaBeat). Both are DERIVED from the builder — never hard-coded — so a
   // re-time can't desync them from the frames OR from index.ts's tickRate 1× island.
   let quotaStartMs = 0;
   let quotaEndMs = 0;
 
-  // (c6 — review2) The autoplay 4× WARP begins HERE: the tMs at which subplan 01 has FULLY played in
+  // The autoplay 4× WARP begins HERE: the tMs at which subplan 01 has FULLY played in
   // detail — i.e. the boundary frame where the SECOND subplan's row appears. Captured from the builder's
   // own output (NOT a literal) so any Execution re-time/re-count keeps the warp anchored to "just after
   // subplan 01". The autoplay loop in index.ts speeds the advance 4× from here to TERMINAL_LAND_MS.
@@ -3574,7 +3519,7 @@ function buildExecution(): {
     deferredResult: "Execution order: start with subplan 01 (Trail data & search) — it is the root dependency for 02/03/04. Subplans 01–04 then run in order.",
   });
 
-  // (P2) The quota-wall scene, authored INSIDE the loop at the 03→04 boundary via the SAME step()/seq++
+  // The quota-wall scene, authored INSIDE the loop at the 03→04 boundary via the SAME step()/seq++
   // cursor — so everything downstream (04.x, terminal, duration, warp/land constants) flows automatically
   // (no SHIFT constants, no bumped literals). Replays the real quota-exhaustion flow: a brief narration, a
   // "Usage limit reached" WAITING banner whose countdown races 3h04m→0 as a pure f(T), then a tombstone +
@@ -3612,7 +3557,7 @@ function buildExecution(): {
   };
 
   for (const sp of EXEC_SUBPLANS) {
-    // (P2) Insert the quota-wall scene at the 03→04 boundary: after subplan 03's done/review beat (the
+    // Insert the quota-wall scene at the 03→04 boundary: after subplan 03's done/review beat (the
     // prior loop iteration) and before subplan 04.01 reveals.
     if (sp.id === "04.01") emitQuotaBeat();
 
@@ -3697,11 +3642,10 @@ const EXEC_BUILT = buildExecution();
 export const TERMINAL_SEQ = EXEC_BUILT.terminalSeq;
 export const TERMINAL_MS = EXEC_BUILT.terminalMs;
 
-// ---- (c6 — review2) Autoplay 4× time-warp window over the dragging Execution tail ----------------
-// review2 c6 (user comment at tMs≈93167, deep in EXECUTION): "at this point, animate at 4× speed." The
-// execution tail is ~half the demo and drags. We speed the AUTOPLAY ADVANCE 4× across [WARP_POINT_MS,
+// Autoplay 4× time-warp window over the dragging Execution tail — it is ~half the demo and drags. We
+// speed the AUTOPLAY ADVANCE 4× across [WARP_POINT_MS,
 // TERMINAL_LAND_MS) — an autoplay RATE change ONLY. Scrub/seek (tFromPointer), the progress fraction,
-// getDuration(), and every pure f(T) projection stay LINEAR in T (the review2 annotation timestamps are
+// getDuration(), and every pure f(T) projection stay LINEAR in T (the annotation timestamps are
 // T values; they must still resolve to the same frames). seekTo(T) sets T directly and is unaffected.
 //
 // BOTH bounds are DERIVED, never absolute literals, so a tMs re-time can't desync them:
@@ -3711,7 +3655,7 @@ export const TERMINAL_MS = EXEC_BUILT.terminalMs;
 //     at 1× and LANDS. Derived from TERMINAL_MS minus a one-beat lead.
 export const WARP_POINT_MS = EXEC_BUILT.warpPointMs;
 
-// (P2) The quota-wall scene bounds — captured from the Execution builder's running cursor at the 03→04
+// The quota-wall scene bounds — captured from the Execution builder's running cursor at the 03→04
 // boundary. Exposed for index.ts's tickRate 1× island so the beat plays at normal speed (it sits INSIDE
 // the 4× warp window). DERIVED, never literals, so a re-time keeps the island anchored to the scene.
 export const QUOTA_START_MS = EXEC_BUILT.quotaStartMs;
@@ -3734,8 +3678,8 @@ function shiftStoryFrame(sf: StoryFrame, delta: number): StoryFrame {
   return { ...sf, tMs: sf.tMs + delta };
 }
 
-// Splice the P4-shifted nested-plan/comment-and-iterate chapters (shift by + PROTO_ACT_SHIFT, INNER
-// overlay windows included — see shiftStoryFrame), then the P5 Execution chapter (already authored at
+// Splice the nested-plan/comment-and-iterate chapters (shift by + PROTO_ACT_SHIFT, INNER
+// overlay windows included — see shiftStoryFrame), then the Execution chapter (already authored at
 // FINAL tMs/seq — pushed verbatim, no shift). chapterLabels preserved; monotonic tMs preserved (the
 // comment chapter's last frame stays strictly below EXEC_BASE_MS).
 // The nested-plan + master-open + c4 ToC-navigation beat: shifted by the BASE head shift only
@@ -3744,11 +3688,11 @@ function shiftStoryFrame(sf: StoryFrame, delta: number): StoryFrame {
 const HEAD_SHIFT = PROTO_ACT_SHIFT + CLARIFIER_SHIFT + SIZER_SHIFT;
 for (const sf of DOWNSTREAM_AFTER_PROTOTYPE) {
   // + CLARIFIER_SHIFT + SIZER_SHIFT on top of PROTO_ACT_SHIFT: the intent-clarifier running beat (B1B_*)
-  // AND the c2 plan-sizer running-group widening inserted in the front slide this whole block (nested-plan
+  // AND the plan-sizer running-group widening inserted in the front slide this whole block (nested-plan
   // … c4 nav) later by CLARIFIER_SHIFT + SIZER_SHIFT too.
   TRAILHEAD_BEAT.push(shiftStoryFrame(sf, HEAD_SHIFT));
 }
-// (c4) The comment-and-iterate chapter: shifted by the head shift PLUS an extra + C4_SHIFT (the c4
+// The comment-and-iterate chapter: shifted by the head shift PLUS an extra + C4_SHIFT (the c4
 // ToC-navigation beat is longer than the old generic slow-scroll beat it replaced, so the comment chapter
 // — authored at its original literals — slides later by C4_SHIFT). A per-array push (NOT a literal-tMs
 // boundary): the c4 beat's tail literal exceeds the first comment's literal, so a single threshold could

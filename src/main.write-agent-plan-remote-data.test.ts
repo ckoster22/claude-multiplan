@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
-// Phase 3 — RemoteData migration of the SCALAR plan-save read (write_agent_plan) in main.ts's
+// RemoteData migration of the SCALAR plan-save read (write_agent_plan) in main.ts's
 // handleToolPermissionRequested (the in-process ExitPlanMode intercept).
 //
 // The write result is modeled as a ScalarRemoteData<string> and folded via matchScalar:
@@ -14,7 +13,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // mocked Tauri seam (mirrors main.inproc-review.test.ts). ./render and ./conversation are REAL; the
 // orchestrator is reset to INACTIVE so the handler's `if (isOrchestrationActive()) return;` guard does
 // not pre-empt the legacy in-process path under test.
-// ---------------------------------------------------------------------------------------------
 
 const H = vi.hoisted(() => ({
   invokeCalls: [] as Array<{ cmd: string; args: Record<string, unknown> }>,

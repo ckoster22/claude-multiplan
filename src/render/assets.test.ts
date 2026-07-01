@@ -10,10 +10,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { resolveImageSrc, resolveLocalImages, joinPath, awaitImages } from "./assets";
 import { type ScalarRemoteData } from "../remote-data";
 
-// resolveImageSrc now returns a settled ScalarRemoteData<string>. Pre-migration
-// assertion LINES are kept identical (`expect(out).toBe("…")`); only the binding
-// that feeds `out` is adapted here — this unwraps the success data (undefined on
-// any non-success state, so the original assertions still catch a wrong result).
+// srcOf unwraps the success data — undefined on any non-success state, so a wrong
+// result still fails the `expect(out).toBe(…)` assertions.
 function srcOf(rd: ScalarRemoteData<string>): string | undefined {
   return rd.kind === "success" ? rd.data : undefined;
 }
@@ -68,7 +66,6 @@ describe("resolveImageSrc — local resolution", () => {
 });
 
 describe("awaitImages — unresolved placeholders are not awaited", () => {
-  // Make placeholders an HTMLImageElement in jsdom.
   function img(attrs: Record<string, string>): HTMLImageElement {
     const el = document.createElement("img");
     for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
@@ -135,7 +132,6 @@ describe("resolveLocalImages — matchScalar fold drives src vs alt", () => {
 
     await resolveLocalImages(pane, "/p");
 
-    // success arm
     expect(good.getAttribute("src")).toBe("data:image/png;base64,OK");
     expect(good.dataset.error).toBeUndefined();
     expect(good.hasAttribute("data-resolve")).toBe(false);

@@ -1,4 +1,4 @@
-// capture-annotations.mjs — Phase 4 of the mock-animate review-authoring layer.
+// capture-annotations.mjs — the mock-animate review-authoring layer.
 //
 // Given the NAME of a saved annotation doc (.mock-annotations/<name>.json), this script produces ONE
 // settled screenshot per comment — the screen-at-T (reading pane / mermaid / overlays fully rendered)
@@ -30,8 +30,6 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const annotationsDir = path.join(repoRoot, ".mock-annotations");
-
-// ---- small utilities -------------------------------------------------------------------------
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -70,8 +68,6 @@ async function waitFor(label, fn, { timeoutMs = 30000, intervalMs = 250 } = {}) 
   }
   throw new Error(`timed out waiting for ${label}${lastErr ? `: ${lastErr.message}` : ""}`);
 }
-
-// ---- CDP client over the global WebSocket ----------------------------------------------------
 
 // A minimal request/response + event JSON-RPC client over a single page-target WebSocket.
 class CdpClient {
@@ -159,8 +155,6 @@ function openWs(url) {
   });
 }
 
-// ---- Chrome binary resolution ----------------------------------------------------------------
-
 function resolveChromeBinary() {
   if (process.env.CHROME_BIN) return process.env.CHROME_BIN;
   const candidates = [
@@ -177,12 +171,8 @@ function resolveChromeBinary() {
   return "google-chrome";
 }
 
-// ---- a double-rAF barrier evaluated in the page ----------------------------------------------
-
 const DOUBLE_RAF = `new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))`;
 const SINGLE_RAF = `new Promise((r) => requestAnimationFrame(() => r(true)))`;
-
-// ---- main ------------------------------------------------------------------------------------
 
 async function main() {
   const name = process.argv[2];

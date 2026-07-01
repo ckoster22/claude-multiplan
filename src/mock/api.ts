@@ -2,7 +2,7 @@
 //
 // A small, typed scripting surface for driving the app's distinct VISUAL STATES without burning a
 // single LLM token. Installed in mock mode by deck.ts (which imports installMockApi). Used by the
-// visual checks (a human / chrome-devtools agent calls window.__mock.*), by the Phase-4 control deck
+// visual checks (a human / chrome-devtools agent calls window.__mock.*), by the control deck
 // (the same entry points), and by the mock test suite.
 //
 // Every method drives the REAL production render code through the narrowest faithful seam:
@@ -12,8 +12,6 @@
 //   • openDoc         — opens a reading-pane variant plan (mermaid/table/code/image/error) via openPlan.
 //   • showHistory / showEmptyConversation — selects a plan whose mock transcript drives the history pane.
 //   • openComposer / showAuthOnboarding   — opens the New-plan composer; the latter first flips auth off.
-//
-// ---- RESET SEAM (Phase 4, the deck's foundation) -------------------------------------------------
 //
 // reset() returns the app to a clean baseline by driving the REAL teardown paths, so EVERY jumper can
 // call it FIRST and become order-independent (a jump's result never depends on the prior jump). The
@@ -80,14 +78,11 @@ export type ReviewMode = "viewing" | "summary" | "prototype" | "acceptance";
 
 // The shape installed on `window.__mock`.
 export interface MockApi {
-  // ---- reset (Phase 4) ----
   // Return the app to a clean baseline (review/gate/resume/auth/session/store all cleared via the
   // REAL teardown paths). EVERY jumper below calls this first, so jumps are order-independent.
   reset(): void;
-  // ---- conversation scenes (Phase 2) ----
   playScene(name: SceneName | string, delayMs?: number): boolean;
   listScenes(): SceneName[];
-  // ---- review bar (Phase 3) ----
   // Paint a review-bar mode. Returns a Promise for the modes whose seam awaits (viewing/summary open
   // a plan); prototype/acceptance are synchronous. clearReview() reverts gate + pending-review state.
   // `commentCount` (viewing/summary only) re-applies the mock comment count AFTER showReview's internal
@@ -95,33 +90,26 @@ export interface MockApi {
   // it explicitly lets the VIEWING bar's count + Submit-enabled state reflect the chosen value.
   showReview(mode: ReviewMode, commentCount?: number): Promise<void> | void;
   clearReview(): void;
-  // ---- resume banner (Phase 3) ----
   // "resumable" — a one-click resend verdict ("Resume — <phase>").
   // "blocked"   — the muted, button-less "resuming … isn't supported yet" message.
   // "hazardous" — a leaf/executing rewind (requiresConfirm) → "Continue implementation"; clicking the
   //               button reveals the inline #resume-confirm row (hazard + Confirm/Cancel) WITHOUT resuming.
   showResume(kind: "resumable" | "blocked" | "hazardous"): void;
   hideResume(): void;
-  // ---- quota auto-resume banner (Phase 5) ----
   // Drive the inline conversation-pane quota banner: "waiting" (live countdown + armed pill, no Resume
   // button), "exhausted" (next-reset + Cancel-session only), "resumed" (clears the banner + appends the
   // resumed notice). Stages a short scene first so the pane has content. Token-free.
   showQuota(state: "waiting" | "exhausted" | "resumed"): void;
-  // ---- reading-pane variants (Phase 3) ----
   openDoc(variant: DocVariant): Promise<void>;
-  // ---- history replay + empty states (Phase 3) ----
   showHistory(): Promise<void>;
   showEmptyConversation(): Promise<void>;
   // conv.session="none": clear the LIVE conversation model to a genuinely empty pane (reload seam).
   clearConversation(): void;
-  // ---- composer + auth onboarding (Phase 3) ----
   openComposer(): void;
   showAuthOnboarding(): void;
-  // ---- nested-plan example (the REAL Chompy Asteroids tree) ----
   // Land directly on the explorable nested tree: expand it (master + the 04 decomposition node) and
   // open the master plan in the reading pane. Token-free; the tree is already in the sidebar.
   openNested(): Promise<void>;
-  // ---- synthetic resume-sentinel row (Phase 4b) ----
   // Open the plan-file-less sentinel row (plan-tree-resume://). Drives the REAL openPlan sentinel
   // branch: a placeholder pane (the tree's INTENT.md) PLUS the resume banner (derived from the row's
   // cwd + the tree's state.json the mock serves). Token-free.
@@ -168,8 +156,6 @@ function clickById(id: string): void {
   document.getElementById(id)?.click();
 }
 
-// ---- reset() — drive the REAL teardown paths to a clean baseline -----------------------------
-//
 // Order matters: clear the gate + active-orchestrator FIRST (so isOrchestrationActive() is false and
 // the in-process review purge below is not skipped), then end the agent session (purges in-process
 // reviews + drops the facade to "none"), then clear the EXTERNAL review map via main.ts's reachable
@@ -209,9 +195,7 @@ export function reset(): void {
   clearAgentBuffers();
 }
 
-// ---- conversation jump routing (the CONVERSATION-RESET seam) ---------------------------------
-//
-// CONVERSATION-RESET (Step 0.3 finding): the live ConversationModel (conversation/index.ts) is a
+// CONVERSATION-RESET: the live ConversationModel (conversation/index.ts) is a
 // private closure variable created ONCE at initConversation time; it accumulates every agent-stream
 // frame and is NEVER reset by production (its public reset() is called only by stream.test.ts). The
 // REAL app gets a fresh conversation stream EXACTLY ONE WAY — a fresh page load builds a fresh
@@ -353,8 +337,6 @@ export function bootEmptyDefault(): void {
   stageEmptyLiveConversation();
 }
 
-// ---- scene playback (staging, no reset) ------------------------------------------------------
-
 // The single playScene STAGING implementation (no reset / no reload). Buffers the scene's frames
 // (playSceneFrames clears the agent buffers first → scene-scoping) so a freshly-subscribed model
 // replays ONLY this scene. Exported staging is internal; the public playScene() routes through the
@@ -393,8 +375,6 @@ export function playScene(name: SceneName | string, delayMs = 0): boolean {
   return true;
 }
 
-// ---- quota auto-resume banner driver (Phase 5) ----------------------------------------------
-
 // Drive the inline quota-banner in the Conversation pane through the REAL index.ts quota wiring (which
 // subscribes to getOrchestrator() — the mock fake handle — in mock mode). We stage a short scene IN
 // PLACE (so the conversation pane has content + the live model is subscribed), then fan the matching
@@ -410,8 +390,6 @@ function showQuota(state: "waiting" | "exhausted" | "resumed"): void {
   else if (state === "exhausted") emitQuotaExhausted();
   else emitQuotaResumed();
 }
-
-// ---- review bar drivers ---------------------------------------------------------------------
 
 // VIEWING / SUMMARY (external review): seed mock list_pending_reviews with the fixture, then emit a
 // plan-review-requested event. main.ts's handleReviewRequested opens the review's REAL plan file
@@ -465,8 +443,6 @@ function clearReview(): void {
   setPendingReviews([]);
 }
 
-// ---- resume banner driver -------------------------------------------------------------------
-
 // Idempotent: reset() FIRST. The resume banner is a Plan-tab overlay (no conversation-model concern),
 // so the in-place reset is sufficient.
 function showResume(kind: "resumable" | "blocked" | "hazardous"): void {
@@ -484,8 +460,6 @@ function showResume(kind: "resumable" | "blocked" | "hazardous"): void {
 function hideResume(): void {
   renderResumeBanner(null);
 }
-
-// ---- reading-pane variant + history drivers -------------------------------------------------
 
 // Open a reading-pane variant plan through the REAL openPlan → read_plan_contents → renderInto path.
 // Idempotent: reset() FIRST (a reading-pane doc has no conversation-model concern). openPlan ALSO
@@ -573,8 +547,6 @@ async function showEmptyConversation(): Promise<void> {
 function clearConversation(): void {
   routeConvJump({ kind: "none" });
 }
-
-// ---- composer + auth onboarding drivers -----------------------------------------------------
 
 // Open the New-plan composer by clicking the REAL #new-plan-btn (drives statusController.refresh() +
 // composer.open(), so the canned dialog dir + the auth block reflect current mock auth state).

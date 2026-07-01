@@ -68,9 +68,9 @@ function makeFakeHandle(startResult: boolean): OrchestratorHandle & { start: Ret
     teardown: noop,
     orchestrationActive: vi.fn(() => false),
     resuming: vi.fn(() => false),
-    // Phase 6: the agent-exit listener reads quotaPaused() + (conditionally) calls notifyAgentExit().
+    // the agent-exit listener reads quotaPaused() + (conditionally) calls notifyAgentExit().
     quotaPaused: vi.fn(() => false),
-    // DA-I5: the agent-stream listener calls markQuotaPausePending() on a quota_exceeded frame.
+    // the agent-stream listener calls markQuotaPausePending() on a quota_exceeded frame.
     markQuotaPausePending: vi.fn(() => {}),
     notifyAgentExit: vi.fn(() => {}),
     dispatch: noop,
@@ -223,9 +223,6 @@ beforeEach(() => {
   __resetOrchestratorForTest();
 });
 
-// ---------------------------------------------------------------------------------------------
-// auth refresh on composer open.
-// ---------------------------------------------------------------------------------------------
 describe("controller — openComposer refreshes auth BEFORE showing", () => {
   it("openComposer re-reads agent_auth_status; with a token present the banner is hidden", async () => {
     const els = makeEls();
@@ -248,9 +245,6 @@ describe("controller — openComposer refreshes auth BEFORE showing", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// session-liveness guard. Test #5 (falsifiable).
-// ---------------------------------------------------------------------------------------------
 describe("controller — session-liveness gates New-plan + Cancel", () => {
   it("idle: New-plan enabled, Cancel disabled; a live session inverts both and blocks openComposer", async () => {
     const els = makeEls();
@@ -321,16 +315,14 @@ describe("controller — session-liveness gates New-plan + Cancel", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // Single-source SessionState — the leaking-invariant fix. SessionState owned by the controller is
 // THE source of truth; New-plan/Cancel/pill are all DERIVED from it so they cannot disagree.
-// ---------------------------------------------------------------------------------------------
 
 // system_init stream payload helper (marks a session live).
 const SYSTEM_INIT = { seq: 1, kind: "system_init", model: "m", cwd: "/w", tools: [], skills: [], slash_commands: [], permission_mode: "plan", session_id: "s1" } as const;
 
 describe("controller — single-source SessionState: Cancel ends the session (the reported bug)", () => {
-  // Test #1: reproduce the EXACT reported failure — Start → Cancel must END the backend session
+  // Reproduce the EXACT reported failure — Start → Cancel must END the backend session
   // (interrupt + end), reset the pill out of "building", and re-enable New-plan. Before cancel,
   // openComposer is a hard no-op while running.
   it("Start → running (New-plan disabled, Cancel enabled, modal closed, openComposer no-op); Cancel → interrupt+end, none, pill not building, New-plan re-enabled", async () => {
@@ -383,7 +375,7 @@ describe("controller — single-source SessionState: Cancel ends the session (th
 });
 
 describe("controller — single-source SessionState: pill and New-plan cannot disagree", () => {
-  // Test #2: drive EVERY transition and assert the derived control triple is internally consistent.
+  // Drive EVERY transition and assert the derived control triple is internally consistent.
   // The forbidden states are: {none, newPlan.disabled:true}, {running, newPlan.disabled:false},
   // {none, pill:"building"}. Any transition must land in one of the two legal tuples.
   it("every transition yields a consistent {state, newPlanDisabled, pillBuilding} tuple", async () => {
@@ -441,8 +433,8 @@ describe("controller — single-source SessionState: pill and New-plan cannot di
 });
 
 describe("controller — single-source SessionState: modal auto-closes if a session goes running while open", () => {
-  // Test #3 (belt-and-suspenders): "modal open while running" must be unrepresentable from BOTH
-  // directions — opening while running is blocked (Test #1), and a session going running while the
+  // (belt-and-suspenders): "modal open while running" must be unrepresentable from BOTH
+  // directions — opening while running is blocked, and a session going running while the
   // modal is open closes the modal.
   it("modal open (state none) then system_init → modal hidden", async () => {
     const els = makeEls();
@@ -461,12 +453,10 @@ describe("controller — single-source SessionState: modal auto-closes if a sess
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// PART C — Stop / Pause / Resume: the 3-state SessionState machine (none | active | idle).
+// Stop / Pause / Resume: the 3-state SessionState machine (none | active | idle).
 // Enabled/disabled is derived PURELY from state in applySessionState, so the controls cannot
 // disagree. Stop = interrupt + end (→ none); Pause = interrupt ONLY (→ idle); Resume =
 // send_agent_message("Continue.") (→ active).
-// ---------------------------------------------------------------------------------------------
 
 const RESULT = { seq: 9, kind: "result", subtype: "success", is_error: false, result: "done", num_turns: 1, duration_ms: 1, total_cost_usd: 0, session_id: "s1" } as const;
 
@@ -588,10 +578,8 @@ describe("controller — Stop interrupts AND ends the session, goes none", () =>
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// PART B — the single in-place "working…" indicator. Appears immediately on run start (before any
+// The single in-place "working…" indicator. Appears immediately on run start (before any
 // status), updates its label from `status` events, and hides on result / exit / Stop / Pause.
-// ---------------------------------------------------------------------------------------------
 
 function workingEl(stream: HTMLElement): HTMLElement | null {
   return stream.querySelector<HTMLElement>(".conv-working");
@@ -695,7 +683,7 @@ describe("controller — working indicator: immediate on start, label from statu
     // label must reach the DOM through the controller's rerender (session "active" — the
     // session-state gate at rerender() must not null tree.working here).
     // FALSIFY: drop the pendingInteractive override in stream.ts derive → the stale "thinking…"
-    // survives in the DOM → RED. (Confirmed red 2026-06-12.)
+    // survives in the DOM → RED.
     fire("tool-permission-requested", {
       seq: 3,
       kind: "tool_permission_requested",
@@ -766,11 +754,9 @@ describe("controller — working indicator: immediate on start, label from statu
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // Idle-waiting override (setIdleWaitingHint) — the turn-completion-signaled prototype gate.
 // The session goes idle on the intent turn's `result` frame, but the app is still blocked on the
 // user (approve/refine the prototype): the hint keeps "Waiting for your input…" showing at idle.
-// ---------------------------------------------------------------------------------------------
 describe("controller — setIdleWaitingHint shows WAITING_INPUT_LABEL while idle", () => {
   it("session idle + hint ON → waiting label; hint OFF → indicator hidden again", async () => {
     const els = makeEls();
@@ -839,9 +825,6 @@ describe("controller — setIdleWaitingHint shows WAITING_INPUT_LABEL while idle
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Feature 2 — free-text message composer (human-in-the-loop).
-// ---------------------------------------------------------------------------------------------
 describe("controller — free-text composer sends a user turn and clears; disabled when none", () => {
   it("Send invokes send_agent_message with the typed text and clears the field (live session)", async () => {
     const els = makeEls();
@@ -910,10 +893,8 @@ describe("controller — free-text composer sends a user turn and clears; disabl
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Phase B — DispatchState dimension: "a send is already in flight" is now representable, killing
+// DispatchState dimension: "a send is already in flight" is now representable, killing
 // the double-send and the text-wiped-mid-round-trip and the phantom stuck-active Resume.
-// ---------------------------------------------------------------------------------------------
 describe("controller — dispatch dimension: single dispatch under double-fire (#1)", () => {
   it("a second Enter before the first send resolves dispatches exactly once AND preserves round-trip text", async () => {
     const els = makeEls();
@@ -997,7 +978,7 @@ describe("controller — dispatch dimension: Resume reverts on send reject (#6)"
     expect(els.pauseBtn.disabled).toBe(true);
     expect(workingEl(els.stream)).toBeNull();
 
-    // C3 (falsifiability): the cosmetic state above is NOT enough — a regression that dropped ONLY the
+    // (falsifiability): the cosmetic state above is NOT enough — a regression that dropped ONLY the
     // `dispatch = {t:"idle"}` reset (keeping applySessionState(prev)) would still pass it, because
     // refreshDispatchControls computes resumeBtn.disabled=false for "resuming"≠"sending" — yet the
     // dispatch gate would permanently block the NEXT Resume. So prove `dispatch` truly returned to idle
@@ -1115,9 +1096,6 @@ describe("controller — dispatch dimension: a SYNCHRONOUS invoke throw does not
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Multimodal — in-conversation follow-up image attachments.
-// ---------------------------------------------------------------------------------------------
 describe("controller — in-conversation image attachments on send", () => {
   it("Send with images forwards send_agent_message({ text, images }) on the LIVE path; field + chips clear", async () => {
     const els = makeEls();
@@ -1144,7 +1122,7 @@ describe("controller — in-conversation image attachments on send", () => {
     expect(els.messageInput.value).toBe("");
     expect(els.attachStrip.querySelectorAll(".conv-attach-chip").length).toBe(0);
 
-    // Part G — the submitted image renders as a thumbnail in the conversation-history user bubble.
+    // The submitted image renders as a thumbnail in the conversation-history user bubble.
     // FALSIFY: drop `displayImages` from the appendUserMessage call (or stop rendering node.images in
     // render.ts) → the user bubble carries no <img> → this goes RED.
     const userBubble = els.stream.querySelector(".conv-text-user");
@@ -1192,7 +1170,7 @@ describe("controller — in-conversation image attachments on send", () => {
     expect(sent[0]).toEqual({ text: "just text" });
     expect("images" in sent[0]).toBe(false);
 
-    // Part G inverse — a text-only user bubble renders NO thumbnails. FALSIFY: always pass display
+    // inverse — a text-only user bubble renders NO thumbnails. FALSIFY: always pass display
     // images to appendUserMessage → an <img> appears → RED.
     const userBubble = els.stream.querySelector(".conv-text-user");
     expect(userBubble).not.toBeNull();
@@ -1246,9 +1224,7 @@ describe("controller — in-conversation image attachments on send", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Part G — shared user-bubble thumbnail render path (covers BOTH surfaces; render is shared).
-// ---------------------------------------------------------------------------------------------
+// Shared user-bubble thumbnail render path (covers BOTH surfaces; render is shared).
 describe("render — user bubble renders submitted images as thumbnails", () => {
   const URL_A = "data:image/png;base64,AAAA";
   const URL_B = "data:image/jpeg;base64,BBBB";
@@ -1284,10 +1260,8 @@ describe("render — user bubble renders submitted images as thumbnails", () => 
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Part G — composer first-turn echo: gated on images-present. With images, echo the RAW request +
+// Composer first-turn echo: gated on images-present. With images, echo the RAW request +
 // thumbnails; without images, echo NO first-turn bubble (text-only flow stays byte-identical).
-// ---------------------------------------------------------------------------------------------
 describe("controller — composer first-turn echo is gated on images-present", () => {
   it("starting WITH images echoes a user bubble carrying the RAW request + the image thumbnail", async () => {
     const fake = makeFakeHandle(true);
@@ -1337,9 +1311,6 @@ describe("controller — composer first-turn echo is gated on images-present", (
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Feature 1 — AskUserQuestion: card submit resolves the permission with the answers shape.
-// ---------------------------------------------------------------------------------------------
 describe("controller — AskUserQuestion card resolves resolve_tool_permission with the answers", () => {
   function askPayload() {
     return {
@@ -1540,11 +1511,9 @@ describe("controller — AskUserQuestion card resolves resolve_tool_permission w
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// §1 composer entry: Start delegates to getOrchestrator().start() and runs
+// Composer entry: Start delegates to getOrchestrator().start() and runs
 // onStarted()/close() ONLY when start() resolves TRUE; on FALSE (idempotent no-op) it shows an
 // error and the modal stays open (a dead start must not masquerade as success).
-// ---------------------------------------------------------------------------------------------
 async function driveComposerStart(els: ReturnType<typeof makeEls>, handle: { openComposer(): void }): Promise<void> {
   dialogOpen.mockResolvedValueOnce("/work");
   handle.openComposer();
@@ -1590,11 +1559,9 @@ describe("controller — §1 composer Start delegates to orchestrator.start() (t
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// §2 live bridge: agent-stream / tool-permission-requested forward to
+// Live bridge: agent-stream / tool-permission-requested forward to
 // ingestStream / ingestPermission ONLY while an orchestration is active; and Stop routes to
 // getOrchestrator().cancel() when active (not the raw cancel_agent_run/end_agent_session).
-// ---------------------------------------------------------------------------------------------
 describe("controller — §2 live bridge forwards frames to the orchestrator only while active", () => {
   it("when an orchestration is active, agent-stream → ingestStream and tool-permission → ingestPermission", async () => {
     // A real handle so isOrchestrationActive() flips true; spy on its ingest methods.
@@ -1627,7 +1594,7 @@ describe("controller — §2 live bridge forwards frames to the orchestrator onl
     expect(ingestPermission).toHaveBeenCalledTimes(1);
   });
 
-  // T1.6 — the SERIALIZATION + ERROR-ISOLATION + TERMINAL-GUARD oracle. The handle's
+  // The SERIALIZATION + ERROR-ISOLATION + TERMINAL-GUARD oracle. The handle's
   // ingestStream/ingestPermission chain each frame's work onto a single tail promise (enqueueIngest),
   // so two frames delivered unawaited through the bridge complete in strict SUBMISSION order. This test
   // pins THREE distinct, independently-falsifiable properties of a throw in FRAME 1 (the sizer result,
@@ -1775,9 +1742,6 @@ describe("controller — §2 live bridge forwards frames to the orchestrator onl
     expect(ingestPermission).not.toHaveBeenCalled();
   });
 
-  // (T1.7, the escalate → notice wired-path oracle, was REMOVED 2026-06-10: the sizer is now
-  // TWO-OUTCOME — "single" | "split" — so the onHandoff/escalate path it pinned is unrepresentable.
-  // `surfaceMessage` → `.conv-notice` rendering itself remains covered by render.test.ts.)
 });
 
 describe("controller — §2 Stop routes through orchestrator.cancel() while active; Pause/Resume disabled", () => {
@@ -1807,12 +1771,10 @@ describe("controller — §2 Stop routes through orchestrator.cancel() while act
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // Deliberate-interrupt tagging: the controller tags an error `result` ON THE STORED FRAME (the
 // same object reference model.appendStream accumulated) when the orchestrator armed `resuming`
 // (a deliberate post-decomposition-approval interrupt). derive()/render read ONLY the stored
 // field — never live orchestrator state, which de-arms before later rebuilds.
-// ---------------------------------------------------------------------------------------------
 
 // An error result with NO result text — what the sidecar forwards for an interrupted turn. Spread
 // into a FRESH object per fire (the tag mutates the payload; reuse would leak across fires).
@@ -1882,10 +1844,8 @@ describe("controller — deliberate-interrupt tagging on error results", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // Composer-after-end: the textarea stays typable in state "none", and the next Send RESUMES the
 // prior session id (same conversation context) instead of being a no-op.
-// ---------------------------------------------------------------------------------------------
 describe("controller — composer re-enabled after session end + resume-on-send", () => {
   it("messageInput is enabled in initial state none (applySessionState('none'))", async () => {
     const els = makeEls();
@@ -2126,8 +2086,7 @@ describe("controller — composer re-enabled after session end + resume-on-send"
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Phase 6 — quota-pause race fix (DA-C1) + notifyAgentExit wiring, tested AT THE index.ts BOUNDARY.
+// Quota-pause race fix + notifyAgentExit wiring, tested AT THE index.ts BOUNDARY.
 //
 // These are CROSS-BOUNDARY seams: a same-tick agent-stream(quota_exceeded) → agent-exit ordering, and
 // the agent-exit listener calling getOrchestrator().notifyAgentExit() while an orchestration is active.
@@ -2135,7 +2094,6 @@ describe("controller — composer re-enabled after session end + resume-on-send"
 // the REAL index.ts listeners with a fake orchestrator handle whose quotaPaused()/notifyAgentExit() we
 // control + spy. SessionState is observed through the DERIVED controls: "paused"/"live" ⇒ New-plan
 // disabled + Stop (cancelBtn) enabled; "none" ⇒ New-plan enabled + Stop disabled.
-// ---------------------------------------------------------------------------------------------
 
 // Build a fake orchestrator handle with a controllable quotaPaused() probe + a spy notifyAgentExit().
 // `quotaPausedReturns` simulates the DEFERRED reducer state: it is FALSE at exit time (the real
@@ -2167,7 +2125,7 @@ function makeQuotaHandle(opts: { quotaPausedReturns: boolean }): {
     orchestrationActive: vi.fn(() => true),
     resuming: vi.fn(() => false),
     quotaPaused: vi.fn(() => opts.quotaPausedReturns),
-    // DA-I5: a no-op here so the same-tick test still proves the CLOSURE flag (not this handle method)
+    // A no-op here so the same-tick test still proves the CLOSURE flag (not this handle method)
     // holds the session paused while quotaPaused() reads its hardcoded-false value.
     markQuotaPausePending: vi.fn(() => {}),
     notifyAgentExit,

@@ -112,7 +112,7 @@ export function prototypeGateActive(
   if (!orchestrationActive || snap === null) return null;
   // INVARIANT[approval-gate-beats-prototype-gate] (precedence): a held pendingApproval short-circuits to null, suppressing the prototype-mode bar.
   //   prevents: a prototype gate and an approval gate both driving the bar
-  if (snap.pendingApproval != null) return null; // approval gate takes precedence
+  if (snap.pendingApproval != null) return null;
   return snap.pendingPrototype;
 }
 
@@ -125,8 +125,6 @@ export function prototypeOpenTarget(gate: Pick<PrototypeGate, "paths">): string 
   const index = gate.paths.find((p) => p === "index.html" || p.endsWith("/index.html"));
   return index ?? gate.paths[0] ?? null;
 }
-
-// ---- PHASE 5: the forced ACCEPTANCE gate bar (mirrors the prototype-gate helpers) --------------
 
 /**
  * PURE: the bar-mode precedence derivation for the forced acceptance gate — the active
@@ -148,8 +146,8 @@ export function acceptanceGateActive(
   if (!orchestrationActive || snap === null) return null;
   // INVARIANT[approval-and-prototype-beat-acceptance] (precedence): both a held pendingApproval and a held pendingPrototype short-circuit to null, outranking the forced-acceptance gate.
   //   prevents: the post-completion acceptance bar co-existing with a mid-run hold
-  if (snap.pendingApproval != null) return null; // approval gate takes precedence
-  if (snap.pendingPrototype != null) return null; // prototype gate takes precedence
+  if (snap.pendingApproval != null) return null;
+  if (snap.pendingPrototype != null) return null;
   return snap.pendingAcceptance;
 }
 

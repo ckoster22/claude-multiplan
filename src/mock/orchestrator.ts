@@ -116,7 +116,7 @@ export function emitGate(
   }
 }
 
-// Drive the bar into the IN-PROCESS APPROVAL "Request changes" VIEWING mode (review2 c5): register as
+// Drive the bar into the IN-PROCESS APPROVAL "Request changes" VIEWING mode: register as
 // active, then fan a real snapshot carrying a held pendingApproval gate whose `planPath` EQUALS the
 // already-open plan. We fan ONLY onSnapshot (sets orchSnapshot + refreshReviewBar) — NOT
 // onAwaitingApproval, whose production hook calls openPlan(gate.planPath) and re-renders the reading
@@ -132,7 +132,7 @@ export function emitApprovalGate(planPath: string): void {
   for (const o of observers) o.onSnapshot?.(snap);
 }
 
-// Clear the in-process approval gate (mirrors clearGate but documented for the c5 path). Deregisters
+// Clear the in-process approval gate (mirrors clearGate but documented for the approval path). Deregisters
 // as active and fans a terminal so main.ts drops orchSnapshot and refreshReviewBar hides the bar.
 export function clearApprovalGate(): void {
   clearGate();
@@ -150,7 +150,7 @@ export function emitPlaceholderSnapshot(): void {
   for (const o of observers) o.onSnapshot?.(snap);
 }
 
-// Quota-banner drivers (Phase 5): fan the quota observer callbacks to every subscriber (index.ts's
+// Quota-banner drivers: fan the quota observer callbacks to every subscriber (index.ts's
 // real quota wiring is one of them in mock mode, since it subscribes via getOrchestrator()). These let
 // the floating deck exercise the WAITING / EXHAUSTED / RESUMED banner states without real tokens.
 // `resetAt` defaults to ~1h out so the countdown reads a realistic HH:MM:SS.

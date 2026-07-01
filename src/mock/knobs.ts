@@ -28,7 +28,7 @@ import { playSceneFrames } from "./player";
 import { systemInitFrame, questionPermissionFrame, resultFrame } from "./fixtures/scenes";
 import type { SceneName } from "./fixtures/scenes";
 
-// The knob groups (mirror the plan's Phase-4 knob-group list). Used by the deck to section the panel.
+// The knob groups. Used by the deck to section the panel.
 export type KnobGroup =
   | "Global"
   | "Sidebar"
@@ -62,8 +62,6 @@ export interface Knob {
   // Re-drive the affected surface for the new value.
   apply(value: unknown): void;
 }
-
-// ---- small helpers (REAL-control drivers, no rendering logic) --------------------------------
 
 // Re-list the sidebar faithfully: stash the records the mock list_plans should return, then emit a
 // plan-changed event — main.ts's handler re-invokes list_plans → refreshList → renderSidebar. This is
@@ -121,10 +119,7 @@ function applySidebarFromKnobs(): void {
   relistSidebar();
 }
 
-// ---- the knob registry ----------------------------------------------------------------------
-
 export const KNOBS: Knob[] = [
-  // ---- Global ----
   {
     id: "global.theme",
     group: "Global",
@@ -147,7 +142,6 @@ export const KNOBS: Knob[] = [
     apply: (v) => setTextSize(parseInt(String(v), 10) || 15),
   },
 
-  // ---- Sidebar ----
   {
     id: "sidebar.count",
     group: "Sidebar",
@@ -203,7 +197,6 @@ export const KNOBS: Knob[] = [
     apply: (v) => setFilterText(String(v ?? "")),
   },
 
-  // ---- Reading pane ----
   {
     id: "reading.doc",
     group: "Reading pane",
@@ -221,7 +214,6 @@ export const KNOBS: Knob[] = [
     apply: (v) => void window.__mock?.openDoc(v as never),
   },
 
-  // ---- Conversation ----
   {
     id: "conv.session",
     group: "Conversation",
@@ -335,7 +327,6 @@ export const KNOBS: Knob[] = [
     },
   },
 
-  // ---- Question card ----
   // The three question knobs compose ONE question card (count / multiSelect / include-Other), so each
   // re-derives the whole card from the current trio. Driven through the REAL scene player via a custom
   // permission frame carrying buildQuestions(opts) — the same tool-permission-requested seam the
@@ -386,7 +377,6 @@ export const KNOBS: Knob[] = [
     },
   },
 
-  // ---- Review bar ----
   {
     id: "review.mode",
     group: "Review bar",
@@ -440,7 +430,6 @@ export const KNOBS: Knob[] = [
     },
   },
 
-  // ---- Modals ----
   {
     id: "modal.composer",
     group: "Modals",
@@ -464,8 +453,6 @@ export const KNOBS: Knob[] = [
     },
   },
 ];
-
-// ---- composite drivers (multiple knobs → one surface) ---------------------------------------
 
 // The four question-card knob values that compose ONE card. Captured from the store BEFORE reset()
 // (which wipes the knob slice) and threaded in EXPLICITLY so each knob's value visibly takes effect.

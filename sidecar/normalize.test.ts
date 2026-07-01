@@ -140,7 +140,6 @@ describe("normalize — rate_limit_event quota carrier", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // isOverloadedMessage — the IN-BAND HTTP 529 "Overloaded" detection seam.
 //
 // THE BEHAVIOR UNDER TEST: the Anthropic SDK retries a 529 internally (≤8s), then surfaces a
@@ -154,7 +153,6 @@ describe("normalize — rate_limit_event quota carrier", () => {
 // readline loop at import), so this pure predicate is where the falsifiable coverage lives. Proof of
 // falsifiability: temporarily replace the body of isOverloadedMessage with `return false` and EVERY
 // positive case below goes RED while the negatives stay GREEN; restore for GREEN.
-// ---------------------------------------------------------------------------
 describe("isOverloadedMessage — defensive in-band HTTP 529 detection (all documented shapes)", () => {
   it("(1) assistant message with error:'overloaded' → true", () => {
     // SDKAssistantMessage.error; SDKAssistantMessageError includes 'overloaded'.
@@ -290,7 +288,6 @@ describe("isOverloadedMessage — defensive in-band HTTP 529 detection (all docu
   });
 });
 
-// ---------------------------------------------------------------------------
 // overloadResultFrame — the MID-TURN-529 graceful turn-boundary `result` frame.
 //
 // THE BEHAVIOR UNDER TEST: when a 529 surfaces AFTER this attempt emitted rendered output, index.ts
@@ -300,13 +297,12 @@ describe("isOverloadedMessage — defensive in-band HTTP 529 detection (all docu
 // load-bearing for the orchestrator's graceful-advance: is_error:true and subtype
 // "error_during_execution" (the session-FATAL guard EXCLUDES that subtype). So we pin the WHOLE
 // object — deep-equal, not field-by-field — and call out the load-bearing fields explicitly.
-// ---------------------------------------------------------------------------
 describe("overloadResultFrame — mid-turn-529 graceful turn-boundary frame", () => {
   it("builds the exact 9-field result frame for the given seq", () => {
     const frame = overloadResultFrame(42);
 
-    // Whole-object pin: the inline literal index.ts used to emit, byte-for-byte. A drift in any
-    // field name/value/order (vs normalize()'s result frame) would break this.
+    // Whole-object pin, byte-for-byte. A drift in any field name/value/order (vs normalize()'s
+    // result frame) would break this.
     // FALSIFY: flip subtype to "success" (or is_error to false) → the partial-turn 529 would be
     // routed through the orchestrator's session-FATAL guard instead of graceful-advance → RED.
     expect(frame).toEqual({

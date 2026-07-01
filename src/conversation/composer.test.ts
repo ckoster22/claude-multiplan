@@ -131,7 +131,7 @@ describe("Composer — open/close (plan-only; Build removed)", () => {
     expect(els.modal!.classList.contains("hidden")).toBe(true);
   });
 
-  // Test #3 (falsifiable): the composer is plan-only. Mode stays "plan" — the orchestrator's start()
+  // (falsifiable): the composer is plan-only. Mode stays "plan" — the orchestrator's start()
   // (which the invoker delegates to) opens the session in plan mode. FALSIFY: change the composer's
   // fixed mode constant and startingMode() goes RED.
   it("Start delegates to the orchestrator start() thunk; mode stays 'plan'", async () => {
@@ -188,7 +188,6 @@ describe("Composer — Start delegates to the orchestrator start() thunk", () =>
     const c = new Composer(els, inv, onStarted);
     c.init();
     c.open();
-    // Provide a dir + request (plan-only — no Build toggle).
     openMock.mockResolvedValue("/work");
     els.chooseDirBtn!.click();
     await Promise.resolve();

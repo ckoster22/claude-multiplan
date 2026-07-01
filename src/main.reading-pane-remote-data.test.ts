@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
-// Phase 3 — RemoteData migration of the READING-PANE reads (read_plan_contents, read_plan_tree_file).
+// RemoteData migration of the READING-PANE reads (read_plan_contents, read_plan_tree_file).
 //
 // The reading-pane content (read_plan_contents) is modeled as a ScalarRemoteData<string> and folded
 // via matchScalar; the optional INTENT.md placeholder read (read_plan_tree_file) is modeled via
@@ -23,7 +22,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //   3. read_plan_tree_file (INTENT.md, the optional sentinel placeholder read) arms:
 //        present → `success` renders the intent markdown; absent (null) → `zeroResults` renders the
 //        static in-progress placeholder.
-// ---------------------------------------------------------------------------------------------
 
 const H = vi.hoisted(() => ({
   // read_plan_contents control: "queue" parks each read on a deferred (so the race can resolve out of

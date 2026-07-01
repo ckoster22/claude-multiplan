@@ -1,4 +1,4 @@
-// Graceful sidecar shutdown drain (INV-4).
+// Graceful sidecar shutdown drain.
 //
 // When the Rust host tears down (app quit), the PRIMARY path is the `{"type":"end"}`
 // stdin line it sends; it then waits a BOUNDED interval (≤ DRAIN_TIMEOUT, ~2s, on a
@@ -9,7 +9,7 @@
 // SIGINT, and a bare stdin-close) — abort the in-flight turn and CLOSE the SDK query
 // (the call that drives the SDK's own child teardown) and AWAIT that drain BEFORE
 // exiting. A synchronous `process.exit` would cut the SDK's async teardown off
-// mid-flight and re-orphan the grandchild — the exact bug INV-4 targets — so every
+// mid-flight and re-orphan the grandchild — the exact bug this targets — so every
 // trigger routes through the single awaited `gracefulExit` below.
 //
 // The drain is factored OUT of index.ts (which is a side-effecting entry point
@@ -111,8 +111,7 @@ export function makeGracefulExit(deps: GracefulExitDeps): (reason: string, code:
     }
     deps.logErr("[sidecar] graceful shutdown:", reason);
     // AWAIT the drain (interrupt → close → queue-end) so the SDK reaps its CLI
-    // grandchild BEFORE we exit. This is the fix for the `end`-command path, which
-    // previously exited synchronously and could cut the async teardown off.
+    // grandchild BEFORE we exit.
     await drainQuery({ q: deps.getQ(), userQueue: deps.getUserQueue(), logErr: deps.logErr });
     deps.exit(code);
   };

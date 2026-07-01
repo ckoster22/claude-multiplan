@@ -24,8 +24,6 @@ import {
 } from "./plan-tree";
 import type { TreeNode, NodeState, NodePath, PlanTreeState2 } from "./plan-tree";
 
-// ---- fixtures ---------------------------------------------------------------------------------
-
 // Branded mints for fixtures (parseNn is the real production boundary).
 const nnOf = (n: number) => parseNn(n);
 const path = (...ns: number[]): NodePath => ns.map(nnOf);
@@ -72,8 +70,6 @@ function depth2Tree(
   ]);
 }
 
-// ---- pathKey / parsePathKey ---------------------------------------------------------------------
-
 describe("pathKey", () => {
   it("mints the canonical zero-padded dotted form (root [] → empty string)", () => {
     expect(pathKey([])).toBe("");
@@ -116,8 +112,6 @@ describe("parsePathKey", () => {
   });
 });
 
-// ---- nonEmpty -----------------------------------------------------------------------------------
-
 describe("nonEmpty", () => {
   it("passes a populated array through unchanged", () => {
     const arr = nonEmpty([leafNode(1, "drafting")]);
@@ -126,7 +120,7 @@ describe("nonEmpty", () => {
   });
 
   it("loudly throws a PlanValidationError on an empty array (an empty split is unrepresentable)", () => {
-    // INV-2: an empty children list is a PLAN-VALIDATION failure of the same typed class as nn>99 /
+    // An empty children list is a PLAN-VALIDATION failure of the same typed class as nn>99 /
     // zero-header — so the orchestrator's deny-for-redraft catch (instanceof PlanValidationError)
     // covers it and the run is NEVER FATALed by a header-less decomposition reaching this boundary.
     // FALSIFY: revert nonEmpty to throw a bare Error → the instanceof assertion goes RED.
@@ -134,8 +128,6 @@ describe("nonEmpty", () => {
     expect(() => nonEmpty([])).toThrow(/array is empty/);
   });
 });
-
-// ---- nodeAtPath ---------------------------------------------------------------------------------
 
 describe("nodeAtPath", () => {
   it("resolves the root for [] and descends split children by nn segment", () => {
@@ -153,8 +145,6 @@ describe("nodeAtPath", () => {
     expect(nodeAtPath(root, path(3, 1))).toBeNull(); // 03 is open — no children to descend
   });
 });
-
-// ---- activePathOf -------------------------------------------------------------------------------
 
 describe("activePathOf", () => {
   it("returns null for an all-pending root and for a done tree", () => {
@@ -185,12 +175,11 @@ describe("activePathOf", () => {
   });
 
   it("PHASE 5: the ROOT resting running-children with ALL children summarized is the ACCEPTANCE WINDOW — the root itself is active ([])", () => {
-    // PIN CHANGE (Phase 5 — forced acceptance gate): this shape was previously a loud incoherence
-    // ("a root resting here is a missed completion"). It is now the forced-acceptance hold (the run
-    // is built; the user must record a verdict against the frozen baseline), structurally identical
-    // to a non-root roll-up window. activePathOf returns [] (the acceptance verdict is the root's
-    // turn). FALSIFY: drop the `prefix.length === 0 && inAcceptanceWindow` return in activeWithin →
-    // this throws instead of returning [] → RED.
+    // This shape is the forced-acceptance hold (the run is built; the user must record a verdict
+    // against the frozen baseline), structurally identical to a non-root roll-up window. activePathOf
+    // returns [] (the acceptance verdict is the root's turn). FALSIFY: drop the
+    // `prefix.length === 0 && inAcceptanceWindow` return in activeWithin → this throws instead of
+    // returning [] → RED.
     const root = splitNode(1, "running-children", [leafNode(1, "summarized")]);
     expect(activePathOf(root)).toEqual([]);
   });
@@ -204,13 +193,11 @@ describe("activePathOf", () => {
   });
 });
 
-// ---- writePolicyFor2 ----------------------------------------------------------------------------
-
 describe("writePolicyFor2", () => {
   it("acceptEdits iff SOME node anywhere is a leaf executing (tree-wide existential, deep)", () => {
-    // FALSIFIED (evidence in task report): with the deep 02.02 leaf executing the policy is
-    // acceptEdits; flipping that same fixture leaf to `drafting` flips the assertion red — the
-    // test detects the executing witness, not the tree shape.
+    // With the deep 02.02 leaf executing the policy is acceptEdits; flipping that same fixture leaf
+    // to `drafting` flips the assertion red — the test detects the executing witness, not the tree
+    // shape.
     expect(writePolicyFor2(depth2Tree("executing"))).toBe("acceptEdits");
   });
 
@@ -225,14 +212,12 @@ describe("writePolicyFor2", () => {
   });
 
   it("derives 'prototype' for the root intent window (clarifying-intent AND prototype-review)", () => {
-    // FALSIFIED (evidence in task report): removing writePolicyFor2's root-phase branch (reverting
-    // to the bare existential) turns BOTH assertions red ("plan" comes back).
+    // Removing writePolicyFor2's root-phase branch (reverting to the bare existential) turns BOTH
+    // assertions red ("plan" comes back).
     expect(writePolicyFor2(openNode(1, "clarifying-intent"))).toBe("prototype");
     expect(writePolicyFor2(openNode(1, "prototype-review"))).toBe("prototype");
   });
 });
-
-// ---- assertCoherent2 — one test per rule, each falsifiable -------------------------------------
 
 describe("assertCoherent2", () => {
   it("accepts the canonical coherent depth-2 tree and the genesis root", () => {
@@ -317,8 +302,8 @@ describe("assertCoherent2", () => {
   it("rule: prototype-review is root-only (depth-0 rule, same as clarifying-intent)", () => {
     // The ROOT in prototype-review is coherent...
     expect(() => assertCoherent2(openNode(1, "prototype-review"))).not.toThrow();
-    // ...a NON-ROOT node in it is not. FALSIFIED (evidence in task report): narrowing rule (4)
-    // back to clarifying-intent-only lets this tree pass → RED.
+    // ...a NON-ROOT node in it is not. Narrowing rule (4) back to clarifying-intent-only lets this
+    // tree pass → RED.
     const root = splitNode(1, "running-children", [openNode(1, "prototype-review")]);
     expect(() => assertCoherent2(root)).toThrow(/prototype-review \(root-only phase\)/);
   });
@@ -339,8 +324,6 @@ describe("assertCoherent2", () => {
   });
 });
 
-// ---- treeIsDone / schema-2 projections ----------------------------------------------------------
-
 describe("treeIsDone", () => {
   it("derives done iff the ROOT summarized (leaf or split) — never stored, never non-root", () => {
     expect(treeIsDone(leafNode(1, "summarized"))).toBe(true);
@@ -357,7 +340,7 @@ describe("toLedger2 / toSnapshot2", () => {
     created_ms: 100,
     updated_ms: 200,
     root: depth2Tree(),
-    // Transient fields (reducer-era additions): never serialized — toLedger2 must exclude them.
+    // Transient fields: never serialized — toLedger2 must exclude them.
     pendingApproval: null,
     pendingClarify: null,
     pendingPrototype: null,

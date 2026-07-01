@@ -108,7 +108,6 @@ export const MOCK_PLANS: PlanRecord[] = [
     nn_path: "02",
     h1s: ["Sub-Plan 02 — Conversation scenes"],
   }),
-  // ---- Phase 3 reading-pane variant standalones (one render concern each; keys match markdown.ts) --
   plan({
     absolute_path: `${PLANS}/variant-mermaid.md`,
     filename_stem: "variant-mermaid",
@@ -185,8 +184,6 @@ export const MOCK_PLANS: PlanRecord[] = [
 export function clonePlans(): PlanRecord[] {
   return MOCK_PLANS.map((p) => ({ ...p }));
 }
-
-// ---- PHASE 4 parameterized sidebar builder (the Sidebar knobs) ------------------------------
 
 // Options for buildSidebarPlans — the Sidebar knob group's tunables.
 export interface SidebarBuildOpts {

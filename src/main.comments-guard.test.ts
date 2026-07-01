@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
 // The main.ts render-generation guard around applyComments.
 //
 // Locks the MANDATORY post-`await` re-check after `loadCommentsFor` in openPlan/reloadOpenPlan:
@@ -13,7 +12,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // load after a newer render has begun) and assert applyComments did NOT run for the stale render.
 // This is the pattern from main.reload-guard.test.ts (controllable deferreds, real-ish render
 // mocks). Falsify by removing the second isCurrent gate → the stale applyComments fires → red.
-// ---------------------------------------------------------------------------------------------
 
 type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
 function deferred<T>(): Deferred<T> {

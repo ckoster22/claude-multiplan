@@ -1,14 +1,14 @@
-// Mock-mode PHASE 4 tests — the RESET seam + knob/jumper IDEMPOTENCY (the deck's foundation).
+// Mock-mode tests — the RESET seam + knob/jumper IDEMPOTENCY (the deck's foundation).
 //
 // Falsifiable properties, each through the REAL production code the live app uses:
-//   1. SCENE-JUMP CLEANLINESS (carried Finding 2): a conversation jump A → jump B (through the SAME
+//   1. SCENE-JUMP CLEANLINESS: a conversation jump A → jump B (through the SAME
 //      __mock mechanism) leaves a fresh subscriber (= a fresh page load's fresh ConversationModel)
 //      replaying ONLY B's signature. Falsifiability: a sibling test emits both scenes WITHOUT the
 //      reset/buffer-clear and shows A leaks — proving the clear is load-bearing.
 //   2. REVIEW RESET: showReview("viewing") → reset() → the review bar is fully hidden, asserted via
 //      the REAL refresh signal (main.ts's pendingReviews effectively cleared), not just the mock store.
 //   3. AUTH RESTORE: showAuthOnboarding() → reset()/openComposer() → the composer is NOT auth-blocked.
-//   4. (Concern 4) the MODULE-PRIVATE applyPrototypeBar renders `.review-bar.proto`/#prototype-feedback
+//   4. the MODULE-PRIVATE applyPrototypeBar renders `.review-bar.proto`/#prototype-feedback
 //      through the REAL observer (the fake orchestrator gate → main.ts's subscribed observer), not just
 //      the pure gate functions.
 //
@@ -45,8 +45,6 @@ import { SCENES } from "./fixtures/scenes";
 import { installMockApi } from "./api";
 import { installMockOrchestrator, emitGate } from "./orchestrator";
 
-// ---- shared helpers --------------------------------------------------------------------------
-
 async function flush(n = 20): Promise<void> {
   for (let i = 0; i < n; i++) await Promise.resolve();
 }
@@ -71,9 +69,7 @@ async function freshSubscriber(): Promise<HTMLElement> {
   return container;
 }
 
-// ---------------------------------------------------------------------------------------------
-// 1. SCENE-JUMP CLEANLINESS (carried Finding 2).
-// ---------------------------------------------------------------------------------------------
+// 1. SCENE-JUMP CLEANLINESS.
 describe("reset — a conversation jump A → B leaves no leftover of A for a fresh subscriber", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
@@ -147,9 +143,7 @@ describe("reset — a conversation jump A → B leaves no leftover of A for a fr
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // 2-4. DOM-boot tests: the REAL main.ts wired to the mock shims + the mock fake orchestrator.
-// ---------------------------------------------------------------------------------------------
 
 // A complete-enough index.html for main.ts's DOMContentLoaded wiring: sidebar, reader tabs, the FULL
 // review bar (incl. the prototype-mode controls applyPrototypeBar drives), the conversation pane, the
@@ -236,7 +230,7 @@ describe("reset — DOM-boot review/auth idempotency + the real prototype applie
     installMockApi();
   });
 
-  // ---- 4. Concern-4: the module-private applyPrototypeBar through the REAL observer --------------
+  // 4. the module-private applyPrototypeBar through the REAL observer
   it("emitGate('prototype') drives the REAL applyPrototypeBar → .review-bar.proto + #prototype-feedback shown", async () => {
     bootDom();
     await flush();
@@ -267,7 +261,7 @@ describe("reset — DOM-boot review/auth idempotency + the real prototype applie
     expect(document.querySelector("#review-bar-label")!.textContent).toContain("round 2");
   });
 
-  // ---- 2. Review reset: showReview('viewing') → reset() → bar fully hidden ----------------------
+  // 2. Review reset: showReview('viewing') → reset() → bar fully hidden
   it("showReview('viewing') shows the bar; reset() hides it (main.ts pendingReviews cleared)", async () => {
     bootDom();
     await flush();
@@ -301,7 +295,7 @@ describe("reset — DOM-boot review/auth idempotency + the real prototype applie
     expect(document.querySelector("#review-bar")!.classList.contains("hidden")).toBe(true);
   });
 
-  // ---- 3. Auth restore: showAuthOnboarding() → openComposer() not auth-blocked ------------------
+  // 3. Auth restore: showAuthOnboarding() → openComposer() not auth-blocked
   it("showAuthOnboarding() blocks the composer on auth; openComposer() afterward is NOT auth-blocked", async () => {
     bootDom();
     await flush();

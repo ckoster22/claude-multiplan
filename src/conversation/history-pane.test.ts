@@ -154,9 +154,6 @@ beforeEach(() => {
   __resetOrchestratorForTest();
 });
 
-// ---------------------------------------------------------------------------------------------
-// NO-OP while live: history must never clobber the live model.
-// ---------------------------------------------------------------------------------------------
 describe("loadHistoryForPlan — no-op while a session is live", () => {
   it("while live, loadHistoryForPlan does NOT invoke read_plan_transcript and the live model keeps the pane", async () => {
     H.transcript = () => ({
@@ -188,9 +185,6 @@ describe("loadHistoryForPlan — no-op while a session is live", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// NO-OP while an orchestration is active (the liveness guard covers orchestration too).
-// ---------------------------------------------------------------------------------------------
 describe("loadHistoryForPlan — no-op while isOrchestrationActive()", () => {
   it("with an active orchestration but session still none, the load is dropped before invoking", async () => {
     // Install + start a real orchestrator so isOrchestrationActive() === true. The default deps bind
@@ -220,9 +214,6 @@ describe("loadHistoryForPlan — no-op while isOrchestrationActive()", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Happy path: idle session, transcript found with content → history nodes render.
-// ---------------------------------------------------------------------------------------------
 describe("loadHistoryForPlan — happy path renders history", () => {
   it("found + lines yielding nodes → the stream gets the replayed assistant + user text", async () => {
     H.transcript = () => ({
@@ -250,9 +241,6 @@ describe("loadHistoryForPlan — happy path renders history", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Empty states: found=false (no-transcript) and found=true w/ zero nodes (no-content).
-// ---------------------------------------------------------------------------------------------
 describe("loadHistoryForPlan — explicit empty states", () => {
   it("found=false → .conv-empty with the no-transcript message", async () => {
     H.transcript = () => ({ found: false, path: null, cwd: null, session_id: null, lines: [] });
@@ -313,9 +301,6 @@ describe("loadHistoryForPlan — explicit empty states", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Live takeover AFTER a history load: a live transition reclaims the pane.
-// ---------------------------------------------------------------------------------------------
 describe("loadHistoryForPlan — a live transition supersedes a loaded history", () => {
   it("after history renders, going live flips the pane back to the live model", async () => {
     H.transcript = () => ({
@@ -378,9 +363,6 @@ describe("loadHistoryForPlan — a live transition supersedes a loaded history",
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Stale resolve from a fast A→B plan switch: the first load's late resolve is dropped.
-// ---------------------------------------------------------------------------------------------
 describe("loadHistoryForPlan — stale resolve on an A→B switch", () => {
   it("two loads where A resolves LAST → only B's result lands (historyGen mismatch drops A)", async () => {
     // A's resolver is held; B's resolves immediately. We release A LAST.

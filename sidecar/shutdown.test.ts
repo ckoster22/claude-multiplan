@@ -1,6 +1,6 @@
 // Falsifiable unit tests for the sidecar's graceful shutdown drain (shutdown.ts).
 //
-// THE BUG UNDER TEST (INV-4 — orphaned CLI grandchild): on app quit the Rust host's
+// THE BUG UNDER TEST (orphaned CLI grandchild): on app quit the Rust host's
 // PRIMARY path sends `{"type":"end"}` (it does NOT SIGTERM the sidecar — it waits a
 // bounded interval on a oneshot, then SIGKILLs only as the fallback). For the SDK's
 // `claude` grandchild to be reaped rather than orphaned, ALL FOUR exit triggers — the

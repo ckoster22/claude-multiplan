@@ -155,9 +155,7 @@ export function computeViewport(
   return { top, height };
 }
 
-// ---------------------------------------------------------------------------------------------
 // DOM controller (thin adapter — NOT unit-tested under jsdom; the pure functions above are the seam).
-// ---------------------------------------------------------------------------------------------
 
 export interface MinimapController {
   rebuild(): void;
@@ -192,7 +190,7 @@ export function createMinimap(
 
   function paint(): void {
     rebuildRaf = 0;
-    // ---- READ ALL FIRST (single pass, no interleaved writes) ----
+    // READ ALL FIRST (single pass, no interleaved writes)
     const collected: { offsetTop: number; height: number; tier: MiniTier }[] = [];
     for (const child of Array.from(stream.children)) {
       if (child.classList.contains("conv-working")) continue;
@@ -215,14 +213,12 @@ export function createMinimap(
     const mapHeight = stream.clientHeight;
     lastMapHeight = mapHeight;
 
-    // ---- COMPUTE ----
     const blocks = computeBlocks(
       collected.map((c) => ({ height: c.height, tier: c.tier })),
       mapHeight,
     );
     const vp = computeViewport(scrollTop, clientHeight, scrollHeight, mapHeight);
 
-    // ---- WRITE ----
     if (blocks.length === 0) {
       minimap.classList.add("is-empty");
       minimap.replaceChildren();

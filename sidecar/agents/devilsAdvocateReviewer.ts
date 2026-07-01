@@ -1,6 +1,5 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 
-// --- devils-advocate-reviewer -----------------------------------------------
 // Frontmatter: model: opus → KEPT on 'opus'. This agent is the quality /
 // adversarial gate this whole effort exists to strengthen, so it must NOT be
 // downgraded — preserving its frontmatter model preserves its review capability.

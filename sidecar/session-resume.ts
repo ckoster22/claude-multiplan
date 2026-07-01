@@ -4,7 +4,7 @@
 // UNIT-TESTABLE without importing index.ts's top-level side effects. NO module-level
 // state — the decision is a pure function of (sessionInfoExists, resumeRequested).
 //
-// Phase 4 wiring: the host may ask to resume an SDK conversation by session id. Before
+// The host may ask to resume an SDK conversation by session id. Before
 // passing `resume` to the SDK we pre-flight `getSessionInfo(id)`: if the transcript is
 // missing/expired (getSessionInfo throws or returns undefined → sessionInfoExists=false)
 // we DROP the resume and run the current step fresh, emitting a non-fatal `resume_fallback`
