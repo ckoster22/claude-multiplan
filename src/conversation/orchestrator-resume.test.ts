@@ -1,4 +1,4 @@
-// Multiplan orchestration domain — RESUME driver tests (Phase 3, falsifiable).
+// Multiplan orchestration domain — RESUME driver tests (falsifiable).
 //
 // These tests exercise the orchestrator's resume() entry with a FAKE OrchestratorDeps (no Tauri, no
 // listen, no DOM). For every RESUMABLE active phase we build a coherent ledger in that phase, call
@@ -52,8 +52,6 @@ import {
 } from "./plan-tree";
 
 vi.mock("./diag", () => ({ diag: vi.fn() }));
-
-// ---- tree fixtures (coherent by construction; mirror resume-rehydrate.test.ts) ----------------
 
 const nnOf = (n: number) => parseNn(n);
 const path = (...ns: number[]): NodePath => ns.map(nnOf);
@@ -125,8 +123,6 @@ function ledgerOf(
   const ledger = toLedger2(withRootTitle);
   return JSON.parse(JSON.stringify(ledger)) as RecursiveLedger;
 }
-
-// ---- recording fake deps ----------------------------------------------------------------------
 
 interface Recorded {
   calls: string[];
@@ -296,10 +292,6 @@ async function flush(n = 32): Promise<void> {
   for (let i = 0; i < n; i++) await Promise.resolve();
 }
 
-// ===============================================================================================
-// resume() — the resumable phases
-// ===============================================================================================
-
 describe("resume() — no reset, no START, forwards resumeSessionId", () => {
   it("open/recon (root): resends reconPrompt, arms recon, forwards session id, no reset/START", async () => {
     const { deps, rec } = makeDeps();
@@ -409,14 +401,12 @@ describe("resume() — no reset, no START, forwards resumeSessionId", () => {
   });
 
   it("PHASE 3b: resuming a leaf/executing node sends the AUDIT-AND-CONTINUE prompt and arms exec — NEVER the approval prompt, NEVER an approval gate", async () => {
-    // PHASE 3a turned leaf/executing into an OFFERABLE-but-HAZARDOUS rewind (requiresConfirm —
-    // invariant I3). PHASE 3b makes its CONTINUATION an audit-and-continue: the node is ALREADY
+    // The continuation is an audit-and-continue: the node is ALREADY
     // leaf/executing and its plan is ALREADY approved, so re-presenting the APPROVAL gate (which on
     // approve sends "Begin implementing it now") would RESTART the build from scratch and re-apply
     // edits already on disk. Instead the orchestrator re-enters execution directly: arm `exec` and
     // send resumedLeafContinuePrompt (inspect the working tree, continue the remaining steps). The
-    // node stays leaf/executing; NO approval gate is fired. (The partial-apply confirm dialog that
-    // GATES reaching here is P3c's concern.)
+    // node stays leaf/executing; NO approval gate is fired.
     const ABS_LEAF =
       "/Users/u/.claude/plans/agent-plan-tree-exec-00-000000000000000018B8866D18775858.md";
     // The durable approved LEAF plan lives in the PLANS STORE at its ABSOLUTE planPath (writeAgentPlan's
@@ -552,8 +542,6 @@ describe("resume() — no reset, no START, forwards resumeSessionId", () => {
   });
 });
 
-// ---- the armed-tag probe: resend phases arm the matching awaiting (falsifiable via next frame) ----
-
 describe("resume() — resend arms the matching awaiting variant", () => {
   it("recon resend arms recon: the next result writes recon.md + advances to sizer", async () => {
     const { deps, rec } = makeDeps();
@@ -568,10 +556,6 @@ describe("resume() — resend arms the matching awaiting variant", () => {
     expect(rec.sendMessage.at(-1)).toBe(sizerPrompt());
   });
 });
-
-// ===============================================================================================
-// summaries / mandates reload from disk
-// ===============================================================================================
 
 describe("resume() — reloads summaries + mandates from disk so prompts thread prior context", () => {
   // A tree where child 01 is summarized and child 02 is the active leaf/drafting node. Resuming at
@@ -627,10 +611,6 @@ describe("resume() — reloads summaries + mandates from disk so prompts thread 
     expect(rec.sendMessage[0]).not.toContain("SUMMARY-OF-SIBLING-01-UNIQUE-MARKER");
   });
 });
-
-// ===============================================================================================
-// resumed-gate approval — continuation prompt, no dead-id resolve
-// ===============================================================================================
 
 describe("resumed-gate approval sends a continuation prompt and never resolves the dead id", () => {
   it("approve of a resumed LEAF gate: sends the implement prompt, arms exec, does NOT resolvePermission", async () => {
@@ -791,10 +771,6 @@ describe("resumed-gate approval sends a continuation prompt and never resolves t
   });
 });
 
-// ===============================================================================================
-// PHASE 5 — resuming a baseline root PARKED in the forced acceptance window (the deadlock fix)
-// ===============================================================================================
-//
 // THE BUG this covers: a baseline-bearing root rested in its acceptance window when the session ended
 // (app closed/crash). On resume the gate (transient) was nulled and resumeScopeForRoot returned
 // BLOCKED — a permanent dead-end (no orchestrator → no acceptance bar → tree un-completable). THE FIX:
@@ -908,10 +884,6 @@ describe("resume() — PHASE 5 forced acceptance window (parked baseline root)",
   });
 });
 
-// ===============================================================================================
-// open/decomposing — the disk-probe-driven gate-vs-resend split (Phase-1 behavioral change)
-// ===============================================================================================
-//
 // A persisted open/decomposing root is AMBIGUOUS: either the decomposition draft was never produced,
 // OR a draft WAS produced but the transient gate event died with the process. The resume path
 // disambiguates by PROBING disk for planName2([]) = "master.md" under <cwd>/.plan-tree/:
@@ -1016,7 +988,7 @@ describe("resume() — open/decomposing disk-probe (gate vs decompose-resend)", 
     expect(h.snapshot().treeId).toBe("tree-resume");
   });
 
-  // INV-3 — the resumed open/decomposing gate must NOT dead-end on Approve. The disk-probe gate
+  // The resumed open/decomposing gate must NOT dead-end on Approve. The disk-probe gate
   // branch re-presents the gate from `open/decomposing` (NOT `open/awaiting-decomposition-approval`,
   // the only phase the resumed-DECOMPOSITION test above starts from). Before the phase-only re-arm,
   // approve dispatched CHILDREN_PARSED then DECOMPOSITION_APPROVED, whose reducer guard requires
@@ -1066,10 +1038,6 @@ describe("resume() — open/decomposing disk-probe (gate vs decompose-resend)", 
     expect(obs.awaiting).toHaveLength(1);
   });
 });
-
-// ===============================================================================================
-// PHASE 2b — restart / prototype-gate / rewind resume continuations
-// ===============================================================================================
 
 describe("resume() — restart(clarify): re-enters the genesis clarify step", () => {
   it("re-sends intentPrompt SEEDED FROM THE TITLE, arms the clarify (intent) awaiting, in the prototype policy", async () => {

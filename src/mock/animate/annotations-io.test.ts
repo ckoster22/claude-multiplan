@@ -4,8 +4,7 @@
 // URL/method/body on save, and 200/404/error handling on load.
 //
 // Falsifiable: each assertion goes RED if the impl posts to the wrong URL, returns the wrong field,
-// swallows a 404 into a doc, or fails to throw on a 500 (each confirmed RED by a temporary break, then
-// restored — see the task report).
+// swallows a 404 into a doc, or fails to throw on a 500.
 
 import { afterEach, describe, it, expect, vi } from "vitest";
 

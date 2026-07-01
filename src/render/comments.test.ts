@@ -16,8 +16,6 @@ import {
 } from "./comments";
 import type { CommentRecord } from "../types";
 
-// ---- Test helpers --------------------------------------------------------------------------
-
 // Build a #reading-pane element from an HTML string. Production stamps data-source-line on
 // block-open tokens, so these fixtures carry it the same way.
 function pane(html: string): HTMLElement {
@@ -29,7 +27,6 @@ function pane(html: string): HTMLElement {
   return el;
 }
 
-// Build a CommentRecord with sensible defaults.
 function rec(over: Partial<CommentRecord> & { quote: string }): CommentRecord {
   return {
     block_line: null,
@@ -45,9 +42,6 @@ beforeEach(() => {
   document.body.innerHTML = "";
 });
 
-// ============================================================================================
-// duplicate-text 2nd-occurrence anchoring
-// ============================================================================================
 describe("applyComments — duplicate-text anchoring", () => {
   it("anchors the 2nd occurrence (occurrence:1) leaving the 1st un-highlighted", () => {
     // A block with the phrase "foo bar" repeated twice (block data-source-line=5).
@@ -141,9 +135,6 @@ describe("applyComments — duplicate-text anchoring", () => {
   });
 });
 
-// ============================================================================================
-// cross-inline-element wrap (no surroundContents throw)
-// ============================================================================================
 describe("wrapRange — cross-inline-element selection", () => {
   it("wraps a quote spanning <code>…</code> … <strong>…</strong> as multiple sibling spans, tags intact", () => {
     const p = pane('<p data-source-line="0">use <code>foo()</code> then <strong>bar</strong> done</p>');
@@ -170,9 +161,6 @@ describe("wrapRange — cross-inline-element selection", () => {
   });
 });
 
-// ============================================================================================
-// clear round-trip (multi-span unwrap invariant)
-// ============================================================================================
 describe("clearHighlight — total + idempotent unwrap", () => {
   it("restores textContent and leaves zero [data-c] after clearing a multi-element wrap", () => {
     const html = '<p data-source-line="0">use <code>foo()</code> then <strong>bar</strong> done</p>';
@@ -202,9 +190,6 @@ describe("clearHighlight — total + idempotent unwrap", () => {
   });
 });
 
-// ============================================================================================
-// block_line: null whole-pane re-find
-// ============================================================================================
 describe("applyComments — block_line null scans the whole pane", () => {
   it("a null-block record finds its match by occurrence across the whole pane", () => {
     // Two separate blocks; the quote lives in the SECOND block. A whole-pane scan (block_line:null)
@@ -227,9 +212,6 @@ describe("applyComments — block_line null scans the whole pane", () => {
   });
 });
 
-// ============================================================================================
-// id uniqueness after K appends (minting invariant guard)
-// ============================================================================================
 describe("addComment minting — ids are pairwise distinct after K appends", () => {
   it("K sequential saves mint pairwise-distinct ids", async () => {
     const p = pane('<p data-source-line="0">repeated word repeated word repeated word repeated word</p>');
@@ -266,9 +248,6 @@ describe("addComment minting — ids are pairwise distinct after K appends", () 
   });
 });
 
-// ============================================================================================
-// (frontend half) — persistence round-trip via mocked CommentsIO
-// ============================================================================================
 describe("addComment / clear — adopt returned array + fire onChange", () => {
   it("addComment calls io.save with the new array, adopts the returned array, and fires onChange", async () => {
     const p = pane('<p data-source-line="0">hello world here</p>');
@@ -341,9 +320,6 @@ describe("addComment / clear — adopt returned array + fire onChange", () => {
   });
 });
 
-// ============================================================================================
-// popover state machine via the single renderPopover applier
-// ============================================================================================
 describe("popover state machine", () => {
   it("mouseup over a selection → create (un-hidden, #sp-quote set); cancel → hidden (no io.save)", async () => {
     const p = pane('<p data-source-line="0">select me please</p>');
@@ -418,12 +394,10 @@ describe("popover state machine", () => {
   });
 });
 
-// ============================================================================================
 // the popover is OWNED by the plan it was drafted against. A save must never anchor to
 // a DIFFERENT plan than the draft was captured on, and a genuine plan-path CHANGE invalidates the
 // popover — but a same-plan LIVE RELOAD (the pane auto-reloads while a plan is built) must PRESERVE
 // the user's in-progress draft (hiding it on every innerHTML wipe would destroy the draft).
-// ============================================================================================
 describe("popover plan-ownership", () => {
   function io(): CommentsIO {
     return {
@@ -537,12 +511,6 @@ describe("popover plan-ownership", () => {
   });
 });
 
-// ============================================================================================
-// loadCommentsFor — facade loader populates + caches per pane
-// ============================================================================================
-// ============================================================================================
-// findRangeForRecord / wrapRange / normalizeQuote — direct pure-function coverage
-// ============================================================================================
 describe("normalizeQuote", () => {
   it("collapses internal whitespace runs to a single space and trims", () => {
     expect(normalizeQuote("  foo   bar\n\tbaz  ")).toBe("foo bar baz");
@@ -629,9 +597,6 @@ describe("loadCommentsFor", () => {
   });
 });
 
-// ============================================================================================
-// facade clearAllComments (remove every highlight + wipe the cache, fire onChange)
-// ============================================================================================
 describe("clearAllComments — wipes all highlights + cache + fires onChange", () => {
   it("after clearAllComments the pane has zero .cmt-hl spans, the cache is [], and onChange fired", async () => {
     // A pane with TWO committed comments in two separate blocks. The clear-all sweep must remove
@@ -695,8 +660,6 @@ describe("clearAllComments — wipes all highlights + cache + fires onChange", (
     await expect(clearAllComments(p, "/never.md")).resolves.toBeUndefined();
   });
 });
-
-// ---- Popover DOM + selection helpers -------------------------------------------------------
 
 function bootPopoverDom(): void {
   const pop = document.createElement("div");

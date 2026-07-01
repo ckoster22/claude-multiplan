@@ -8,7 +8,7 @@
 //   C. COMMENT REVERSION — 3-comments → 0 (a from-scratch rebuild) ⇒ applyComments receives [].
 //   D. GATE REVERT — gate on → off ⇒ clearGate fires (the un-invertible gate's backward re-drive).
 //   E. SIDEBAR FULL-SET REVERT — a full-set plan_changed reverts on rewind (setPlans gets the seed).
-//   F. SLICE-01 SEAM REGRESSION — after open_plan + a tab switch, #conversation-stream still carries
+//   F. SEAM REGRESSION — after open_plan + a tab switch, #conversation-stream still carries
 //      `mockanim-hidden-stream` + is empty (the reconciler never writes the production stream).
 //   G. EPOCH GUARD — two back-to-back open_plans with the FIRST settle delayed end on the SECOND plan.
 
@@ -98,7 +98,7 @@ function makeSeams(over?: Partial<ReconcilerSeams>): {
     clearReviewGate: vi.fn(),
     setActiveTab: vi.fn(),
     setSidebarTab: vi.fn(),
-    // ---- overlay seams (P1) ----
+    // overlay seams (P1)
     setCursor: vi.fn(),
     setPulseTargets: vi.fn(),
     setFieldText: vi.fn(),
@@ -234,7 +234,7 @@ describe("reconcile — (c5) in-process review_gate seam (Request changes bar)",
   const MASTER = "/Users/mock/.claude/plans/master.md";
 
   it("review_gate on ⇒ emitReviewGate(planPath, commentCount); count re-fires as comments grow; off ⇒ clearReviewGate", () => {
-    // The faithful c5 surface: the in-process gate turns ON for the OPEN plan (Submit disabled at 0
+    // The faithful surface: the in-process gate turns ON for the OPEN plan (Submit disabled at 0
     // comments), then the comment set grows 1→2 and the seam RE-FIRES with the new count (Submit
     // enables), then the gate turns OFF.
     const story: StoryFrame[] = [
@@ -521,11 +521,8 @@ describe("reconcile — TRAILHEAD nested-plan reveal (invariant E, full-set)", (
   });
 });
 
-// ====================================================================================================
 // P1 OVERLAY PASSES — cursor lerp/hold, pulse-set diffing, field per-character dispatch, composer /
-// popover / proto-card / question-UI on-change + backward-scrub revert. jsdom + spies. Every behavioral
-// test below was FALSIFIED (the logic inverted to confirm RED) then restored — see the comment on each.
-// ====================================================================================================
+// popover / proto-card / question-UI on-change + backward-scrub revert. jsdom + spies.
 
 // jsdom's getBoundingClientRect returns an all-zeros rect; stub a fixed rect onto an element so the
 // cursor pass can resolve a non-zero rect-center. Pass w=h=0 to simulate a display:none / zero-area node.
@@ -843,7 +840,6 @@ describe("reconcile — (P2) setScroll seam: lerped frac, #reader-scroll target,
   });
 });
 
-// ====================================================================================================
 // (P6) WHOLE-TIMELINE SCRUB-REVERT — the reconciler-level companion to the projection-purity property
 // test in storyboard.test.ts. Sweeps a reconciler FORWARD across many T over the real TRAILHEAD_BEAT,
 // then drives it BACK to an early T, and asserts the final OVERLAY seam-driven state (cursor, pulse set,
@@ -860,7 +856,7 @@ describe("reconcile — (P2) setScroll seam: lerped frac, #reader-scroll target,
 // FALSIFIABILITY (verified): temporarily make the popover pass LATCH (skip re-driving when the popover
 // goes off after having been on — i.e. never emit {on:false} once shown) and the swept-back early-T last
 // call for setSelPopover becomes {on:true,…} while the direct path is {on:false,…} → the deep-equal goes
-// RED. Restoring the re-derive turns it green. Confirmed locally before commit.
+// RED. Restoring the re-derive turns it green.
 describe("reconcile — (P6) whole-timeline forward-then-back == direct (overlay seams)", () => {
   // The overlay seams whose last call is a pure fn of T (their projected value carries no host-DOM
   // identity that would differ between two reconcilers over the same all-zero-rect jsdom).
@@ -886,12 +882,12 @@ describe("reconcile — (P6) whole-timeline forward-then-back == direct (overlay
     const earlyTargets = [0, Math.round(end * 0.1), Math.round(end * 0.41), Math.round(end * 0.7)];
 
     for (const earlyT of earlyTargets) {
-      // ---- DIRECT path: a FRESH reconciler driven straight to earlyT (first tick fires every seam). ----
+      // DIRECT path: a FRESH reconciler driven straight to earlyT (first tick fires every seam).
       const direct = makeSeams();
       const dr = createReconciler(direct.seams, TRAILHEAD_BEAT);
       dr.reconcile(earlyT);
 
-      // ---- SWEPT path: sweep all the way forward, then back to earlyT. ----
+      // SWEPT path: sweep all the way forward, then back to earlyT.
       const swept = makeSeams();
       const sr = createReconciler(swept.seams, TRAILHEAD_BEAT);
       for (const T of forwardGrid) sr.reconcile(T);
@@ -912,15 +908,14 @@ describe("reconcile — (P6) whole-timeline forward-then-back == direct (overlay
   });
 });
 
-// ====================================================================================================
-// (c4) Contents-tab ToC navigation — the rebuildToc + setSidebarTab seams + scroll direction.
+// Contents-tab ToC navigation — the rebuildToc + setSidebarTab seams + scroll direction.
 //
 // The reconciler must (1) rebuild the Contents ToC from the rendered master pane (the REAL extractToc→
 // buildToc), so #toc-list is populated (with a "Context" entry) during the c4 window; (2) drive the
 // sidebar tab to "contents" then back to "plans"; and (3) drive the pane scroll HIGH (~1) after the low
 // ToC-entry beat and back to ~0 after the Context beat, with NO two scroll windows overlapping.
 describe("reconcile — (c4) Contents-tab ToC navigation", () => {
-  // The c4 sidebar_tab/scroll frames live in DOWNSTREAM_HEAD (shifted by the head shift only).
+  // The sidebar_tab/scroll frames live in DOWNSTREAM_HEAD (shifted by the head shift only).
   const HEAD_SHIFT = PROTO_ACT_SHIFT + CLARIFIER_SHIFT + SIZER_SHIFT;
   const CONTENTS_SWITCH_LIVE = C4_CONTENTS_TAB_SWITCH_MS + HEAD_SHIFT;
   const PLANS_SWITCH_LIVE = C4_PLANS_TAB_SWITCH_MS + HEAD_SHIFT;
@@ -1025,7 +1020,7 @@ describe("reconcile — (c4) Contents-tab ToC navigation", () => {
   it("setSidebarTab scrub-revert: forward-then-back to before the c4 nav restores 'plans'", () => {
     const { seams } = makeSeams();
     const r = createReconciler(seams, TRAILHEAD_BEAT);
-    // Sweep forward through the c4 nav (contents) then back to T=0 (before any sidebar_tab frame).
+    // Sweep forward through the nav (contents) then back to T=0 (before any sidebar_tab frame).
     r.reconcile(CONTENTS_SWITCH_LIVE);
     r.reconcile(PLANS_SWITCH_LIVE);
     r.reconcile(0);
@@ -1034,7 +1029,7 @@ describe("reconcile — (c4) Contents-tab ToC navigation", () => {
     expect(lastCall(seams, "setSidebarTab")![0]).toBe("plans");
   });
 
-  // ---- LIVE-PATH determinism: reconcileScroll applied to a REAL #reader-scroll after a settled render ----
+  // LIVE-PATH determinism: reconcileScroll applied to a REAL #reader-scroll after a settled render
   //
   // The unit tests above pin projectScroll in ISOLATION. The LIVE bug (found via CDP) was that on a FRESH
   // seekSettled(T), the reading-pane render (read→renderInto→applyComments→settle→rebuildToc) resets
@@ -1048,7 +1043,7 @@ describe("reconcile — (c4) Contents-tab ToC navigation", () => {
   // re-laying-out the pane). FALSIFIABILITY (verified): remove the async-tail applyScroll re-assert and the
   // down-beat assertion goes RED (scrollTop stays 0 — the render reset it after the sync setScroll ran).
   it("LIVE PATH: a fresh settled seek lands #reader-scroll.scrollTop > 0 at the down beat, ~0 at the Context beat", async () => {
-    // The c4 scroll frames live in DOWNSTREAM_HEAD → shifted by the full head shift (incl. SIZER_SHIFT).
+    // The scroll frames live in DOWNSTREAM_HEAD → shifted by the full head shift (incl. SIZER_SHIFT).
     const HEAD_SHIFT2 = PROTO_ACT_SHIFT + CLARIFIER_SHIFT + SIZER_SHIFT;
     const DOWN_BEAT_T = C4_SCROLL_DOWN_TO + HEAD_SHIFT2 - 1; // frac ~1 (scrolled all the way down)
     const CONTEXT_BEAT_T = C4_SCROLL_UP_TO + HEAD_SHIFT2 - 1; // frac ~0 (back at the top)

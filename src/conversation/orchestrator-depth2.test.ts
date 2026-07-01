@@ -1,4 +1,4 @@
-// PHASE 4 — the scripted DEPTH-2 driver suite (the centerpiece): full descent/ascent through the
+// The scripted DEPTH-2 driver suite (the centerpiece): full descent/ascent through the
 // REAL driver via live frames (no reducer mocking), with recording fakes — the same substrate the
 // golden oracle and the gate-invariant suites use.
 //
@@ -6,21 +6,10 @@
 //
 // PINNED INVARIANTS (each falsified — evidence inline):
 //   • interrupt_fires_at_every_decomposition_approval — BOTH the root AND the nested decomposition
-//     approval fire deps.interrupt() (exactly 2 across the run). FALSIFIED 2026-06-11: routed the
-//     nested approval around the interrupt (guarded `if (path.length === 0)` before deps.interrupt
-//     in the decomposition branch) → interrupts stayed 1 and the boundary-result assertions
-//     downstream went RED; restored → GREEN.
+//     approval fire deps.interrupt() (exactly 2 across the run).
 //   • decomposition approvals are the ONLY resuming-arming sites — the watchdog timer count equals
 //     the decomposition-approval count (2), and EVERY non-decomposition hop sends INLINE with no
-//     live timer. Per-hop falsifications (run 2026-06-11, each restored):
-//       hops A and C (child-summary → next-sibling recon; roll-up-summary → ascent next-sibling
-//         recon — they share the summary branch's recon-arm site): replaced the inline send with
-//         `armResuming(nextPath)` → the recon prompt was never sent off the summary result, a live
-//         watchdog timer leaked, and BOTH the main trace test (hop A assertions) and the hop-C
-//         test went RED (5/5 failed — everything downstream of hop A starves).
-//       hop B (last-child-summary → roll-up send): same arm at the ROLL-UP arm site only → the
-//         roll-up prompt never fired → the main test and hop-C test RED (the watchdog would FATAL
-//         the live run).
+//     live timer.
 //   • write-policy acceptEdits ONLY during leaf executions — the EXACT setMode trace.
 //   • nested redraft-in-place at the 02 gate; roll-up 02-summary.md fed BOTH children's summaries;
 //     per-level threading (02.02 sees 02.01's summary, never 01's); FATAL and Stop mid-depth leave
@@ -31,8 +20,6 @@ import { describe, it, expect, vi } from "vitest";
 import { createOrchestrator, type OrchestratorDeps, type OrchestratorHandle } from "./orchestrator";
 import { assertCoherent2, nodeAtPath, parsePathKey, type PlanTreeSnapshot2 } from "./plan-tree";
 import type { AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
-
-// ---- recording fakes + frame builders (the orchestrator-gate-invariants pattern) ----------------
 
 let seq = 0;
 const textFrame = (text: string): AssistantText => ({
@@ -77,7 +64,7 @@ interface Rec {
   interrupts: () => number;
   timers: FakeTimer[];
   liveTimers: () => number;
-  // PHASE 5 — the RESUMING watchdog is 30s; the generalized summary/parent-review turn watchdogs
+  // The RESUMING watchdog is 30s; the generalized summary/parent-review turn watchdogs
   // are 120s. Filtering by ms keeps the "decomposition approvals are the ONLY resuming-arming
   // sites" pin expressible now that every summary/review turn legitimately arms a (longer) timer.
   resumingTimers: () => FakeTimer[];
@@ -187,7 +174,7 @@ async function runLeaf(h: OrchestratorHandle, key: string, marker: string): Prom
   await h.ingestStream(resultFrame()); // summary result → write + ascent hop
 }
 
-// PHASE 5 — complete a pending parent-review turn with NONE (no adjustment note): the review
+// Complete a pending parent-review turn with NONE (no adjustment note): the review
 // result is the boundary that fires the next sibling's recon INLINE.
 async function answerReviewNone(h: OrchestratorHandle): Promise<void> {
   await h.ingestStream(textFrame("NONE"));
@@ -199,7 +186,7 @@ async function driveToNestedGate(h: OrchestratorHandle, rec: Rec): Promise<void>
   await driveToRootGate(h);
   await h.approve(""); // root decomposition approval (interrupt #1, resuming armed)
   await h.ingestStream(resultFrame()); // boundary result → deferred 01 recon
-  await runLeaf(h, "01", SUM_01); // 01 full leaf cycle → PHASE 5: the ROOT's review turn
+  await runLeaf(h, "01", SUM_01); // 01 full leaf cycle → the ROOT's review turn
   expect(rec.sends.at(-1)).toContain("Sub-plan 01 has completed");
   await answerReviewNone(h); // NONE → inline 02 recon prompt
   expect(rec.sends.at(-1)).toContain("sub-plan 02");
@@ -214,8 +201,6 @@ async function driveToNestedGate(h: OrchestratorHandle, rec: Rec): Promise<void>
     ),
   );
 }
-
-// ---- the centerpiece: descent_ascent_depth2_trace ------------------------------------------------
 
 describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01, 02.02]])", () => {
   it("runs the full descent/ascent: gate order, BOTH interrupts, exact write-policy trace, roll-up, done", async () => {
@@ -249,7 +234,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     expect(rec.agentPlans).toContainEqual({ treeId, nn: "02" }); // the nested decomposition
     expect(rec.writes.some((w) => w.name === "02-plan.md")).toBe(true);
 
-    // ---- NESTED REDRAFT-IN-PLACE at the 02 gate ----
+    // NESTED REDRAFT-IN-PLACE at the 02 gate
     await h.requestChanges("02", "tighten the nested split");
     expect(rec.resolves.at(-1)).toEqual({
       id: "decomp-02-tu",
@@ -265,11 +250,11 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     );
     expect(h.snapshot().pendingApproval).toMatchObject({ kind: "decomposition", redraftCount: 1 });
 
-    // ---- NESTED DECOMPOSITION APPROVAL: interrupt #2 + resuming (deferred 02.01 recon) ----
+    // NESTED DECOMPOSITION APPROVAL: interrupt #2 + resuming (deferred 02.01 recon)
     const sendsBefore = rec.sends.length;
     await h.approve("02");
-    // BOTH-INTERRUPTS PIN: the nested approval interrupts exactly like the root's. FALSIFIED
-    // 2026-06-11 (see header): guard the interrupt to root-only → stays 1 → RED.
+    // BOTH-INTERRUPTS PIN: the nested approval interrupts exactly like the root's. FALSIFY:
+    // guard the interrupt to root-only → stays 1 → RED.
     expect(rec.interrupts()).toBe(2);
     expect(rec.sends.length).toBe(sendsBefore); // deferred — NOTHING sent inline at a decomposition approval
     expect(rec.liveTimers()).toBe(1); // the resuming watchdog armed
@@ -282,9 +267,9 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     expect(recon0201).toContain("nested scope A v2"); // the REDRAFT's mandate, not the stale one
     expect(recon0201).toContain("Nested preamble for 02"); // nested-master preamble threads down
 
-    // ---- 02.01 leaf cycle → hop A: the NESTED (02-level) review turn, then INLINE 02.02 recon ----
+    // 02.01 leaf cycle → hop A: the NESTED (02-level) review turn, then INLINE 02.02 recon
     await runLeaf(h, "02.01", SUM_0201);
-    // PHASE 5: the review happens at the NESTED level — 02 reviews 02.01's summary against 02.02's
+    // The review happens at the NESTED level — 02 reviews 02.01's summary against 02.02's
     // mandate before 02.02 starts.
     const nestedReview = rec.sends.at(-1)!;
     expect(nestedReview).toContain("Sub-plan 02.01 has completed");
@@ -301,10 +286,10 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     expect(recon0202).toContain(SUM_0201);
     expect(recon0202).not.toContain(SUM_01);
 
-    // ---- 02.02 leaf cycle (LAST grandchild) → hop B: INLINE roll-up prompt for 02, NO review ----
+    // 02.02 leaf cycle (LAST grandchild) → hop B: INLINE roll-up prompt for 02, NO review
     await runLeaf(h, "02.02", SUM_0202);
     const rollupPrompt = rec.sends.at(-1)!;
-    // PHASE 5 skip-after-last pin: the LAST sibling's summary goes straight to the roll-up — no
+    // Skip-after-last pin: the LAST sibling's summary goes straight to the roll-up — no
     // review turn fires (a review here would make this send a review prompt instead → RED).
     expect(rollupPrompt).toContain("All child sub-plans of sub-plan 02 have finished");
     expect(rec.liveResuming()).toBe(0); // hop B is inline too
@@ -313,7 +298,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     expect(rollupPrompt).toContain(SUM_0202);
     expect(rollupPrompt).not.toContain(SUM_01); // per-level: only 02's own children
 
-    // ---- the roll-up summary turn → 02-summary.md → root done (02 is the LAST root child) ----
+    // the roll-up summary turn → 02-summary.md → root done (02 is the LAST root child)
     await h.ingestStream(textFrame(summaryText(SUM_ROLLUP_02)));
     await h.ingestStream(resultFrame());
     const rollupWrite = rec.writes.find((w) => w.name === "02-summary.md");
@@ -323,7 +308,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     expect(h.snapshot().done).toBe(true);
     expect(() => assertCoherent2(h.snapshot().root)).not.toThrow();
 
-    // ---- GATE ORDER across the whole run ----
+    // GATE ORDER across the whole run
     expect(gates).toEqual([
       { key: "", kind: "decomposition" }, // root decomposition
       { key: "01", kind: "leaf" }, // 01 leaf
@@ -333,7 +318,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
       { key: "02.02", kind: "leaf" },
     ]);
 
-    // ---- WRITE-POLICY: acceptEdits ONLY during the THREE leaf executions (exact trace) ----
+    // WRITE-POLICY: acceptEdits ONLY during the THREE leaf executions (exact trace)
     // The session OPENS in the genesis "prototype" policy (carried by startSession — no setMode);
     // "plan" is first asserted at the INTENT_CLARIFIED boundary, then re-asserted after each
     // ExitPlanMode allow-resolve (assertedPolicy → unknown) and after each leaf summary
@@ -350,16 +335,16 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
       "plan", // 02.02 summarized → 02 roll-up window (still plan)
     ]);
 
-    // ---- RESUMING-ARMING SITES: exactly the TWO decomposition approvals armed a RESUMING (30s)
+    // RESUMING-ARMING SITES: exactly the TWO decomposition approvals armed a RESUMING (30s)
     // watchdog. FALSIFY: arm resuming at any summary/roll-up hop → a third 30s timer appears → RED.
-    // (PHASE 5: summary and parent-review turns arm their own 120s turn watchdogs — 4 summary turns
+    // (summary and parent-review turns arm their own 120s turn watchdogs — 4 summary turns
     // [01, 02.01, 02.02, the 02 roll-up] + 2 review turns [root after 01, 02 after 02.01] — all
     // cleared by their consumed results; none live at the end.)
     expect(rec.resumingTimers()).toHaveLength(2);
     expect(rec.timers.filter((t) => t.ms === 120_000)).toHaveLength(6);
     expect(rec.liveTimers()).toBe(0);
 
-    // ---- the summary FILES: every node contributed exactly one summary ----
+    // the summary FILES: every node contributed exactly one summary
     for (const name of ["01-summary.md", "02.01-summary.md", "02.02-summary.md", "02-summary.md"]) {
       expect(rec.writes.filter((w) => w.name === name)).toHaveLength(1);
     }
@@ -385,7 +370,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     await runLeaf(h, "01.01", SUM_0201); // last (only) grandchild → hop B: roll-up prompt for 01
     expect(rec.sends.at(-1)).toContain("All child sub-plans of sub-plan 01 have finished");
 
-    // The roll-up summary result → 01-summary.md → hop C: PHASE 5 — the ROOT reviews 01's ROLL-UP
+    // The roll-up summary result → 01-summary.md → hop C: the ROOT reviews 01's ROLL-UP
     // summary (a split sibling completes via its roll-up, exactly like a leaf via its summary)
     // before 02's recon. Both hops are INLINE: no resuming timer, no interrupt.
     const resumingBefore = rec.resumingTimers().length;
@@ -413,7 +398,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
   });
 });
 
-// ---- PHASE 6: refining a DEPTH-2 SPLIT target clears the WHOLE subtree (no stale descendants) ----
+// Refining a DEPTH-2 SPLIT target clears the WHOLE subtree (no stale descendants)
 //
 // The gap this pins: ACCEPTANCE_REFINED resets a root child + right-siblings, but the cleanup must be
 // scoped to the WHOLE SUBTREE of each reset node — not just its direct key. When the refined target
@@ -499,7 +484,7 @@ describe("PHASE 6 — refining a depth-2 SPLIT target clears the whole subtree (
     const sendsBefore = rec.sends.length;
     await h.refineAcceptance(parsePathKey("01")); // reset 01 (split) + 02 (right sibling)
 
-    // (b) ON-DISK CLEANUP: the refine deleted the target's DIRECT files AND its DESCENDANT (grandchild)
+    // ON-DISK CLEANUP: the refine deleted the target's DIRECT files AND its DESCENDANT (grandchild)
     // files — not just the direct 01 files. FALSIFIABLE: drop the reducer's emitDescendantDeletes call
     // → "01.01-plan.md"/"01.01-summary.md" vanish from this list → RED.
     expect(rec.deletes).toContain("01-plan.md");
@@ -520,7 +505,7 @@ describe("PHASE 6 — refining a depth-2 SPLIT target clears the whole subtree (
     expect(refineRecon).toContain("sub-plan 01");
     expect(refineRecon).toContain("reconnaissance scoped to THIS sub-plan");
 
-    // (a) IN-MEMORY MAP CLEANUP: re-run 01 as a split that RE-DECOMPOSES into the SAME grandchild NN
+    // IN-MEMORY MAP CLEANUP: re-run 01 as a split that RE-DECOMPOSES into the SAME grandchild NN
     // (01.01). The new grandchild's recon prompt threads priorSummaries([01]) — the DIRECT children
     // of 01 in the live `summaries` map. If the stale "01.01" entry survived the refine, the OLD
     // grandchild marker (SUM_0201) would thread here as a phantom prior sibling.
@@ -546,8 +531,6 @@ describe("PHASE 6 — refining a depth-2 SPLIT target clears the whole subtree (
     await h.cancel();
   });
 });
-
-// ---- nested mandate validation: nn > 99 in a NESTED draft denies-for-redraft --------------------
 
 describe("PHASE 4 — nested decomposition validation (same behavior as the root)", () => {
   it("a nested draft with `Sub-Plan 100` is DENIED with the validation message — run stays active, no gate", async () => {
@@ -575,8 +558,6 @@ describe("PHASE 4 — nested decomposition validation (same behavior as the root
     await h.cancel();
   });
 });
-
-// ---- mid-depth terminals: FATAL and Stop leave a coherent terminal state -------------------------
 
 describe("PHASE 4 — mid-depth terminals", () => {
   // Drive to 02.01 EXECUTING (deep in the tree, acceptEdits live).

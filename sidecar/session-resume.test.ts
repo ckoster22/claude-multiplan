@@ -1,5 +1,5 @@
 // Falsifiable unit tests for the sidecar's PURE resume decision + options helper
-// (session-resume.ts). Phase 4: the host may ask to resume an SDK conversation by
+// (session-resume.ts). The host may ask to resume an SDK conversation by
 // session id; the sidecar pre-flights the transcript and either resumes or falls
 // back to a fresh run with a non-fatal `resume_fallback` notice.
 //

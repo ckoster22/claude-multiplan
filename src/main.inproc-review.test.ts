@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
 // IN-PROCESS plan-review intercept (the Agent SDK canUseTool seam).
 //
 // When the in-app session emits ExitPlanMode, main.ts's tool-permission-requested handler:
@@ -18,7 +17,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // The ./render facade is REAL (not mocked) so the genuine comment save/clear path runs end-to-end,
 // mirroring main.review.test.ts. The listen mock stores handlers as ARRAYS so a single event name can
 // fan out to multiple subscribers (facade + main.ts).
-// ---------------------------------------------------------------------------------------------
 
 type Rec = { quote: string; comment: string; block_line: number | null; block_end_line: number | null; occurrence: number; id: number };
 
@@ -264,9 +262,6 @@ beforeEach(() => {
   __resetReviewStateForTest();
 });
 
-// ---------------------------------------------------------------------------------------------
-// HOLD — write + open + Plan tab, NO resolve. Both listeners registered (the tab race is real).
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — HOLD on ExitPlanMode", () => {
   it("writes the plan once, opens the returned file, ends on the Plan tab, never resolves", async () => {
     const path = "/home/u/.claude/plans/agent-plan.md";
@@ -324,9 +319,6 @@ describe("in-process intercept — HOLD on ExitPlanMode", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// APPROVE — single click → allow + acceptEdits + Conversation tab.
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — APPROVE (single click)", () => {
   it("one click on #review-approve → resolve(allow,null) + set acceptEdits + Conversation tab", async () => {
     const path = "/home/u/.claude/plans/agent-plan.md";
@@ -352,9 +344,6 @@ describe("in-process intercept — APPROVE (single click)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// REQUEST CHANGES — add a comment (Submit enables) → click Submit → resolve(deny, feedback).
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — REQUEST CHANGES (deny + feedback)", () => {
   it("Submit is disabled at 0 comments, enables on the first, and denies with buildFeedbackPrompt", async () => {
     const path = "/home/u/.claude/plans/agent-plan.md";
@@ -388,9 +377,6 @@ describe("in-process intercept — REQUEST CHANGES (deny + feedback)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// SAFETY / SUBAGENT — agent_id set still blocks; approve round-trips the SAME id.
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — SAFETY: subagent plan (agent_id != null) still blocks, same id on approve", () => {
   it("a subagent ExitPlanMode holds (no resolve pre-action) and approves with the SAME toolUseId", async () => {
     const path = "/home/u/.claude/plans/agent-plan.md";
@@ -417,7 +403,6 @@ describe("in-process intercept — SAFETY: subagent plan (agent_id != null) stil
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // POLICY — non-ExitPlanMode tools NEVER reach the frontend (Part A). The sidecar now AUTO-ALLOWS
 // every non-ExitPlanMode tool SYNCHRONOUSLY in-process (canUseTool) and never emits a
 // tool-permission-requested event for them, so the per-tool frontend round-trip — and its
@@ -427,7 +412,6 @@ describe("in-process intercept — SAFETY: subagent plan (agent_id != null) stil
 // or register a review.
 // Test #1 (falsifiable): FALSIFY by re-adding the auto-allow invoke in handleToolPermissionRequested
 // → the "no resolve_tool_permission" assertion goes RED.
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — POLICY: non-ExitPlanMode is a frontend no-op (Part A)", () => {
   it("a stray Read tool-permission event is a NO-OP: no resolve, no plan written, no review registered", async () => {
     bootDom();
@@ -472,11 +456,9 @@ describe("in-process intercept — POLICY: non-ExitPlanMode is a frontend no-op 
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // LIVENESS — write_agent_plan FAILURE: auto-deny + release the seam, register NO review.
 // (Regression guard for the degraded-fallback hang: an empty-planFilePath fake review can never be
 // opened/approved, so the held canUseTool promise would never resolve — the agent hangs forever.)
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — LIVENESS: write_agent_plan failure auto-denies (no hang)", () => {
   it("ExitPlanMode whose write_agent_plan rejects → resolve(allow:false), NO pending review", async () => {
     H.failWriteAgentPlan = true; // make ONLY write_agent_plan reject
@@ -508,7 +490,6 @@ describe("in-process intercept — LIVENESS: write_agent_plan failure auto-denie
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // LIVENESS — in-process review whose REAL plan file is UN-OPENABLE (refuseUnopenableReview).
 // write_agent_plan RESOLVES but with an empty path (no real file to open through the normal flow),
 // so openReviewPlanFile hits the !planFilePath branch → refuseUnopenableReview(review). Because the
@@ -516,7 +497,6 @@ describe("in-process intercept — LIVENESS: write_agent_plan failure auto-denie
 // allow:false) — exactly like the write-failure path — or the agent hangs forever (no timeout). The
 // status message MUST NOT point at a terminal (there is no terminal for an in-process review).
 // FALSIFY: revert refuseUnopenableReview to the non-releasing version → (a) goes RED (no resolve fires).
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — LIVENESS: un-openable plan file refuses + releases the seam (no hang)", () => {
   it("ExitPlanMode whose written path is empty → resolve(allow:false) for its id, NO pending review, non-terminal #hook-status error", async () => {
     H.writtenPath = ""; // write_agent_plan SUCCEEDS but returns no real path → review is un-openable
@@ -551,9 +531,6 @@ describe("in-process intercept — LIVENESS: un-openable plan file refuses + rel
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// LIFECYCLE PURGE — agent-exit while an in-process review is pending → purged, Approve resolves nothing.
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — LIFECYCLE PURGE on agent-exit", () => {
   it("agent-exit purges the held in-process review; a later Approve click resolves nothing", async () => {
     const path = "/home/u/.claude/plans/agent-plan.md";
@@ -576,14 +553,12 @@ describe("in-process intercept — LIFECYCLE PURGE on agent-exit", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // EXTERNAL — un-openable plan file: refuse-and-surface (mirror the in-process write-failure path).
 // (Regression guard: the degraded detached render NEVER set openPath, so currentReviewId()
 // stayed null → the bar dropped to SUMMARY mode (Submit hidden, handlers bail on the null
 // guards) while the dead review was STILL counted ("1 plan awaiting review"). An un-openable external
 // review must be REFUSED — purged from pending so it is not counted, and the failure surfaced on
 // #hook-status — never rendered as an unactionable phantom.)
-// ---------------------------------------------------------------------------------------------
 describe("external review — un-openable plan refuses and surfaces (no unactionable phantom)", () => {
   it("an external review with no openable file is NOT viewing, NOT counted, and shows a #hook-status error", async () => {
     // Empty plan_file_path → the review has no real file to open through the normal flow.
@@ -645,9 +620,6 @@ describe("external review — un-openable plan refuses and surfaces (no unaction
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// COEXISTENCE — external + in-process resolve via their OWN paths; currentReviewSource matches.
-// ---------------------------------------------------------------------------------------------
 describe("in-process intercept — COEXISTENCE with an external review (no cross-talk)", () => {
   it("in-process resolves via resolve_tool_permission while a pending external review is untouched (no cross-talk)", async () => {
     const extPath = "/home/u/.claude/plans/External.md";

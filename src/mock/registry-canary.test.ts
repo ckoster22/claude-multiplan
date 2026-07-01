@@ -1,4 +1,4 @@
-// Phase-5 COMMAND-REGISTRY DRIFT CANARY (vitest + Node fs).
+// COMMAND-REGISTRY DRIFT CANARY (vitest + Node fs).
 //
 // THE INVARIANT (falsifiable): every Tauri command the REAL, unmodified frontend issues via
 // `invoke(...)` MUST be handled by the mock — i.e. `HANDLED_COMMAND_SET` (from ./core) is a SUPERSET

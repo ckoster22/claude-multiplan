@@ -1,17 +1,10 @@
 // Multiplan orchestration domain — GENERATION 2 reducer tests (falsifiable).
 //
-// Ports the INTENT of every gen-1 reducer test cluster (the deleted plan-tree.test.ts) onto the
+// Ports the INTENT of every gen-1 reducer test cluster onto the
 // path-based gen-2 event union (PlanTreeEvent2 / reduce2). Every test is constructed to go RED if
 // the behavior under test were inverted; where useful a comment names the exact mutation that
-// breaks it. Pure domain — no Tauri/DOM, zero side effects. Since the Phase-1 cutover this IS the
-// live wire's reducer (the driver runs on reduce2; golden-depth1.test.ts pins the wire). The
-// gen-1 clusters that survived the deletion verbatim-in-intent (parseSizerDecision, the
-// two-outcome-sizer compile proof, and the frontend↔Rust filename contract) live at the bottom of
-// this file.
-//
-// PHASE-1 DEPTH-1 SCOPE: children are forced leaves (no per-node sizer turn), no parent review,
-// root completion when the last child summarizes. Deeper paths throw loudly (seam-commented in
-// the reducer: PHASE 4/5).
+// breaks it. Pure domain — no Tauri/DOM, zero side effects. This IS the
+// live wire's reducer (the driver runs on reduce2; golden-depth1.test.ts pins the wire).
 
 import { describe, it, expect } from "vitest";
 import {
@@ -44,8 +37,6 @@ import type {
   PlanTreeFilePath,
   PrototypeGate,
 } from "./plan-tree";
-
-// ---- fixtures ---------------------------------------------------------------------------------
 
 // Branded mints for fixtures. parseNn is the REAL production boundary; PlanTreeFilePath has NO
 // production mint outside the driver's write wrapper, so tests cast explicitly — the cast is the
@@ -120,7 +111,7 @@ function splitToFirstChild(n: number): PlanTreeState2 {
 }
 
 // Drive one depth-1 child through recon → sizer(single) → draft → approve → exec → summary,
-// returning the final state and the effects from those steps only. PHASE 4: every non-root node
+// returning the final state and the effects from those steps only. Every non-root node
 // runs the per-node sizer after recon — EXCEPT the root single-collapse child (it inherited the
 // root sizer's verdict and goes recon → drafting directly); pass viaSizer:false there.
 function cycleChild(
@@ -152,8 +143,6 @@ function leafState(node: TreeNode): Extract<TreeNode["state"], { stage: "leaf" }
   if (node.state.stage !== "leaf") throw new Error(`fixture: expected leaf, got ${node.state.stage}`);
   return node.state;
 }
-
-// ---- Test 0: intent-clarification phase precedes recon (gen-1 cluster mirror) ------------------
 
 describe("gen-2 intent-clarification phase", () => {
   it("START lands the root in open/clarifying-intent, coherent, no transient gates", () => {
@@ -217,8 +206,6 @@ describe("gen-2 intent-clarification phase", () => {
   });
 });
 
-// ---- the visual-prototype review gate (root-only: clarifying-intent ↔ prototype-review → recon) -
-
 describe("gen-2 prototype-review gate", () => {
   function protoGate(round = 0): PrototypeGate {
     return {
@@ -238,7 +225,7 @@ describe("gen-2 prototype-review gate", () => {
     expect(out.state.root.state).toEqual({ stage: "open", phase: "prototype-review" });
     // The gate is held TRANSIENTLY (pendingPrototype) — never on the tree.
     expect(out.state.pendingPrototype).toEqual(protoGate());
-    // FALSIFIED (evidence in task report): dropping the notifyPrototypeReview effect push turns
+    // FALSIFIED: dropping the notifyPrototypeReview effect push turns
     // the kinds pin RED. Notify rides with persist (gate surfaced + ledger saved).
     expect(out.effects).toContainEqual({ kind: "notifyPrototypeReview", gate: protoGate() });
     expect(out.effects.map((e) => e.kind)).toEqual(["notifyPrototypeReview", "persist"]);
@@ -369,7 +356,7 @@ describe("gen-2 prototype-review gate", () => {
     const snap = toSnapshot2(reviewing);
     // Mutation: drop pendingPrototype from toSnapshot2 → undefined here → RED.
     expect(snap.pendingPrototype).toEqual(protoGate());
-    // FALSIFIED (evidence in task report): adding pendingPrototype to toLedger2's return object
+    // FALSIFIED: adding pendingPrototype to toLedger2's return object
     // turns this exact key-set pin RED.
     const ledger = toLedger2(reviewing);
     // sdk_session_id (resume support), baseline_ (working reference), and acceptance_ (Phase 5 —
@@ -402,8 +389,6 @@ describe("gen-2 prototype-review gate", () => {
   });
 });
 
-// ---- root pre-execution arc: recon → sizing → decomposing --------------------------------------
-
 describe("gen-2 root pre-execution arc", () => {
   it("root NODE_RECON_DONE moves recon → sizing and persists (recon.md is now DRIVER-written)", () => {
     const out = reduce2(genesis2(), { type: "NODE_RECON_DONE", path: [] });
@@ -431,8 +416,6 @@ describe("gen-2 root pre-execution arc", () => {
   });
 });
 
-// ---- single-collapse: root confident single ⇒ ONE child 01, NO decomposition gate --------------
-
 describe("gen-2 single-collapse run", () => {
   it("confident single collapses to ONE child 01 ('Plan'), root split/running-children, child open/recon", () => {
     let s = genesis2();
@@ -440,7 +423,7 @@ describe("gen-2 single-collapse run", () => {
     s = reduce2(s, { type: "SIZER_DONE", path: [], outcome: sizer("single", 1) }).state;
 
     // FALSIFIED (single-collapse arc): inverting the collapse (route confident single to
-    // decomposing like a split) turns every assertion below RED — captured during development.
+    // decomposing like a split) turns every assertion below RED.
     expect(s.root.state.stage).toBe("split");
     expect(s.root.state.phase).toBe("running-children");
     if (s.root.state.stage !== "split") throw new Error("unreachable");
@@ -459,7 +442,7 @@ describe("gen-2 single-collapse run", () => {
     s = reduce2(s, { type: "NODE_RECON_DONE", path: [] }).state;
     s = reduce2(s, { type: "SIZER_DONE", path: [], outcome: sizer("single", 1) }).state;
 
-    // The collapse child SKIPS the per-node sizer (root-only special case — PHASE 4 pin: a
+    // The collapse child SKIPS the per-node sizer (root-only special case — a
     // SIZER_DONE for it would throw "expected open/sizing" since recon forced leaf/drafting).
     const out = cycleChild(s, 1, false);
     const gates = out.effects.filter((e) => e.kind === "notifyAwaitingApproval");
@@ -471,8 +454,6 @@ describe("gen-2 single-collapse run", () => {
     expect(leafState(child(out.state, 1)).phase).toBe("summarized");
   });
 });
-
-// ---- full split run: coherent at EVERY reduce, ends done/all-summarized ------------------------
 
 describe("gen-2 full split run", () => {
   it("drives root → 3 children → done; assertCoherent2 never throws; ends correct", () => {
@@ -506,13 +487,13 @@ describe("gen-2 full split run", () => {
     for (const n of [1, 2, 3]) {
       const events: PlanTreeEvent2[] = [
         { type: "NODE_RECON_DONE", path: p(n) },
-        // PHASE 4: every non-root node runs the per-node sizer (single ⇒ the node IS the leaf).
+        // Every non-root node runs the per-node sizer (single ⇒ the node IS the leaf).
         { type: "SIZER_DONE", path: p(n), outcome: sizer("single", 1, 0.9) },
         { type: "NODE_DRAFTED", path: p(n), toolUseId: `tu${n}`, planPath: `/p${n}.md`, plansDirPath: `/d${n}` },
         { type: "APPROVE", path: p(n) },
         { type: "EXEC_DONE", path: p(n) },
         { type: "SUMMARY_WRITTEN", path: p(n), summaryText: `s${n}`, summaryPath: fileOf(`/s${n}.md`) },
-        // PHASE 5: a non-final child's summary parks the root in `reviewing`; PARENT_REVIEW_DONE
+        // A non-final child's summary parks the root in `reviewing`; PARENT_REVIEW_DONE
         // is the arc that activates the next sibling. The LAST child skips the review entirely.
         ...(n < 3 ? [{ type: "PARENT_REVIEW_DONE", path: [], note: null } as PlanTreeEvent2] : []),
       ];
@@ -610,8 +591,6 @@ describe("gen-2 full split run", () => {
   });
 });
 
-// ---- the unified decomposition gate (root gate lives in pendingApproval — no nn:-1 sentinel) ----
-
 describe("gen-2 unified decomposition gate", () => {
   function drafted(): { state: PlanTreeState2; effects: Effect2[] } {
     let s = genesis2();
@@ -638,7 +617,7 @@ describe("gen-2 unified decomposition gate", () => {
       redraftCount: 0,
     };
     // FALSIFIED (unified root gate): omitting the pendingApproval assignment in
-    // DECOMPOSITION_DRAFTED turns this RED — captured during development.
+    // DECOMPOSITION_DRAFTED turns this RED.
     expect(out.state.pendingApproval).toEqual(expected);
     expect(out.effects).toContainEqual({ kind: "notifyAwaitingApproval", gate: expected });
     expect(out.effects.map((e) => e.kind)).toEqual(["persist", "notifyAwaitingApproval"]);
@@ -720,8 +699,6 @@ describe("gen-2 unified decomposition gate", () => {
   });
 });
 
-// ---- leaf REQUEST_CHANGES keeps position, redrafts in place, siblings untouched ----------------
-
 describe("gen-2 leaf REQUEST_CHANGES", () => {
   it("keeps the active path fixed, drafts current, increments redraftCount, never touches siblings", () => {
     let s = splitToFirstChild(3);
@@ -755,8 +732,6 @@ describe("gen-2 leaf REQUEST_CHANGES", () => {
     expect([child(after, 2), child(after, 3)]).toEqual(siblingsBefore);
   });
 });
-
-// ---- APPROVE legality + the leaf gate object shape ----------------------------------------------
 
 describe("gen-2 APPROVE legality", () => {
   it("throws from recon, throws from executing, succeeds from awaiting-approval with exact effects", () => {
@@ -803,8 +778,6 @@ describe("gen-2 APPROVE legality", () => {
   });
 });
 
-// ---- advance-on-summary: parent reviews between siblings; last child completes the root ---------
-
 describe("gen-2 SUMMARY_WRITTEN advance", () => {
   it("PHASE 5: a non-final child's summary parks the parent in `reviewing` — the next sibling STAYS pending", () => {
     let s = splitToFirstChild(2);
@@ -822,7 +795,7 @@ describe("gen-2 SUMMARY_WRITTEN advance", () => {
       summaryText: "s1",
       summaryPath: fileOf("/s1.md"),
     });
-    // FALSIFIED 2026-06-11 (review arc): reverting advanceAfterSummary to the Phase-4 direct
+    // FALSIFIED (review arc): reverting advanceAfterSummary to the Phase-4 direct
     // sibling activation (child 2 → recon, root stays running-children) turns the `reviewing` and
     // `pending` assertions below RED.
     expect(leafState(child(out.state, 1)).phase).toBe("summarized");
@@ -866,7 +839,7 @@ describe("gen-2 SUMMARY_WRITTEN advance", () => {
     s = cycleChild(s, 1).state;
     s = reduce2(s, { type: "PARENT_REVIEW_DONE", path: [], note: null }).state;
     const out = cycleChild(s, 2);
-    // PHASE 5 skip-after-last pin: the root completes DIRECTLY (no reviewing window). FALSIFY:
+    // Skip-after-last pin: the root completes DIRECTLY (no reviewing window). FALSIFY:
     // route the last child through reviewing too → the phase here reads "reviewing" → RED.
     expect(out.state.root.state.phase).toBe("summarized");
     expect(treeIsDone(out.state.root)).toBe(true);
@@ -876,8 +849,6 @@ describe("gen-2 SUMMARY_WRITTEN advance", () => {
     expect(last).toEqual(["notifySummaryWritten", "notifyDone", "persist"]);
   });
 });
-
-// ---- PHASE 5: the forced acceptance gate (baseline floor enforcement) --------------------------
 
 describe("gen-2 forced acceptance gate", () => {
   // A protoGate fixture (mirrors the prototype-gate cluster above) so the baseline-recording path is
@@ -1070,8 +1041,6 @@ describe("gen-2 forced acceptance gate", () => {
     expect(treeIsDone(s.root)).toBe(true);
   });
 });
-
-// ---- PHASE 6: the forced-acceptance REFINE (re-plan) branch -----------------------------------
 
 describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
   // Reuse the prototype-gate → baseline genesis path so the baseline is recorded through the REAL
@@ -1355,14 +1324,12 @@ describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
   });
 });
 
-// ---- writePolicyFor2 across a full gen-2 run -----------------------------------------------------
-
 describe("gen-2 writePolicyFor2 across a full run", () => {
   it("derives 'prototype' at genesis, 'plan' at every other pre-execution step, 'acceptEdits' only while a leaf executes", () => {
     let s = genesisIntent2();
-    // DELIBERATE PIN CHANGE (prototype gate): genesis (clarifying-intent) now derives "prototype"
+    // Genesis (clarifying-intent) derives "prototype"
     // — the intent-clarification window may write throwaway prototype artifacts. Recon onward is
-    // "plan" exactly as before.
+    // "plan".
     expect(writePolicyFor2(s.root)).toBe("prototype"); // clarifying-intent — the prototype window
 
     s = reduce2(s, { type: "INTENT_CLARIFIED", intent: "i" }).state;
@@ -1393,14 +1360,14 @@ describe("gen-2 writePolicyFor2 across a full run", () => {
     }).state;
     expect(writePolicyFor2(s.root)).toBe("plan"); // parsed, still gated
 
-    // THE INCIDENT STATE (gen-1's post-MASTER_APPROVED fix, preserved): right after decomposition
+    // THE INCIDENT STATE: right after decomposition
     // approval the active child is in `recon` — the session MUST derive "plan" here.
     s = reduce2(s, { type: "DECOMPOSITION_APPROVED", path: [] }).state;
     expect(child(s, 1).state).toEqual({ stage: "open", phase: "recon" });
     expect(writePolicyFor2(s.root)).toBe("plan");
 
     s = reduce2(s, { type: "NODE_RECON_DONE", path: p(1) }).state;
-    expect(writePolicyFor2(s.root)).toBe("plan"); // child sizing (PHASE 4: per-node sizer)
+    expect(writePolicyFor2(s.root)).toBe("plan"); // child sizing (per-node sizer)
 
     s = reduce2(s, { type: "SIZER_DONE", path: p(1), outcome: sizer("single", 1, 0.9) }).state;
     expect(writePolicyFor2(s.root)).toBe("plan"); // child drafting
@@ -1422,7 +1389,7 @@ describe("gen-2 writePolicyFor2 across a full run", () => {
 
     s = reduce2(s, { type: "SUMMARY_WRITTEN", path: p(1), summaryText: "s1", summaryPath: fileOf("/s1.md") }).state;
     expect(s.root.state.phase).toBe("reviewing");
-    expect(writePolicyFor2(s.root)).toBe("plan"); // PHASE 5: the review window is never writable
+    expect(writePolicyFor2(s.root)).toBe("plan"); // the review window is never writable
 
     s = reduce2(s, { type: "PARENT_REVIEW_DONE", path: [], note: null }).state;
     expect(child(s, 2).state).toEqual({ stage: "open", phase: "recon" });
@@ -1441,8 +1408,6 @@ describe("gen-2 writePolicyFor2 across a full run", () => {
     expect(writePolicyFor2(s.root)).toBe("plan"); // terminal done
   });
 });
-
-// ---- schema-2 persisted shape pin + projections (gates excluded from the ledger) ----------------
 
 describe("gen-2 projections / persisted shape", () => {
   it("toLedger2 mid-run pins the exact schema-2 key set (no pointer, no subplans, no transients)", () => {
@@ -1485,8 +1450,6 @@ describe("gen-2 projections / persisted shape", () => {
   });
 });
 
-// ---- PHASE 3: quota auto-resume budget + pause/resume/exhaust events ----------------------------
-//
 // The PURE-reducer state machine for the usage-limit quota pause/resume feature, backed by the
 // persisted per-tree auto_resume_ budget. Every test is constructed to go RED under inversion; the
 // FAIL-CLOSED default (an unset budget NEVER auto-resumes) is the headline invariant. The reducer
@@ -1646,8 +1609,6 @@ describe("gen-2 quota auto-resume budget", () => {
   });
 });
 
-// ---- summaryName2 -------------------------------------------------------------------------------
-
 describe("summaryName2", () => {
   it("single segment keeps the legacy flat name; deeper paths are dotted", () => {
     // Mutation: emit '01.00-summary.md' or unpadded segments → RED (the Rust validator's
@@ -1663,15 +1624,13 @@ describe("summaryName2", () => {
   });
 });
 
-// ---- PHASE 4: the depth guard is GONE — deep events are legal; mis-addressed ones still throw ----
-
 describe("gen-2 depth unlock (Phase 4 — the requireDepth1 guard is deleted)", () => {
   it("a non-root SIZER_DONE is LEGAL: single makes the node ITSELF the leaf (no collapse child)", () => {
     let s = splitToFirstChild(2);
     s = reduce2(s, { type: "NODE_RECON_DONE", path: p(1) }).state;
     expect(child(s, 1).state).toEqual({ stage: "open", phase: "sizing" });
     const out = reduce2(s, { type: "SIZER_DONE", path: p(1), outcome: sizer("single", 1, 0.9) });
-    // FALSIFIED 2026-06-11: routing a non-root confident single through the root collapse (minting
+    // FALSIFIED: routing a non-root confident single through the root collapse (minting
     // a child "Plan" under 01) turns the leaf assertion RED (01 becomes a split). The node ITSELF
     // is the leaf — no child is minted.
     expect(child(out.state, 1).state).toEqual({
@@ -1696,8 +1655,6 @@ describe("gen-2 depth unlock (Phase 4 — the requireDepth1 guard is deleted)", 
     expect(() => reduce2(s, { type: "NODE_RECON_DONE", path: p(2) })).toThrow();
   });
 });
-
-// ---- CLARIFY_ANSWERED gate/no-gate id fallback ---------------------------------------------------
 
 describe("gen-2 CLARIFY_ANSWERED", () => {
   it("uses the event toolUseId when no gate is pending, the gate's when one is", () => {
@@ -1726,8 +1683,6 @@ describe("gen-2 CLARIFY_ANSWERED", () => {
   });
 });
 
-// ---- FATAL ---------------------------------------------------------------------------------------
-
 describe("gen-2 FATAL", () => {
   it("surfaces the error without mutating the ledger", () => {
     const s = splitToFirstChild(2);
@@ -1736,8 +1691,6 @@ describe("gen-2 FATAL", () => {
     expect(out.state.root).toEqual(s.root);
   });
 });
-
-// ---- purity: reduce2 never mutates its input -----------------------------------------------------
 
 describe("gen-2 reducer purity", () => {
   it("the input state is byte-identical after a reduce that changes the tree", () => {
@@ -1749,14 +1702,6 @@ describe("gen-2 reducer purity", () => {
   });
 });
 
-// ================================================================================================
-// Gen-1 survivors — clusters ported VERBATIM-IN-INTENT from the deleted plan-tree.test.ts. They
-// test surfaces the cutover kept (SizerOutcome, parseSizerDecision) or generalized (the driver-
-// written plan-tree filenames, now summaryName2/recon.md/master.md driver writes).
-// ================================================================================================
-
-// ---- the sizer is TWO-OUTCOME — `escalate` is unrepresentable at the type level ----------------
-
 describe("two-outcome sizer (escalate unrepresentable)", () => {
   it("a SizerOutcome with decision `escalate` does not compile (compile-proof, pinned by @ts-expect-error)", () => {
     // COMPILE-PROOF: the decision union is exactly "single" | "split". If `escalate` is ever
@@ -1767,8 +1712,6 @@ describe("two-outcome sizer (escalate unrepresentable)", () => {
     expect(bad.decision).toBe("escalate");
   });
 });
-
-// ---- parseSizerDecision -------------------------------------------------------------------------
 
 describe("parseSizerDecision", () => {
   it("extracts split/3/0.82 from a SIZER line", () => {
@@ -1791,15 +1734,13 @@ describe("parseSizerDecision", () => {
   });
 });
 
-// ---- every plan-tree file name the system writes is a Rust-valid plan-tree name -----------------
-//
 // THE FRONTEND↔RUST FILENAME CONTRACT (the gap that shipped the halt-after-recon bug). The frontend
 // unit tests mock writePlanTreeFile, so the names handed to the Rust validator were never exercised
 // against the validator's allow-list. The real bug: the recon boundary writes `recon.md`, the Rust
 // `valid_plan_tree_name` rejected it, and the throw aborted the effect loop before persist/the next
 // prompt — the run stalled at recon.
 //
-// GEN-2 SHAPE OF THE SAME CONTRACT: the reducer emits writePlanTreeFile ONLY for INTENT.md (the one
+// SHAPE OF THE SAME CONTRACT: the reducer emits writePlanTreeFile ONLY for INTENT.md (the one
 // text-carrying event left); recon.md, master.md, state.json and summaryName2(path) are DRIVER
 // writes (the driver-write boundary). This test mirrors the Rust allow-list
 // (src-tauri/src/plan_tree.rs::valid_plan_tree_name) and asserts BOTH the reducer-emitted name and
@@ -1838,7 +1779,7 @@ describe("plan-tree filename contract (frontend ↔ Rust)", () => {
       summaryName2(p(1)),
       summaryName2(p(3)),
       summaryName2(p(99)),
-      // PHASE 4 nested driver writes: dotted roll-up summaries + nested decomposition plans.
+      // nested driver writes: dotted roll-up summaries + nested decomposition plans.
       summaryName2(p(2, 1)),
       planName2(p(2)),
       planName2(p(2, 1)),
@@ -1855,13 +1796,11 @@ describe("plan-tree filename contract (frontend ↔ Rust)", () => {
   });
 });
 
-// ---- SESSION_INITIALIZED (resume support: ledger self-stamps the SDK session_id) --------------
-//
 // Falsifiability hook: removing the `effects.push({ kind: "persist" })` in the SESSION_INITIALIZED
 // arc makes the "emits a single persist" assertion FAIL; removing the `next.sdk_session_id =`
 // assignment makes the "toLedger2 carries it" assertion FAIL; dropping the
 // `event.sessionId !== next.sdk_session_id` idempotency guard makes the re-dispatch "no persist /
-// no change" assertions FAIL. (Verified by temporarily reverting each — see task report.)
+// no change" assertions FAIL.
 describe("gen-2 SESSION_INITIALIZED (sdk_session_id self-persist)", () => {
   it("stamps sdk_session_id onto the ledger and emits exactly one persist effect", () => {
     const out = reduce2(genesis2(), { type: "SESSION_INITIALIZED", sessionId: "sess-abc" });

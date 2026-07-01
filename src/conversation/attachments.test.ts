@@ -129,7 +129,6 @@ describe("createImageAttachments — multiple ordered images", () => {
     await paste(h, [pngFile("a.png"), pngFile("b.png"), pngFile("c.png")]);
     expect(badges(h)).toEqual(["#1", "#2", "#3"]);
 
-    // Click the middle chip's remove button.
     const middleRemove = chips(h)[1].querySelector<HTMLButtonElement>(".conv-attach-remove")!;
     middleRemove.click();
 
@@ -141,7 +140,6 @@ describe("createImageAttachments — multiple ordered images", () => {
   it("order preserved across removal-then-add", async () => {
     const h = makeHarness();
     await paste(h, [pngFile("a.png"), pngFile("b.png"), pngFile("c.png")]);
-    // Remove the first.
     chips(h)[0].querySelector<HTMLButtonElement>(".conv-attach-remove")!.click();
     expect(badges(h)).toEqual(["#1", "#2"]);
     // Add a fourth — appends to the end, badges stay contiguous.

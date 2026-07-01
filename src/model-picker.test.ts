@@ -429,8 +429,6 @@ describe("initModelPicker", () => {
     expect(btn(container, "opus-4-8").classList.contains("active")).toBe(true);
   });
 
-  // ---- Effort segment (.titlebar-effort) — sibling of the model picker ----
-
   // NEW: Opus active → the effort segment is revealed and the
   // stored/default effort is the single active effort button.
   it("reveals the effort segment when Opus is active and highlights the stored effort", () => {

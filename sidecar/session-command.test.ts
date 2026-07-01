@@ -8,8 +8,8 @@
 // LIVE session, and the dead/draining paths drop the command instead of touching a dead query.
 //
 // The host-policy backstop is HOST state, not SDK session state — set-permission-mode rewrites it
-// UNCONDITIONALLY (even with no live q; see index.ts history at the old lines 744-752). The decision
-// therefore carries `hostPolicy` on EVERY variant so a drop path can never silently skip that write.
+// UNCONDITIONALLY (even with no live q). The decision therefore carries `hostPolicy` on EVERY variant
+// so a drop path can never silently skip that write.
 
 import { describe, it, expect } from "vitest";
 import { decideSessionCommand, type Session } from "./session-command";

@@ -101,8 +101,6 @@ describe("sanitizeSvg — preserves multi-line label fidelity", () => {
   });
 });
 
-// ---- setIntrinsicSvgSize: pin the SVG to its viewBox pixel size --------------
-//
 // THE MEASURED ROOT CAUSE of the "too small / left-shifted" fit bug: mermaid 11
 // emits `width="100%"`, `style="max-width:<W>px"`, and NO height. Inside the
 // absolutely-positioned, auto-width `.mermaid-stage` (with `max-width:none`
@@ -245,8 +243,6 @@ describe("renderDiagrams — wraps the sanitized SVG in a pan/zoom viewport", ()
   });
 });
 
-// ---- controller teardown is tied to the DOM wipe in renderInto --------
-//
 // renderInto wipes the pane (`paneEl.innerHTML = …`), which DETACHES the previous
 // render's `.mermaid-viewport` elements. The pan/zoom controllers bound to those
 // viewports register `window` drag listeners that would otherwise outlive the
@@ -293,8 +289,6 @@ describe("renderInto — tears down the previous render's pan/zoom controller", 
   });
 });
 
-// ---- renderDiagrams is generation-aware (cooperative cancellation) -------------
-//
 // renderDiagrams awaits the heavy, async `mermaid.render` per diagram. A newer open/reload/plan-
 // switch can supersede the pass mid-flight. The new TRAILING optional `isCurrent: () => boolean`
 // predicate (default = always-current, so existing callers are unchanged) is checked at THREE bail

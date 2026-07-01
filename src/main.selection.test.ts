@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
 // the Selection union + resolveSelection (the sidebar selection model).
 //
 // `openPath` is now a DERIVED GETTER over a single `selection` source of truth
@@ -13,7 +12,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //
 // We boot the real main.ts against an invoke/listen shim and drive `refreshList` by firing a
 // `plan-changed` event (the production path), exactly like main.resume-banner.test.ts.
-// ---------------------------------------------------------------------------------------------
 
 const H = vi.hoisted(() => ({
   invokeCalls: [] as Array<{ cmd: string; args: Record<string, unknown> }>,

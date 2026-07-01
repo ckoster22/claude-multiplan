@@ -1,7 +1,7 @@
 // Falsifiable, invariant-first unit tests for the sidecar's PURE multimodal content
 // builder (buildUserContent in user-content.ts, re-exported from index.ts) — the single
 // authoritative `string → content-array`
-// migration + positional `[Image #N]` token-injection point (cross-layer contract §E / DA #6).
+// migration + positional `[Image #N]` token-injection point (cross-layer contract §E).
 //
 // INVARIANTS UNDER TEST:
 //   - with images: content is an array of one image block per image (in attach order),

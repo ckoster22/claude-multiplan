@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
-// Phase 3 — RemoteData migration of the SCALAR comment-COUNT read (get_comment_count).
+// RemoteData migration of the SCALAR comment-COUNT read (get_comment_count).
 //
 // The count is modeled as a ScalarRemoteData<number> in main.ts and folded via matchScalar:
 //   success(n) → commit the count (an EMPTY count is success(0), NEVER zeroResults),
@@ -23,7 +22,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //   2. success arm: a resolved get_comment_count number commits and currentCommentCount() reflects it.
 //   3. error  arm: a rejected get_comment_count is handled AS TODAY — the last-good count survives
 //      (the error arm never clobbers commentCount), not reset to 0.
-// ---------------------------------------------------------------------------------------------
 
 type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void };
 function deferred<T>(): Deferred<T> {

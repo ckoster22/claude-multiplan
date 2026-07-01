@@ -35,8 +35,6 @@ describe("RenderGuard", () => {
   });
 });
 
-// ---- Real overlap simulation ----------------------------------------------------------
-//
 // Reproduces the open/reload race WITHOUT main.ts's top-level wiring by running two render
 // bodies that mirror reloadOpenPlan's structure: begin() → await read → (guard) mutate pane
 // → await settle → (guard) mutate pane. We start render A, let it begin and block on its

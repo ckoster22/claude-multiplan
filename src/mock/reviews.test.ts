@@ -1,14 +1,14 @@
-// Mock-mode PHASE 3 tests — review bar, resume banner, reading-pane/error fallback, history replay,
-// and the two fidelity fixes (Findings 1 & 6). vitest + jsdom.
+// Mock-mode tests — review bar, resume banner, reading-pane/error fallback, history replay,
+// and the two fidelity fixes. vitest + jsdom.
 //
 // Falsifiable properties, each through the REAL production code the live app uses:
 //   1. REVIEW-BAR MODES: each fixture, fed through the real pure applier, yields its signature state
 //      (viewing → submit+approve; summary → resume; prototype → proto label + request-changes;
 //      acceptance → refine targets). Falsifiability noted per assertion.
 //   2. RESUME BANNER: the resumable/blocked fixtures carry the fields renderResumeBanner reads.
-//   3. FINDING 6: the mock write_agent_plan → read_plan_contents ROUND-TRIPS the ExitPlanMode plan
+//   3. the mock write_agent_plan → read_plan_contents ROUND-TRIPS the ExitPlanMode plan
 //      text (NOT the fallback) — the in-process review's Plan tab shows the right content.
-//   4. FINDING 1: the seq-LESS permission frame renders/orders correctly; a following live user echo
+//   4. the seq-LESS permission frame renders/orders correctly; a following live user echo
 //      lands at lastWireSeq + 0.5 (after the pre-permission frames, before the agent's reply).
 //   5. HISTORY REPLAY: the canned transcript renders renderable nodes through the real parseTranscript
 //      path; the no-transcript fixture is found:false.
@@ -46,9 +46,7 @@ import { SCENES, EXIT_PLAN_MODE_PLAN } from "./fixtures/scenes";
 import { applySceneToModel } from "./player";
 import { invoke } from "./core";
 
-// ---------------------------------------------------------------------------------------------
 // 1. Review-bar MODES through the real pure appliers.
-// ---------------------------------------------------------------------------------------------
 describe("review bar — each mode's signature state through the real applier", () => {
   it("VIEWING (external review open): submit visible (disabled at 0 comments), approve hidden", () => {
     const state = applyReviewBarState({
@@ -104,9 +102,7 @@ describe("review bar — each mode's signature state through the real applier", 
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // 1b. PROTOTYPE / ACCEPTANCE gates through the real gate-active derivation.
-// ---------------------------------------------------------------------------------------------
 describe("review bar — prototype/acceptance gates drive the real gate-active functions", () => {
   it("the prototype snapshot yields the held PrototypeGate (orchestration active)", () => {
     const snap = gateSnapshot("prototype");
@@ -119,7 +115,7 @@ describe("review bar — prototype/acceptance gates drive the real gate-active f
     expect(prototypeBarLabel(gate!.round)).toBe("Visual prototype — round 1 of 3");
   });
 
-  // review2 c3: the mock-ANIMATE Trailhead prototype gate renders its prototype INLINE
+  // the mock-ANIMATE Trailhead prototype gate renders its prototype INLINE
   // in #reading-pane (no floating overlay — the deleted #demo-proto-card "wouldn't appear in the app").
   // main.ts's real renderPrototypePreview → composePreviewMarkdown paints the gate's inlinePreview. The
   // default fixture is kind:"mermaid"; the player passes trailheadProtoPreviewOverride(round) (kind:"ascii")
@@ -171,9 +167,7 @@ describe("review bar — prototype/acceptance gates drive the real gate-active f
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // 2. Resume banner fixtures carry the fields renderResumeBanner reads.
-// ---------------------------------------------------------------------------------------------
 describe("resume banner — fixtures expose the resumable/blocked render inputs", () => {
   it("the resumable fixture is resumable with a phase label (drives #resume-plan-btn)", () => {
     expect(MOCK_RESUME_RESUMABLE.resumable).toBe(true);
@@ -185,9 +179,7 @@ describe("resume banner — fixtures expose the resumable/blocked render inputs"
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// 3. FINDING 6 — write_agent_plan → read_plan_contents round-trips the ExitPlanMode plan text.
-// ---------------------------------------------------------------------------------------------
+// 3. write_agent_plan → read_plan_contents round-trips the ExitPlanMode plan text.
 describe("Finding 6 — the in-process review plan round-trips through the mock", () => {
   it("read_plan_contents(writtenPath) returns the EXACT plan written, not the fallback", async () => {
     // Mirror handleToolPermissionRequested: write the ExitPlanMode plan, then open its written path.
@@ -209,9 +201,7 @@ describe("Finding 6 — the in-process review plan round-trips through the mock"
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // 3b. The error-fallback plan: read_plan_contents REJECTS (drives #reading-pane.raw in openPlan).
-// ---------------------------------------------------------------------------------------------
 describe("reading pane — the error-fallback plan rejects read_plan_contents", () => {
   it("the sentinel path rejects so openPlan's catch sets the raw error fallback", async () => {
     await expect(
@@ -220,9 +210,7 @@ describe("reading pane — the error-fallback plan rejects read_plan_contents", 
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// 4. FINDING 1 — seq-LESS permission frame renders + orders correctly (lastWireSeq + 0.5 path).
-// ---------------------------------------------------------------------------------------------
+// 4. seq-LESS permission frame renders + orders correctly (lastWireSeq + 0.5 path).
 describe("Finding 1 — a seq-less permission frame renders and orders correctly", () => {
   it("the exitPlanMode permission frame has NO seq (matches the real wire)", () => {
     const frames = SCENES.exitPlanMode();
@@ -271,9 +259,7 @@ describe("Finding 1 — a seq-less permission frame renders and orders correctly
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // 5. HISTORY REPLAY — the canned transcript renders renderable nodes through the real path.
-// ---------------------------------------------------------------------------------------------
 describe("history replay — the canned transcript renders through the real parseTranscript path", () => {
   it("the history stem yields a found transcript that renders >=1 node", () => {
     const res = transcriptFor(HISTORY_STEM);

@@ -53,7 +53,6 @@ import { TEXT_SIZE_KEY, TEXT_SIZE_LADDER } from "./titlebar";
 import { asAbsPath, asStem, type PlanRecord, type SidebarCtx, type CommentRecord } from "./types";
 import fixture from "./__fixtures__/list_plans.sample.json";
 
-// ---- Contract anchor ---------------------------------------------------------------------
 // The twelve snake_case keys the frontend expects on every PlanRecord, sorted. Written out
 // literally so an added/dropped fixture key is caught by the deep-equal below. `nn_path` is the
 // Phase-2 additive field: the full canonical dotted id ("02.01"); `nn` stays = first segment.

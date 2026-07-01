@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
-// The sidebar plan-list read modeled as RemoteData<PlanRecord[]> (Phase 2 migration). These tests
+// The sidebar plan-list read modeled as RemoteData<PlanRecord[]>. These tests
 // pin the REFRESH lifecycle and the per-arm render the sidebar produces:
 //   • initial load: initial -> fetching -> success | zeroResults | error
 //   • in-place refresh (a watcher tick on an already-loaded list): NEVER paints a fetching/zeroResults
@@ -11,7 +10,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //
 // We boot the real main.ts against an invoke/listen shim and drive `refreshList` by firing a
 // `plan-changed` event (the production path), exactly like main.selection.test.ts.
-// ---------------------------------------------------------------------------------------------
 
 const H = vi.hoisted(() => ({
   invokeCalls: [] as Array<{ cmd: string; args: Record<string, unknown> }>,

@@ -1,4 +1,4 @@
-// Conversation domain (Phase 5) — quota auto-resume banner tests (jsdom, falsifiable).
+// Conversation domain — quota auto-resume banner tests (jsdom, falsifiable).
 //
 // Covers the SINGLE quota-banner node end to end:
 //   - render: a WAITING node draws a .conv-qb-countdown + the "armed · N left" pill + NO Resume button;

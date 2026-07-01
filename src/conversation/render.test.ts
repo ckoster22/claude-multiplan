@@ -554,8 +554,6 @@ describe("render — permission request / denied / result / error / exit rows", 
   });
 });
 
-// ---- PART B: the single in-place working indicator (renderer) --------------------------------
-
 import type { RenderTree } from "./stream";
 
 function emptyTree(over: Partial<RenderTree> = {}): RenderTree {
@@ -585,9 +583,6 @@ describe("render — working indicator", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// AskUserQuestion card (interactive question + answers).
-// ---------------------------------------------------------------------------------------------
 describe("render — AskUserQuestion card renders the right inputs and submits the right answers", () => {
   function askEvent(): ToolPermissionRequested {
     return {
@@ -709,7 +704,6 @@ describe("render — AskUserQuestion card renders the right inputs and submits t
     expect(answers).toEqual(["Red", "Olives"]);
   });
 
-  // ---- Free-text "Other…" affordance ------------------------------------------------------
   // A question whose options include a literal {label:"Other"} — used to prove the synthetic
   // "Other…" row is addressed ONLY via [data-other="toggle"] and never collides with a
   // predefined option whose value is "Other".
@@ -1078,8 +1072,7 @@ describe("render — whitespace-only text nodes never draw a bubble (backstop)",
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// INV-5 — one link-handling policy across every markdown pane.
+// one link-handling policy across every markdown pane.
 //
 // The conversation stream renders model-influenceable markdown into bubbles; DOMPurify keeps
 // `href`, and markdown-it linkify makes bare URLs live. Without the SHARED link handler attached
@@ -1087,7 +1080,6 @@ describe("render — whitespace-only text nodes never draw a bubble (backstop)",
 // navigation that bricks the single Tauri WebView with no way back. These tests assert the handler
 // is wired in renderTree exactly like the reading pane: external → openUrl (no navigation),
 // relative → inert no-op, #frag → in-pane scroll path, bare # → no throw.
-// ---------------------------------------------------------------------------------------------
 describe("render — conversation-bubble links are governed by the one link policy (INV-5)", () => {
   beforeEach(() => {
     vi.mocked(openUrl).mockClear();

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
-// Phase 5 — the Resume banner + resume_fallback toast (the frontend resume seam).
+// the Resume banner + resume_fallback toast (the frontend resume seam).
 //
 // When the user opens a plan that belongs to a NON-terminal `.plan-tree/` whose tree_id matches the
 // open plan and no orchestration is active, main.ts (detectResumable → renderResumeBanner) shows a
@@ -14,7 +13,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // __setActiveOrchestratorForTest to control isOrchestrationActive(). The orchestrator/plan-tree
 // modules are NOT mocked, so the REAL resumeScopeForRoot / treeIsDone / activePhaseLabel run over the
 // scripted ledger — the banner's verdict is the production derivation, not a test fiction.
-// ---------------------------------------------------------------------------------------------
 
 const H = vi.hoisted(() => ({
   invokeCalls: [] as Array<{ cmd: string; args: Record<string, unknown> }>,
@@ -139,7 +137,6 @@ import {
 } from "./conversation/orchestrator";
 import type { PlanTreeSnapshot2 } from "./conversation/orchestrator";
 
-// ---- ledger fixtures (mirror resume-rehydrate.test.ts constructors) ---------------------------
 const nnOf = (n: number) => parseNn(n);
 
 function node(nn: number, state: NodeState): TreeNode {
@@ -186,7 +183,7 @@ function doneRoot(): TreeNode {
   return node(1, { stage: "leaf", phase: "summarized", planPath: null, summaryPath: null, plansDirPath: null });
 }
 
-// A split node (PHASE-4 generic — used to mirror the root single-collapse shape).
+// A split node (generic — used to mirror the root single-collapse shape).
 function splitNode(
   nn: number,
   phase: Extract<NodeState, { stage: "split" }>["phase"],
@@ -240,7 +237,6 @@ function executingChildRoot(): TreeNode {
   });
 }
 
-// ---- DOM boot (mirror main.inproc-review.test.ts) --------------------------------------------
 function planRow(absPath: string, stem: string, treeId: string | null, cwd: string | null): Record<string, unknown> {
   return {
     absolute_path: absPath,
@@ -481,8 +477,6 @@ describe("Phase 5 — Resume banner", () => {
     expect(btn.textContent).toBe("Resume — Reconnaissance");
   });
 
-  // ---- PHASE 2: the new RESUMABLE kinds render forward-action BUTTONS (not the "coming soon" msg) ----
-  //
   // detectResumable previously DOWNGRADED restart/prototype-gate/rewind to a blocked verdict ("…resume
   // coming soon"). These tests assert each now renders a real one-click forward action button with the
   // honest per-kind label. FALSIFIABILITY: revert detectResumable's new-kind branch back to the blocked
@@ -583,8 +577,6 @@ describe("Phase 5 — Resume banner", () => {
     expect(btn.classList.contains("hidden")).toBe(true);
   });
 
-  // ---- PHASE 3c: leaf/executing is now a RESUMABLE-but-HAZARDOUS action (confirm-gated) ----
-  //
   // P3a made resumeScopeForRoot return a RESUMABLE rewind verdict for leaf/executing whose plan carries
   // `requiresConfirm:true` + `hazard:"edits may be partially applied"` (the in-flight executing turn may
   // have partially applied edits). The banner must (1) offer it as a "Continue implementation" action
@@ -824,7 +816,6 @@ describe("Phase 5 — Resume banner", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // CROSS-BOUNDARY SYMMETRY — the banner (detectResumable, main.ts) and the engine
 // (resumeScopeForRoot, orchestrator.resume) MUST classify a persisted `open/decomposing` node
 // IDENTICALLY, because both are disk-probe driven: gate (re-present the decomposition gate) when
@@ -836,7 +827,6 @@ describe("Phase 5 — Resume banner", () => {
 // stopped passing the disk-probe predicate (the bug this fixes), detectResumable would degrade the
 // present case to resend("decompose") and the "banner === engine (present)" assertion below would go
 // RED while the absent case stayed green — exactly the divergence the symmetry test exists to catch.
-// ---------------------------------------------------------------------------------------------
 describe("Cross-boundary — banner and engine agree for open/decomposing", () => {
   beforeEach(() => {
     H.invokeCalls = [];
@@ -975,8 +965,7 @@ describe("Phase 5 — resume_fallback toast", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Phase 4b — synthetic "resume" sidebar rows (plan-tree-resume:// sentinel).
+// synthetic "resume" sidebar rows (plan-tree-resume:// sentinel).
 //
 // `list_plans` synthesizes a childless master `PlanRecord` for a mid-decompose tree with NO plan
 // `.md` file yet; its `absolute_path` is the SENTINEL `plan-tree-resume://<tree_id>` (no file behind
@@ -985,7 +974,6 @@ describe("Phase 5 — resume_fallback toast", () => {
 // and (c) still surface the resume banner with the forward action (the banner reads the row's cwd +
 // state.json, independent of the absolute_path being a real file). See CONTRACT.md §"Amendment
 // 2026-06-17 — Synthetic resume sidebar rows".
-// ---------------------------------------------------------------------------------------------
 
 const SENTINEL_TREE = "tree-synth-01";
 const SENTINEL_PATH = `plan-tree-resume://${SENTINEL_TREE}`;
@@ -1114,7 +1102,7 @@ describe("Phase 4b — synthetic resume sentinel rows", () => {
     expect(src?.textContent ?? "", "reader header cwd derives from the record cwd").toContain("project");
   });
 
-  // Concern 3 (LOW) — opening a sentinel must NOT fire the conversation-history corpus scan. The
+  // opening a sentinel must NOT fire the conversation-history corpus scan. The
   // sentinel's `stem` is the tree_id (not a transcript-resolvable filename stem), so loadPlanHistory
   // would issue a read_plan_transcript that always misses and paints a misleading empty Conversation
   // tab. FALSIFIABLE: drop the `if (!sentinel)` guard on the loadPlanHistory call in openPlan and this
@@ -1129,7 +1117,7 @@ describe("Phase 4b — synthetic resume sentinel rows", () => {
     ).toBeFalsy();
   });
 
-  // Concern 1 (MEDIUM) — stuck banner / dangling openPath when the OPEN sentinel vanishes from the
+  // stuck banner / dangling openPath when the OPEN sentinel vanishes from the
   // list via a NON-resume path (tree finished elsewhere, or a real row replaced it) with NO live-run
   // placeholder taking over. refreshList must reset to the empty pane: banner hidden, no stale
   // `.active` row. FALSIFIABLE: remove the resetToEmptyPane() call in refreshList and the banner stays
@@ -1188,12 +1176,10 @@ describe("Phase 4b — synthetic resume sentinel rows", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // the Affordance model: ONE refreshAffordances() re-derives BOTH surfaces on every run
 // transition. A plan open DURING an active run shows NO resume banner (detectResumable yields nothing
 // while an orchestration owns the seam). When the run ENDS (onDone), refreshAffordances re-evaluates
 // the STILL-open plan's resumability and the #resume-plan-btn appears — WITHOUT reopening the plan.
-// ---------------------------------------------------------------------------------------------
 describe("resume banner re-derives when the run ends (refreshAffordances on onDone)", () => {
   beforeEach(() => {
     H.invokeCalls = [];
@@ -1259,14 +1245,12 @@ describe("resume banner re-derives when the run ends (refreshAffordances on onDo
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // removing a SUPPRESSING review surface re-derives the (now-unsuppressed) banner.
 // The precedence suppresses the resume banner while the review bar shows a pending review. When the
 // LAST such review is removed out-of-band (plan-review-cancelled → handleReviewCancelled), the surface
 // removal must re-derive BOTH affordances — else a resumable open plan's Resume button stays stuck
 // hidden until re-open. The fix switched handleReviewCancelled (+ resolveReview / refuseUnopenableReview)
 // from refreshReviewBar() to refreshAffordances().
-// ---------------------------------------------------------------------------------------------
 describe("cancelling the last pending review re-derives the suppressed resume banner", () => {
   beforeEach(() => {
     H.invokeCalls = [];
@@ -1325,13 +1309,11 @@ describe("cancelling the last pending review re-derives the suppressed resume ba
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // purgeInprocReviews must re-derive the (un-suppressed) banner too. The agent-exit
 // and agent-error-fatal callers rely on purge's OWN refresh (unlike #conversation-cancel, they don't
 // call refreshAffordances themselves). When purge removes the LAST in-process review, a resumable open
 // plan's Resume affordance must reappear. Fix: purgeInprocReviews calls refreshAffordances (not just
 // refreshReviewBar).
-// ---------------------------------------------------------------------------------------------
 describe("purging the last in-process review (agent-exit) re-derives the suppressed banner", () => {
   beforeEach(() => {
     H.invokeCalls = [];

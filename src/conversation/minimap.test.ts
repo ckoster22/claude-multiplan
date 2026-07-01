@@ -112,8 +112,6 @@ describe("classifyTier — tier classification (pure)", () => {
     expect(classifyTier(card)).toBe("user");
   });
 
-  // ---- danger tier: loud failure rows must NOT collapse to the dim meta tier ----
-
   it("classifies a diagnostic error row (conv-error) as 'danger'", () => {
     // INVARIANT: an error row is a loud, session-relevant failure — the navigator must paint it in the
     // RED danger tier, not the dim meta tier. Falsifiability: WITHOUT the conv-error → danger branch

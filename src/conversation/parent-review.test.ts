@@ -1,4 +1,4 @@
-// PHASE 5 — the PARENT REVIEW TURN suite (reducer arcs, parseParentReview, prompt injection +
+// The PARENT REVIEW TURN suite (reducer arcs, parseParentReview, prompt injection +
 // the single-note lifecycle, the generalized turn watchdog, and the rogue-ExitPlanMode deny).
 //
 // Falsifiability (each inversion executed during development — evidence inline at the tests):
@@ -43,8 +43,6 @@ import {
   type PlanTreeFilePath,
 } from "./plan-tree";
 import type { AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
-
-// ---- shared fixtures -----------------------------------------------------------------------------
 
 const nnOf = (n: number) => parseNn(n);
 const p = (...ns: number[]): NodePath => ns.map(nnOf);
@@ -108,8 +106,6 @@ function leafCycle(path: NodePath, tag: string): PlanTreeEvent2[] {
   ];
 }
 
-// ---- parseParentReview (pure) ----------------------------------------------------------------------
-
 describe("PHASE 5 — parseParentReview", () => {
   it("parses `ADJUST: <note>` into { note }", () => {
     expect(parseParentReview("review prose\nADJUST: tighten the API surface")).toEqual({
@@ -133,8 +129,6 @@ describe("PHASE 5 — parseParentReview", () => {
     expect(parseParentReview("ADJUST:   ")).toBeNull();
   });
 });
-
-// ---- prompt builders: injection block + byte-identical empty-note pins -----------------------------
 
 const MANDATE: Mandate = { title: "Second", sectionBody: "scope two", masterPreamble: "preamble" };
 
@@ -179,8 +173,6 @@ describe("PHASE 5 — adjust-note prompt injection (pure builders)", () => {
     expect(built).toContain("NONE");
   });
 });
-
-// ---- reducer arcs + coherence (one falsifiable test per rule) --------------------------------------
 
 describe("PHASE 5 — reducer: the reviewing window", () => {
   it("a non-final child's SUMMARY_WRITTEN parks the parent in `reviewing`; the next sibling stays pending (any depth)", () => {
@@ -298,8 +290,6 @@ describe("PHASE 5 — coherence rules for `reviewing` (one falsifiable test per 
     expect(() => assertCoherent2(executingUnder)).toThrow(/executing under a reviewing ancestor/);
   });
 });
-
-// ---- the scripted driver suites --------------------------------------------------------------------
 
 let seq = 0;
 const textFrame = (text: string): AssistantText => ({
@@ -605,8 +595,6 @@ describe("PHASE 5 — last-child skip (no review after the final sibling)", () =
   });
 });
 
-// ---- DA P4 follow-up: the generalized turn watchdog -------------------------------------------------
-
 describe("PHASE 5 — turn watchdog for the summary and parent-review variants", () => {
   it("a parent-review turn that NEVER emits its result drives a loud watchdog FATAL", async () => {
     const rec = makeDeps();
@@ -697,8 +685,6 @@ describe("PHASE 5 — turn watchdog for the summary and parent-review variants",
     expect(c.liveTimers()).toHaveLength(0);
   });
 });
-
-// ---- DA P4 follow-up: rogue ExitPlanMode deny ------------------------------------------------------
 
 describe("PHASE 5 — rogue ExitPlanMode is DENIED (never silently stranded)", () => {
   it("during the REVIEWING window: denied with the review message; the run continues", async () => {

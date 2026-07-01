@@ -119,12 +119,10 @@ describe("decideRateLimitFrame — normalize()'s rate_limit_event decision", () 
   });
 });
 
-// ---------------------------------------------------------------------------
-// PHASE 1 — isUsageLimitText: classify the result-carrier human limit string.
+// isUsageLimitText: classify the result-carrier human limit string.
 // The usage limit arrives as a `result` with is_error:true whose ONLY payload is the human text
 // "You've hit your {session|weekly|Opus} limit · resets <h[:mm]><am|pm> (<IANA tz>)". There is no
 // dedicated subtype, so this anchored classifier is the detection seam.
-// ---------------------------------------------------------------------------
 describe("isUsageLimitText — classify the result-carrier human limit string", () => {
   it("matches the session-limit string (binary-confirmed format)", () => {
     // FALSIFY: drop the regex / return false → RED.
@@ -165,14 +163,12 @@ describe("isUsageLimitText — classify the result-carrier human limit string", 
   });
 });
 
-// ---------------------------------------------------------------------------
-// PHASE 2 — parseClockTimeInTz: wall-clock-in-named-tz → epoch-ms, machine-tz-INDEPENDENT.
+// parseClockTimeInTz: wall-clock-in-named-tz → epoch-ms, machine-tz-INDEPENDENT.
 // These tests deliberately do NOT mutate process.env.TZ at runtime (vitest's date stack is already
 // loaded); instead each case anchors `nowMs` and a NAMED tz and asserts the resolved epoch-ms is the
 // correct UTC instant REGARDLESS of where the machine is. The proof of machine-tz-independence is that
 // the SAME named tz resolves to the SAME absolute instant whatever the host zone — verified by
 // computing the expected instant from first principles (the named tz's offset), not from the host.
-// ---------------------------------------------------------------------------
 describe("parseClockTimeInTz — wall-clock-in-named-tz → epoch-ms (machine-tz-independent)", () => {
   // Helper: the epoch-ms of a given wall-clock in a named tz, computed independently of the parser
   // (so the test is not reverse-engineered from the implementation). Uses the same Intl inversion but
@@ -356,9 +352,6 @@ describe("parseClockTimeInTz — wall-clock-in-named-tz → epoch-ms (machine-tz
   });
 });
 
-// ---------------------------------------------------------------------------
-// PHASE 2 — decideResultQuota: resolve resetAt in PRIORITY ORDER (structured > string > sentinel 0).
-// ---------------------------------------------------------------------------
 describe("decideResultQuota — priority: structured resetsAt > string parse > sentinel 0", () => {
   const TEXT = "You've hit your session limit · resets 2:10pm (America/Chicago)";
   const nowMs = Date.UTC(2025, 5, 15, 7, 0, 0);

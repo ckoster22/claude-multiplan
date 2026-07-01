@@ -1,9 +1,8 @@
-// PHASE 4 — reducer arcs for depth > 1 (per-node sizer, nested gates, completion ascent, roll-up).
+// Reducer arcs for depth > 1 (per-node sizer, nested gates, completion ascent, roll-up).
 //
 // Every test drives the REAL reduce2 through event sequences (no hand-built trees except where a
 // test must construct an ILLEGAL resting shape to prove coherence rejects it). Falsifiability:
-// each rule names the inversion that turns it red; the load-bearing ones were executed during
-// development (evidence in the comments).
+// each rule names the inversion that turns it red.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -30,8 +29,6 @@ import type {
   PlanTreeFilePath,
   NonEmptyArray,
 } from "./plan-tree";
-
-// ---- fixtures -----------------------------------------------------------------------------------
 
 const nnOf = (n: number) => parseNn(n);
 const p = (...ns: number[]): NodePath => ns.map(nnOf);
@@ -120,7 +117,7 @@ function nestedSplit(path: NodePath, n: number, tag: string): PlanTreeEvent2[] {
   ];
 }
 
-// PHASE 5 — the parent-review hop between siblings: a non-final child's summary parks the parent
+// The parent-review hop between siblings: a non-final child's summary parks the parent
 // in `reviewing`; this event (the only exit) activates the next pending sibling.
 function review(parentPath: NodePath, note: string | null = null): PlanTreeEvent2 {
   return { type: "PARENT_REVIEW_DONE", path: parentPath, note };
@@ -132,13 +129,11 @@ const nodeAt = (s: PlanTreeState2, path: NodePath): TreeNode => {
   return n;
 };
 
-// ---- the depth-2 descent/ascent reducer trace (the reducer half of the centerpiece) -------------
-
 describe("PHASE 4 — depth-2 descent/ascent through the reducer", () => {
   it("root [01 leaf, 02 split[02.01, 02.02]] descends, rolls up 02, and completes — coherent at EVERY reduce", () => {
     let s = rootSplit(["First", "Second"]);
 
-    // 01: full leaf cycle → PHASE 5: the root REVIEWS before 02 activates (per-level ascent).
+    // 01: full leaf cycle → the root REVIEWS before 02 activates (per-level ascent).
     s = run2(s, leafCycle(p(1), "01")).state;
     expect(s.root.state.phase).toBe("reviewing");
     expect(nodeAt(s, p(2)).state).toEqual({ stage: "open", phase: "pending" });
@@ -153,7 +148,7 @@ describe("PHASE 4 — depth-2 descent/ascent through the reducer", () => {
     expect(nodeAt(s, p(2, 1)).state).toEqual({ stage: "open", phase: "recon" });
     expect(activePathOf(s.root)).toEqual(p(2, 1));
 
-    // 02.01 leaf cycle → PHASE 5: the NESTED parent (02) reviews before 02.02 activates.
+    // 02.01 leaf cycle → the NESTED parent (02) reviews before 02.02 activates.
     s = run2(s, leafCycle(p(2, 1), "02.01")).state;
     expect(nodeAt(s, p(2)).state.phase).toBe("reviewing");
     expect(activePathOf(s.root)).toEqual(p(2)); // the reviewing parent IS the active node
@@ -162,7 +157,7 @@ describe("PHASE 4 — depth-2 descent/ascent through the reducer", () => {
 
     // 02.02 (LAST grandchild) leaf cycle → 02 enters its ROLL-UP WINDOW: running-children with all
     // children summarized, NO notifyDone yet, and 02 ITSELF is the active node (the roll-up turn).
-    // FALSIFIED 2026-06-11: completing 02 to summarized directly at the last grandchild's summary
+    // FALSIFY: completing 02 to summarized directly at the last grandchild's summary
     // (skipping the window) turns the running-children + activePathOf assertions RED.
     const lastLeaf = run2(s, leafCycle(p(2, 2), "02.02"));
     s = lastLeaf.state;
@@ -201,7 +196,7 @@ describe("PHASE 4 — depth-2 descent/ascent through the reducer", () => {
     ]);
     s = out.state;
     // FALSIFY: route the parent roll-up through the root-completion branch → notifyDone fires here
-    // and 02 stays pending → RED on both assertions. PHASE 5: a ROLL-UP summary with a remaining
+    // and 02 stays pending → RED on both assertions. A ROLL-UP summary with a remaining
     // sibling parks the GRANDparent (here: the root) in reviewing exactly like a leaf summary does.
     expect(out.effects.some((e) => e.kind === "notifyDone")).toBe(false);
     expect(s.root.state.phase).toBe("reviewing");
@@ -248,8 +243,6 @@ describe("PHASE 4 — depth-2 descent/ascent through the reducer", () => {
     expect(writePolicyFor2(s.root)).toBe("plan"); // back to plan the moment the leaf summarizes
   });
 });
-
-// ---- nested gate arcs ----------------------------------------------------------------------------
 
 describe("PHASE 4 — nested decomposition gate arcs", () => {
   // root [01 done, 02 awaiting its nested decomposition approval] with grandchildren stashed.
@@ -301,8 +294,6 @@ describe("PHASE 4 — nested decomposition gate arcs", () => {
   });
 });
 
-// ---- per-node sizer at non-root: the collapse-child exception -----------------------------------
-
 describe("PHASE 4 — per-node sizer vs the root-collapse child", () => {
   it("isRootCollapseChild is true ONLY for the sole child of a planPath-less root split", () => {
     // The collapse path: root confident single.
@@ -322,9 +313,9 @@ describe("PHASE 4 — per-node sizer vs the root-collapse child", () => {
       { type: "SIZER_DONE", path: [], outcome: sizer("single", 1, 0.95) },
       { type: "NODE_RECON_DONE", path: p(1) },
     ]).state;
-    // FALSIFIED 2026-06-11: routed the collapse child to open/sizing like everyone → RED here AND
-    // golden Scenario A went red at the wire (the unchanged Scenario-A trace IS the collapse-skip
-    // pin); restored → GREEN.
+    // FALSIFY: route the collapse child to open/sizing like everyone → RED here AND
+    // golden Scenario A goes red at the wire (the unchanged Scenario-A trace IS the collapse-skip
+    // pin).
     expect(nodeAt(collapsed, p(1)).state.stage).toBe("leaf");
     expect(nodeAt(collapsed, p(1)).state.phase).toBe("drafting");
 
@@ -340,8 +331,6 @@ describe("PHASE 4 — per-node sizer vs the root-collapse child", () => {
   });
 });
 
-// ---- roll-up window: coherence + active-path + SUMMARY_WRITTEN legality --------------------------
-
 describe("PHASE 4 — roll-up window rules (one falsifiable test per new rule)", () => {
   // A REAL roll-up window reached through the arcs.
   function inWindow(): PlanTreeState2 {
@@ -352,19 +341,18 @@ describe("PHASE 4 — roll-up window rules (one falsifiable test per new rule)",
 
   it("COHERENCE: a NON-ROOT split may rest running-children with ALL children summarized", () => {
     const s = inWindow();
-    // FALSIFIED 2026-06-11: removing the roll-up-window allowance from assertCoherent2 (restoring
+    // FALSIFY: removing the roll-up-window allowance from assertCoherent2 (restoring
     // the unconditional exactly-1-active rule) makes this reduce sequence THROW inside reduce2
-    // ("running-children with 0 active children") → RED. Restored → GREEN.
+    // ("running-children with 0 active children") → RED.
     expect(() => assertCoherent2(s.root)).not.toThrow();
     expect(inRollupWindow(nodeAt(s, p(1)))).toBe(true);
   });
 
   it("PHASE 5: the ROOT MAY rest in that shape — it is the forced-ACCEPTANCE WINDOW (run built, awaiting a baseline verdict)", () => {
-    // PIN CHANGE (Phase 5 — forced acceptance gate): the root all-summarized running-children shape
-    // was previously a loud incoherence (a missed completion). It is now LEGAL — the acceptance
-    // window the reducer parks the root in (instead of finalizing) when a baseline exists, awaiting
-    // the user's ACCEPTANCE_APPROVED/DIVERGED verdict. treeIsDone stays FALSE in this shape (phase
-    // is running-children, not summarized), so a baseline-bearing tree can never read done without a
+    // The root all-summarized running-children shape is LEGAL — the acceptance window the reducer
+    // parks the root in (instead of finalizing) when a baseline exists, awaiting the user's
+    // ACCEPTANCE_APPROVED/DIVERGED verdict. treeIsDone stays FALSE in this shape (phase is
+    // running-children, not summarized), so a baseline-bearing tree can never read done without a
     // recorded verdict. Hand-built shape: root running-children, every child summarized.
     const child: TreeNode = {
       nn: nnOf(1),
@@ -423,9 +411,9 @@ describe("PHASE 4 — roll-up window rules (one falsifiable test per new rule)",
 
   it("ACTIVE PATH: the parked parent ITSELF is the active node during its window", () => {
     const s = inWindow();
-    // FALSIFIED 2026-06-11: restored the old activeWithin throw for the zero-active
-    // running-children split (removed the window return) → this derivation threw instead of
-    // returning ["01"] → RED; restored → GREEN.
+    // FALSIFY: restore the old activeWithin throw for the zero-active
+    // running-children split (remove the window return) → this derivation throws instead of
+    // returning ["01"] → RED.
     expect(activePathOf(s.root)).toEqual(p(1));
   });
 

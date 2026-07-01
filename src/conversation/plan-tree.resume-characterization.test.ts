@@ -38,8 +38,6 @@ import type {
   ResumeScope,
 } from "./plan-tree";
 
-// ---- minimal fixture builders -----------------------------------------------------------------
-
 const nnOf = (n: number) => parseNn(n);
 const path = (...ns: number[]): NodePath => ns.map(nnOf);
 const fileOf = (s: string) => s as PlanTreeFilePath;
@@ -89,8 +87,6 @@ function expectActiveAt(root: TreeNode, expected: NodePath): void {
   const live = activePathOf(root);
   expect(live && pathKey(live)).toBe(pathKey(expected));
 }
-
-// ---- the six currently-resumable verdicts -----------------------------------------------------
 
 describe("resumeScopeForRoot — characterization of the six resumable verdicts (full deep-equal)", () => {
   it("1. open/recon → resend('recon')", () => {

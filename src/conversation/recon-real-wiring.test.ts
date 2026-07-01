@@ -45,7 +45,6 @@ import {
   type OrchestratorHandle,
 } from "./orchestrator";
 
-// "stage/phase" of the root node — the gen-2 spelling of the old master.phase assertions.
 function rootPhase(h: OrchestratorHandle): string {
   const r = h.snapshot().root;
   return `${r.state.stage}/${r.state.phase}`;

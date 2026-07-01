@@ -50,7 +50,7 @@ describe("planningAgents", () => {
   });
 
   it("inlines the bounded-working-prototype override (DEFAULT SMALL) into the plan-sizer rubric", () => {
-    // R1: a bounded, working prototype is empirical proof the work fits one context, so the sizer
+    // A bounded, working prototype is empirical proof the work fits one context, so the sizer
     // must bias to `single` and NOT shatter it into a layer tree. FALSIFY: delete the override
     // paragraph from the rubric in planningAgents.ts → these assertions go RED.
     const p = planningAgents["plan-sizer"].prompt;

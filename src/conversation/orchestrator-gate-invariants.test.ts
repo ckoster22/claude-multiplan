@@ -1,19 +1,15 @@
-// UNIFIED-GATE ROUTING INVARIANTS (Phase 1 of the recursive-multiplan plan).
+// UNIFIED-GATE ROUTING INVARIANTS.
 //
 // The gen-2 approve(pathKey) surface routes by gate.kind through an exhaustive switch. TWO
 // load-bearing invariants live in that switch, each pinned here by a falsifiable test:
 //
 //   1. root_decomposition_gate_routes_decomposition_branch — approving the ROOT decomposition gate
 //      MUST take the decomposition branch: arm the `resuming` hold (deferring the first child's
-//      recon to the interrupt-boundary result) AND fire deps.interrupt() exactly once. FALSIFIED
-//      2026-06-10: forced the root gate through the leaf branch (`gate.kind === "decomposition" ?
-//      "leaf" : gate.kind` at the switch head) → APPROVE{path:[]} threw in the reducer (the root is
-//      not a leaf), interrupt count stayed 0, the deferred recon never fired → RED; restored → GREEN.
+//      recon to the interrupt-boundary result) AND fire deps.interrupt() exactly once.
 //
 //   2. leaf_approval_never_interrupts — approving a LEAF gate must NEVER call deps.interrupt():
 //      the approval-resumed turn IS the user-approved execution, and interrupting it would abort
-//      the very work the user just approved. FALSIFIED 2026-06-10: added `await deps.interrupt()`
-//      to the leaf case → the interrupt count rose to 1 (root run: 2) → RED; removed → GREEN.
+//      the very work the user just approved.
 //
 // Both tests drive the REAL driver through live frames (no reducer mocking) with recording fakes —
 // the same substrate the golden oracle uses.
@@ -23,7 +19,6 @@ import { describe, it, expect, vi } from "vitest";
 import { createOrchestrator, type OrchestratorDeps, type OrchestratorHandle } from "./orchestrator";
 import type { AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
 
-// ---- recording fakes + frame builders (the orchestrator.test.ts pattern) ----------------------
 
 let seq = 0;
 const textFrame = (text: string): AssistantText => ({
@@ -142,7 +137,7 @@ describe("invariant: leaf_approval_never_interrupts", () => {
     await h.ingestStream(resultFrame()); // boundary result → deferred child-01 recon
     expect(interrupts()).toBe(1);
 
-    // Child 01: recon → per-node sizer (PHASE 4; single ⇒ the child IS the leaf) → leaf draft →
+    // Child 01: recon → per-node sizer (single ⇒ the child IS the leaf) → leaf draft →
     // held LEAF gate.
     await h.ingestStream(textFrame("child recon"));
     await h.ingestStream(resultFrame());

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
-// Phase 2 RemoteData migration — the two COLLECTION reads in main.ts beyond list_plans:
+// RemoteData migration — the two COLLECTION reads in main.ts beyond list_plans:
 //   A. the comment LIST as a PATH-KEYED RemoteData<CommentRecord[]> owned by the comments facade
 //      (src/render/comments.ts) and driven by get_comments (load), set_comments (save), and
 //      clear_comments (clearAll) — the SINGLE, path-keyed, no-split-brain model the render path reads.
@@ -15,7 +14,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //
 // Falsifiability (documented per test): each assertion is paired with a concrete one-line inversion of
 // the production code that turns it RED. Confirmed by temporarily applying the break.
-// ---------------------------------------------------------------------------------------------
 
 type Rec = { quote: string; comment: string; block_line: number | null; block_end_line: number | null; occurrence: number; id: number };
 type Review = { schema: number; review_id: string; session_id: string; cwd: string; transcript_path: string; plan_text: string; plan_file_path: string; created_ms: number };
@@ -196,9 +194,6 @@ beforeEach(() => {
   __resetReviewStateForTest();
 });
 
-// ---------------------------------------------------------------------------------------------
-// MIGRATION A — the comment list as ONE RemoteData<CommentRecord[]>.
-// ---------------------------------------------------------------------------------------------
 describe("Migration A — comment list as a path-keyed model behind the render facade", () => {
   it("opening a plan whose store has comments renders the persisted comment as a highlight", async () => {
     const path = "/home/u/.claude/plans/Has-Comments.md";
@@ -275,9 +270,6 @@ describe("Migration A — comment list as a path-keyed model behind the render f
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// MIGRATION B — list_pending_reviews (launch recovery) as RemoteData<ReviewRequest[]>.
-// ---------------------------------------------------------------------------------------------
 describe("Migration B — list_pending_reviews launch recovery", () => {
   it("empty pending-review list recovers nothing and leaves the review bar hidden", async () => {
     H.pendingReviews = [];

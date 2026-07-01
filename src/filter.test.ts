@@ -184,8 +184,7 @@ describe("filterRecords — dotted-tree ANCESTOR RETENTION (Phase-4 recursive si
     const out = filterRecords(deepTree(), "WebGL pipeline"); // matches ONLY 02.01's H1
     const stems = out.map((r) => String(r.filename_stem));
     // FALSIFIABILITY: drop the ancestor-retention loop (keep only matchedSubs, the pre-Phase-4
-    // behavior) → "sub-second" (the 02 parent row) is absent → RED. Run 2026-06-11: with the loop
-    // commented out, this expectation failed exactly there; restored → GREEN.
+    // behavior) → "sub-second" (the 02 parent row) is absent → RED.
     expect(stems).toEqual(["master-deep", "sub-second", "grand-renderer"]);
     // Order is the original stream order (parent prefix BEFORE its extension — the sidebar's
     // prefix-stack walk needs the parent row first or it logs a loud orphan).

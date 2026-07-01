@@ -1,8 +1,7 @@
 // Mock-ANIMATE annotation projection tests — the PURE data-model fns (no DOM, no player). Each
 // invariant is falsifiable: a window/boundary/grouping/scaling assertion that goes RED if the
 // implementation widens the window, flips the boundary inclusivity, fails to collapse same-tMs
-// comments, or mis-scales a normalized point. (Each was confirmed RED by a temporary break, then
-// restored — see the task report.)
+// comments, or mis-scales a normalized point.
 
 import { describe, it, expect } from "vitest";
 

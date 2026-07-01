@@ -1,4 +1,4 @@
-// (c6 — review2) Autoplay 4× time-warp tests. The user commented deep in the EXECUTION chapter ("at this
+// Autoplay 4× time-warp tests. The user commented deep in the EXECUTION chapter ("at this
 // point, animate at 4× speed"): the execution tail drags. We speed the AUTOPLAY ADVANCE 4× across the
 // [WARP_POINT_MS, TERMINAL_LAND_MS) window, then drop back to 1× for the terminal "done" beat.
 //
@@ -6,7 +6,7 @@
 // fraction stay LINEAR in T, and every pure f(T) projection is untouched — so the review2 annotation
 // timestamps (which are T values) still resolve to the same frames. seekTo(T) sets T directly, unwarped.
 //
-// FALSIFIABILITY (proven during authoring):
+// FALSIFIABILITY:
 //   • Flatten tickRate to `() => speed` (constant 1×) → the 4×-inside-window assertions go RED.
 //   • Invert the bound check (warp covering the terminal beat) → the "terminal lands at 1×" assertion goes RED.
 
@@ -83,7 +83,7 @@ describe("warp window constants are derived + well-ordered within the timeline",
   });
 });
 
-// ---- Linearity guard: the warp must NOT bend the T↔frame mapping --------------------------------
+// Linearity guard: the warp must NOT bend the T↔frame mapping.
 // Boot the REAL player in jsdom (mirrors capture-focus.test.ts) and drive window.__mockAnim. The warp
 // only changes the autoplay ADVANCE; seekTo(T) sets T directly and getDuration()/the progress mapping
 // stay linear in T. We assert seekTo lands on the EXACT T (incl. inside the warp window) and resolves the

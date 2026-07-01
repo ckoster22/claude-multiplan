@@ -16,77 +16,6 @@
 //     Math.random are mocked so newTreeId() mints the same stable tree_id every run; the watchdog
 //     timer seam is a fake that never fires. The traces are therefore byte-stable across runs.
 //
-// CUTOVER AMENDMENT (Phase-1 representation swap): the `state.json` writePlanTreeFile CONTENTS in
-// these snapshots are the SCHEMA-2 recursive ledger now. This is the ONE intended Phase-1 delta the
-// recorded oracle over-pinned (the plan's Phase-1 verification explicitly requires "state.json is
-// schema 2", and schema-1 bytes cannot coexist with that deliverable). The cutover diff was audited
-// line-by-line: EXACTLY the state.json contents strings changed (schema 1 → schema 2, 26 lines per
-// run); every sendMessage text, every other writePlanTreeFile name+contents (INTENT.md / recon.md /
-// master.md / NN-summary.md), every writeAgentPlan arg, setMode, resolvePermission, interrupt, and
-// the ordered observer event kinds are BYTE-IDENTICAL to the pre-refactor recording. The persist
-// CADENCE (one state.json write per persist effect, same positions in the trace) is also unchanged.
-//
-// CUTOVER AMENDMENT 2 (Phase-2 dotted-id wire change): `write_agent_plan`'s `nn` argument became
-// the canonical zero-padded dotted STRING (Rust `Option<String>`; a bare JSON number is now
-// serde-REJECTED), so the recorded `writeAgentPlan` trace entries carry "01"/"02" instead of 1/2.
-// This is a mandated WIRE-SHAPE delta (same precedent as the schema-2 amendment above): EXACTLY
-// the three `"nn"` lines inside writeAgentPlan entries changed (Scenario A: 1 → "01"; Scenario B:
-// 1 → "01" and 2 → "02"; the master's `nn: null` is unchanged). The recording fake de-pads the nn
-// in its RETURNED path so every state.json contents string (which embeds planPath) stays
-// byte-identical; every other entry — sendMessage texts, writePlanTreeFile names+contents,
-// treeIds, setMode, resolvePermission, interrupt, observer kinds, ordering — is untouched.
-//
-// CUTOVER AMENDMENT 3 (Phase-4 per-node sizer): Phase 4 mandates that EVERY non-root node runs the
-// per-node sizer turn after its recon (recon → sizer → leaf|split) — EXCEPT the root single-collapse
-// child, which inherited the root sizer's `single` verdict and skips it (the root-only special case
-// the plan ties to "preserves current golden behavior"). Consequences for the recorded oracle:
-//   - Scenario A (confident single → collapse child): BYTE-IDENTICAL, zero changes — the collapse
-//     child still goes recon → draft directly. This pins the collapse-skip rule.
-//   - Scenario B (2-way split): each root-split child now runs a sizer turn between its recon and
-//     its draft. The trace gains, per child, EXACTLY two inserted entries — one state.json persist
-//     (the child's open/sizing window) and one sendMessage (the sizer prompt, byte-identical to the
-//     root's) — plus the harness feeds each child a `SIZER: single / 1 / 0.95` line. The diff was
-//     audited entry-by-entry: every other entry (prompt texts, write names+contents, writeAgentPlan
-//     args, setMode, resolvePermission, interrupt, observer kinds, ordering) is BYTE-IDENTICAL to
-//     the pre-Phase-4 recording. A separate sizer TURN at depth 1 cannot coexist with the literal
-//     pre-Phase-4 trace (it inserts a send by definition), so this is the mandated minimal delta,
-//     same precedent as amendments 1-2.
-//
-// CUTOVER AMENDMENT 4 (Phase-5 parent review turn): Phase 5 mandates that after each NON-FINAL
-// child's summary the PARENT runs an active review turn (parent `reviewing`; a no-tools prompt
-// carrying the child's summary + the remaining siblings' frozen mandates; the turn ends
-// `ADJUST: <note>` | `NONE`) BEFORE the next sibling's recon is sent. Consequences for the oracle:
-//   - Scenario A (confident single → ONE child): BYTE-IDENTICAL, zero changes — the single child
-//     is the last child, and review is skipped after the last child. This pins the skip rule.
-//   - Scenario B (2-way split): exactly ONE review turn inserts between sub-01 and sub-02. The
-//     harness answers NONE, so sub-02's recon/draft prompts stay BYTE-IDENTICAL (the empty-note
-//     pin). Audited entry-by-entry against the pre-Phase-5 recording, the diff is:
-//       • INSERTED: one state.json persist whose contents show the REVIEW WINDOW (root
-//         split/reviewing, sub-02 still open/pending) — lands right after the 01-summary.md write;
-//       • INSERTED: one sendMessage (the parentReviewPrompt — sub-01's summary verbatim + sub-02's
-//         frozen mandate + the ADJUST/NONE protocol);
-//       • INSERTED: one state.json persist for PARENT_REVIEW_DONE (root back to running-children,
-//         sub-02 open/recon) — its contents are BYTE-IDENTICAL to the pre-Phase-5 post-summary
-//         persist, which equivalently means that old persist MOVED from before the setMode("plan")
-//         to after the review turn (3 insertions + 1 deletion of an identical string).
-//     Every other entry — every sendMessage text (sub-02's recon/draft prompts included), every
-//     other writePlanTreeFile name+contents, writeAgentPlan args, setMode positions/values,
-//     resolvePermission, interrupt, and the ordered observer kinds — is BYTE-IDENTICAL.
-//
-// CUTOVER AMENDMENT 5 (root-single nn=null fix): the root single-collapse child is the ONLY plan
-// its tree will ever hold — no master file is ever written (root.planPath stays null) — so writing
-// it with nn="01" minted an ORPHAN flavor:sub the Rust arranger demoted to a standalone with its
-// tree_id NULLED (live bug: the sidebar's tree_id-matched "drafting…" placeholder never ceded to
-// the real row). The leaf write site now keys nn = null for isRootCollapseChild paths, so Rust
-// stamps the root-level flavor and keeps the tree_id. Consequences for the oracle:
-//   - Scenario A: EXACTLY one writeAgentPlan entry changed (nn "01" → null) plus the four
-//     state.json contents lines that embed the recording fake's returned path
-//     ("/abs/plans/1.md" → "/abs/plans/master.md" for the child's planPath/plansDirPath). Every
-//     other entry — sendMessage texts, other write names+contents, setMode, resolvePermission,
-//     interrupt, observer kinds, ordering — is BYTE-IDENTICAL (audited line-by-line).
-//   - Scenario B (2-way split): BYTE-IDENTICAL, zero changes — split subs keep their dotted nn.
-//     This pins that the root-single exception does NOT leak into real split trees.
-//
 // Scenario A: confident single (SIZER: single / 1 / 0.95) → one sub, gate, approve, exec, summary, done.
 // Scenario B: 2-way split (SIZER: split / 2 / 0.9) → master draft, master gate, approveMaster,
 //   interrupted resume result, then sub-01, the parent review turn (NONE), then sub-02 through
@@ -97,7 +26,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createOrchestrator, type OrchestratorDeps, type OrchestratorHandle } from "./orchestrator";
 import type { AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
 
-// ---- the ordered trace ------------------------------------------------------------------------
 
 type TraceEntry =
   | { kind: "startSession"; cwd: string; permissionMode: string }
@@ -112,7 +40,6 @@ type TraceEntry =
   | { kind: "writeAgentPlan"; treeId: string; nn: string | null }
   | { kind: "observer"; event: "onAwaitingApproval" | "onSummaryWritten" | "onDone" | "onFatal" };
 
-// ---- determinism seams -------------------------------------------------------------------------
 
 // The fixed injected clock (deps.now): every persisted ledger carries this stamp.
 const FIXED_MS = 1_750_000_000_000;
@@ -130,7 +57,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// ---- recording fakes (pattern reused from orchestrator.test.ts, recording into ONE trace) ------
 
 function makeGolden(): { h: OrchestratorHandle; trace: TraceEntry[] } {
   const trace: TraceEntry[] = [];
@@ -150,10 +76,10 @@ function makeGolden(): { h: OrchestratorHandle; trace: TraceEntry[] } {
     },
     writeAgentPlan: async (_plan, treeId, nn) => {
       trace.push({ kind: "writeAgentPlan", treeId, nn });
-      // RETURN-PATH STABILITY (Phase-2 cutover): the wire nn became the dotted STRING ("01"), but
-      // this fake's returned path is de-padded back to the old numeric form so the planPath that
-      // leaks into the recorded state.json contents stays BYTE-IDENTICAL ("/abs/plans/1.md") —
-      // only the writeAgentPlan trace entries themselves change shape (see the header amendment).
+      // The wire nn is the dotted STRING ("01"), but this fake's returned path is de-padded back to
+      // the numeric form so the planPath that leaks into the recorded state.json contents stays
+      // BYTE-IDENTICAL ("/abs/plans/1.md") — only the writeAgentPlan trace entries themselves change
+      // shape.
       return `/abs/plans/${nn === null ? "master" : Number.parseInt(nn, 10)}.md`;
     },
     resetPlanTreeDir: async (cwd) => void trace.push({ kind: "resetPlanTreeDir", cwd }),
@@ -174,7 +100,6 @@ function makeGolden(): { h: OrchestratorHandle; trace: TraceEntry[] } {
   return { h, trace };
 }
 
-// ---- scripted live-frame builders (same shapes orchestrator.test.ts uses) ----------------------
 
 let seq = 0;
 
@@ -209,12 +134,10 @@ function exitPlanModeReq(id: string, plan: string): ToolPermissionRequested {
 
 // Drive one sub-plan from its armed recon turn through gate → approve → exec → summary. After the
 // summary result the orchestrator either auto-advances to the next sub's recon or finishes (done).
-// (Cutover note: the handle's approve surface takes a pathKey string now — "0<nn>" at depth 1. The
-// TRACE this harness records is unchanged; only the driving call signature moved.)
-// AMENDMENT 3: `viaSizer` feeds the Phase-4 per-node sizer turn (a SIZER line + result) between the
+// `viaSizer` feeds the per-node sizer turn (a SIZER line + result) between the
 // sub's recon and its draft. Scenario B's root-split children pass true; Scenario A's collapse
 // child keeps false (it skips the sizer — the rule the unchanged Scenario A trace pins).
-// AMENDMENT 4: `reviewAfter` answers the Phase-5 parent-review turn that follows a NON-FINAL
+// `reviewAfter` answers the parent-review turn that follows a NON-FINAL
 // child's summary (NONE — no note, so the next child's prompts stay byte-identical). Scenario B's
 // sub-01 passes true; the LAST child of either scenario keeps false (review skipped after the
 // last child — the rule the unchanged Scenario A trace pins for the single-child case).
@@ -254,7 +177,6 @@ async function driveToSizer(h: OrchestratorHandle, sizerLine: string): Promise<v
   await h.ingestStream(resultFrame());
 }
 
-// ---- the two golden scenarios -------------------------------------------------------------------
 
 describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
   it("Scenario A — confident single: intent → recon → sizer(single 0.95) → sub-01 recon/draft/gate/approve/exec/summary → done", async () => {
@@ -574,12 +496,11 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
     await h.ingestPermission(exitPlanModeReq("master-tu", masterPlan));
 
     // The ROOT decomposition gate is approved through the UNIFIED surface: pathKey "" is the root.
-    // (Cutover note: approveMaster() was superseded by approve("") — the recorded TRACE is unchanged.)
     await h.approve("");
     // The interrupted resume turn's terminal result — the boundary that fires the deferred sub-recon.
     await h.ingestStream(resultFrame());
 
-    // AMENDMENT 4: sub-01 is non-final, so the ROOT's review turn follows its summary (the harness
+    // sub-01 is non-final, so the ROOT's review turn follows its summary (the harness
     // answers NONE — sub-02's prompts stay byte-identical); sub-02 is the LAST child (no review).
     await driveSub(h, 1, "sub1-tu", true, true);
     await driveSub(h, 2, "sub2-tu", true);

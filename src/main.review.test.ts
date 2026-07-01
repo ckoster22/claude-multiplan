@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// ---------------------------------------------------------------------------------------------
 // Plan-review UX — OPTION A: a review OPENS THE REAL plan file through the normal plan-open flow.
 //
 // The redesign (the invariant fix):
@@ -22,7 +21,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // runs end-to-end. The backend is a shared in-memory comment store keyed by REAL plan path; every
 // comment-command + respond_to_review invoke is recorded so the persistence + decision invariants are
 // checkable.
-// ---------------------------------------------------------------------------------------------
 
 type Rec = { quote: string; comment: string; block_line: number | null; block_end_line: number | null; occurrence: number; id: number };
 type Review = { schema: number; review_id: string; session_id: string; cwd: string; transcript_path: string; plan_text: string; plan_file_path: string; created_ms: number };
@@ -265,9 +263,6 @@ beforeEach(() => {
   __resetOrchestratorForTest();
 });
 
-// ---------------------------------------------------------------------------------------------
-// INVARIANT (the bug we're fixing): a review OPENS + SELECTS the real plan file in the sidebar.
-// ---------------------------------------------------------------------------------------------
 describe("review-opens-real-file invariant — the reviewed plan is selected in the sidebar", () => {
   it("after plan-review-requested with a plan_file_path that has a sidebar row: pane shows that plan AND its row is active", async () => {
     const path = "/home/u/.claude/plans/Feature-X.md";
@@ -292,9 +287,6 @@ describe("review-opens-real-file invariant — the reviewed plan is selected in 
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// CORE FIX — navigation is NEVER trapped by a pending review.
-// ---------------------------------------------------------------------------------------------
 describe("navigation-unstick — opening another plan while a review is pending does NOT trap or resolve", () => {
   it("shows the other plan, leaves the review pending, drops the bar to SUMMARY, and Resume reopens + reselects it", async () => {
     const reviewPath = "/home/u/.claude/plans/Reviewed.md";
@@ -337,9 +329,6 @@ describe("navigation-unstick — opening another plan while a review is pending 
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Submit (deny) decision + removal from pending.
-// ---------------------------------------------------------------------------------------------
 describe("review action bar — Submit (deny) decision", () => {
   it("Submit sends decision 'deny' with the buildFeedbackPrompt reason (from the OPEN plan's comments), removes it from pending, hides the bar", async () => {
     const path = "/home/u/.claude/plans/Submit-Me.md";
@@ -371,7 +360,6 @@ describe("review action bar — Submit (deny) decision", () => {
     expect(document.querySelector("#doc-filename")!.textContent).toBe("Submit-Me.md");
   });
 
-  // ---------------------------------------------------------------------------------------------
   // RemoteData error arm (FALSIFIABLE): a FAILED respond_to_review is surfaced, NOT swallowed. The
   // resolveReview outcome is modeled as a ScalarRemoteData<void> folded via matchScalar; its `error`
   // arm drives the #hook-status surface and the review STAYS pending (only the `success` arm removes
@@ -379,7 +367,6 @@ describe("review action bar — Submit (deny) decision", () => {
   // setHookStatus call from the error arm → status stays empty; (b) collapsing success+error to one
   // path (e.g. moving pendingReviews.delete/clearAllComments to run regardless of outcome) → the
   // comments would be cleared and the bar hidden even though the deny never landed.
-  // ---------------------------------------------------------------------------------------------
   it("a FAILED Submit (respond_to_review rejects) surfaces #hook-status error AND leaves the review + its comments intact", async () => {
     const path = "/home/u/.claude/plans/Submit-Fails.md";
     H.rows = [planRow(path, "Submit-Fails")];
@@ -415,9 +402,6 @@ describe("review action bar — Submit (deny) decision", () => {
     expect(submit.classList.contains("hidden")).toBe(false);
   });
 
-  // ---------------------------------------------------------------------------------------------
-  // CHANGE 1 (FALSIFIABLE): Submit CLEARS the submitted plan's comments AFTER the deny lands.
-  // ---------------------------------------------------------------------------------------------
   it("Submit clears the submitted plan's comments (clear_comments invoked for openPath; store + pane highlights emptied) AFTER the deny", async () => {
     const path = "/home/u/.claude/plans/Clear-On-Submit.md";
     H.rows = [planRow(path, "Clear-On-Submit")];
@@ -450,9 +434,6 @@ describe("review action bar — Submit (deny) decision", () => {
     expect(reviewCommentCount()).toBe(0);
   });
 
-  // ---------------------------------------------------------------------------------------------
-  // CHANGE 2 (FALSIFIABLE): the MANUAL #review-clear button — two-click confirm clears, single arms.
-  // ---------------------------------------------------------------------------------------------
   it("#review-clear: a SINGLE click only arms (does NOT clear); a SECOND click clears the plan's comments", async () => {
     const path = "/home/u/.claude/plans/Manual-Clear.md";
     H.rows = [planRow(path, "Manual-Clear")];
@@ -487,9 +468,6 @@ describe("review action bar — Submit (deny) decision", () => {
 
 });
 
-// ---------------------------------------------------------------------------------------------
-// First-comment Submit-enable (on the real plan's comment count).
-// ---------------------------------------------------------------------------------------------
 describe("review Submit button — enables on the FIRST inline comment", () => {
   it("Submit is disabled at 0 comments and ENABLES immediately after exactly one comment", async () => {
     const path = "/home/u/.claude/plans/First.md";
@@ -508,9 +486,6 @@ describe("review Submit button — enables on the FIRST inline comment", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// Cancellation — the open plan stays open; only the bar changes.
-// ---------------------------------------------------------------------------------------------
 describe("review cancellation — removes from pending, plan stays open", () => {
   it("a cancelled review is removed from pending and the bar hides if it was the only one; the plan stays open", async () => {
     const path = "/home/u/.claude/plans/Cancel.md";
@@ -528,15 +503,12 @@ describe("review cancellation — removes from pending, plan stays open", () => 
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // Un-openable plan (empty plan_file_path) — REFUSE-and-surface, NOT a detached phantom.
 // (The old "degraded detached render" left openPath null, so currentReviewId() stayed
 // null → the bar fell to SUMMARY mode (Submit hidden, handlers bail on the null guards)
 // while the dead review was STILL counted ("1 plan awaiting review"). It was un-actionable yet
 // trapping. An un-openable review must be REFUSED — dropped from pending so it is not counted, with
 // the failure surfaced on #hook-status — never rendered.)
-// ---------------------------------------------------------------------------------------------
-// ---------------------------------------------------------------------------------------------
 // a fast double-click on Submit must dispatch the deny EXACTLY once.
 //
 // The first click sets the bar to "submitting" (Submit visually disabled). But a disabled button is
@@ -546,7 +518,6 @@ describe("review cancellation — removes from pending, plan stays open", () => 
 // clicks via dispatchEvent (which, unlike .click(), fires listeners even on a disabled button) BEFORE
 // the first round-trip's awaited promise resolves, and asserts the underlying respond_to_review deny
 // landed once. Exercises the EXTERNAL review submit path (the same path the "Submit (deny)" test uses).
-// ---------------------------------------------------------------------------------------------
 describe("review Submit — no double-submit on a fast double-click", () => {
   it("two synchronous #review-submit clicks dispatch the deny (respond_to_review) EXACTLY once", async () => {
     const path = "/home/u/.claude/plans/Double-Submit.md";
@@ -576,7 +547,6 @@ describe("review Submit — no double-submit on a fast double-click", () => {
     expect(H.responses[0].decision).toBe("deny");
   });
 
-  // -------------------------------------------------------------------------------------------
   // FALSIFIABILITY-CLEAN PATH: the PROTOTYPE submit ("Request changes" → refinePrototype). Unlike
   // the external/viewing paths, PROTOTYPE mode is rendered by applyPrototypeBar, which derives the
   // Submit button's `disabled` SOLELY from the feedback textarea — it IGNORES submitInFlight, so the
@@ -631,7 +601,6 @@ describe("review Submit — no double-submit on a fast double-click", () => {
     await h.cancel();
   });
 
-  // -------------------------------------------------------------------------------------------
   // A guard-REJECTED click must NOT leave submit stuck disabled. The in-flight flag is set only
   // AFTER each branch's validation guard, and reset in a finally on every exit — so a click that
   // bails on a guard (here: 0 comments → Submit disabled → the per-branch guard returns BEFORE the
@@ -662,8 +631,7 @@ describe("review Submit — no double-submit on a fast double-click", () => {
     expect(H.responses[0].reviewId).toBe("rev-stuck");
   });
 
-  // -------------------------------------------------------------------------------------------
-  // SIBLING DEFECT (DA finding): the same fast-double-click defect class applies to #review-approve.
+  // SIBLING DEFECT: the same fast-double-click defect class applies to #review-approve.
   // Empirically the unguarded handler double-DISPATCHES approvePrototype (the second call reaches the
   // handle and only throws "no pending gate" AFTER its first await — the gate/acceptance approve paths
   // have no such internal backstop, so a real second allow could land). We mock approvePrototype to a
@@ -691,7 +659,6 @@ describe("review Submit — no double-submit on a fast double-click", () => {
     await h.cancel();
   });
 
-  // -------------------------------------------------------------------------------------------
   // CROSS-BUTTON: Submit and Approve act on the SAME gate with OPPOSITE decisions. A fast Approve
   // (sets the lock) followed by a Submit must NOT both dispatch — the shared in-flight guard blocks
   // the second action regardless of which sibling button fired first.
@@ -746,14 +713,12 @@ describe("un-openable review — empty plan_file_path refuses and surfaces (no u
   });
 });
 
-// ---------------------------------------------------------------------------------------------
 // RemoteData error arm (FALSIFIABLE): the "Open in browser" command (open_prototype) is folded
 // through openExternally's matchScalar; a FAILED open drives its `error` arm onto the #hook-status
 // surface rather than being swallowed by a bare .catch(). (open_baseline rides the SAME helper —
 // only the command name + label differ at the call site, so this exercises the shared error arm.)
 // Inversions that turn this RED: deleting the setHookStatus call from openExternally's error arm
 // (status stays empty), or routing the outcome through the success arm regardless of rejection.
-// ---------------------------------------------------------------------------------------------
 describe("prototype Open in browser — a FAILED open_prototype surfaces #hook-status", () => {
   it("clicking #prototype-open while open_prototype rejects shows the error on #hook-status", async () => {
     const h = createOrchestrator(makeOrchDeps());

@@ -57,9 +57,7 @@ import type {
 const nnOf = (n: number) => parseNn(n);
 const pathOf = (p: string) => p as PlanTreeFilePath;
 
-// ---- gen-2 snapshot helpers (the flat master.phase/pointer/subplans surface is GONE) ----------
-
-// "stage/phase" of the root node — the gen-2 spelling of the old master.phase assertions.
+// "stage/phase" of the root node.
 function rootPhase(h: OrchestratorHandle): string {
   const r = h.snapshot().root;
   return `${r.state.stage}/${r.state.phase}`;
@@ -74,19 +72,19 @@ function childOf(h: OrchestratorHandle, n: number): TreeNode {
   return c;
 }
 
-// "stage/phase" of depth-1 child n — the gen-2 spelling of subplans[i].lifecycle assertions.
+// "stage/phase" of depth-1 child n.
 function childPhase(h: OrchestratorHandle, n: number): string {
   const c = childOf(h, n);
   return `${c.state.stage}/${c.state.phase}`;
 }
 
-// The active node's pathKey ("" = the root itself) or null — the gen-2 spelling of the pointer.
+// The active node's pathKey ("" = the root itself) or null.
 function activeKey(h: OrchestratorHandle): string | null {
   const p = h.snapshot().activePath;
   return p === null ? null : pathKey(p);
 }
 
-// The root's children nns in order (the gen-2 spelling of subplans.map(s => s.nn)).
+// The root's children nns in order.
 function childNns(h: OrchestratorHandle): number[] {
   const r = h.snapshot().root;
   if (r.state.stage !== "split") return [];
@@ -98,8 +96,6 @@ function leafState(node: TreeNode): Extract<TreeNode["state"], { stage: "leaf" }
   if (node.state.stage !== "leaf") throw new Error(`expected leaf, got ${node.state.stage}`);
   return node.state;
 }
-
-// ---- scripted live-frame builders (drive ingestStream / ingestPermission) --------------------
 
 let seqCounter = 0;
 function nextSeq(): number {
@@ -162,8 +158,6 @@ function askUserQuestionReq(
     agent_id: null,
   };
 }
-
-// ---- a recording fake OrchestratorDeps ------------------------------------------------------
 
 interface Recorded {
   calls: string[]; // ordered, human-readable trace of every dep call
@@ -278,8 +272,8 @@ function makeDeps(): { deps: OrchestratorDeps; rec: Recorded } {
   return { deps, rec };
 }
 
-// A recording observer + the buffers it fills. GEN-2 SHAPES: the unified gate is recorded as its
-// pathKey ("" = root) + kind + toolUseId (the nn:-1 sentinel is gone); summaries are path-keyed.
+// A recording observer + the buffers it fills. The unified gate is recorded as its
+// pathKey ("" = root) + kind + toolUseId; summaries are path-keyed.
 interface ObsRec {
   obs: OrchestratorObserver;
   awaiting: Array<{ key: string; kind: "decomposition" | "leaf"; toolUseId: string }>;
@@ -350,14 +344,12 @@ function installFakeTimers(deps: OrchestratorDeps): FakeTimer[] {
   return timers;
 }
 
-// ---- intent-clarification phase (precedes recon) --------------------------------------------
-//
 // Drive the intent turn that now opens every run: start() arms `intent` + sends the intentPrompt;
 // the turn's `result` dispatches INTENT_CLARIFIED (writing INTENT.md), then sends the recon prompt
 // and arms `recon`. After that boundary, recon→sizer→sub-plan behavior is UNCHANGED.
 
 // Drive a started handle through the opening intent turn to the recon arm. After this returns the
-// run is exactly where it used to be right after start() pre-feature: phase recon, recon prompt sent.
+// run is at phase recon, recon prompt sent.
 async function driveIntentToRecon(
   h: OrchestratorHandle,
   intentText = "the confirmed intent",
@@ -366,8 +358,6 @@ async function driveIntentToRecon(
   await h.ingestStream(resultFrame());
 }
 
-// ---- prompt threading: confirmed intent flows into recon + master-draft -----------------------
-//
 // The confirmed intent (the intent-clarifier's final message) MUST be threaded into the planning-
 // decision prompts (recon, master-draft). These pure-function tests pin the labeled-block format and
 // the byte-identical no-op when intent is null/empty.
@@ -480,9 +470,7 @@ describe("orchestrator — START reconciliation resets .plan-tree on disk", () =
   });
 });
 
-// ---- resume support: system_init session_id captured + self-persisted ------------------------
-//
-// Phase 1 of the resume plan: the SDK's session_id arrives on the system_init frame; the driver
+// The SDK's session_id arrives on the system_init frame; the driver
 // must self-persist it onto state.json (via SESSION_INITIALIZED) WITHOUT perturbing the armed
 // sequencer (`awaiting`). These tests inject a system_init frame and assert the captured
 // writePlanTreeFile("state.json") JSON carries sdk_session_id AND that the still-armed `intent`
@@ -691,9 +679,7 @@ describe("orchestrator — intent-clarification phase precedes recon", () => {
   });
 });
 
-// ============================================================================================
-// VISUAL-PROTOTYPE LOOP — the /multiplan visual intent loop, ported in-driver (4b).
-// ============================================================================================
+// VISUAL-PROTOTYPE LOOP — the /multiplan visual intent loop.
 
 // A valid clarifier `prototype` JSON body (the clarifier's snake_case spelling, carried verbatim
 // inside the ---PROTOTYPE--- block per the FINALIZE contract).
@@ -1021,11 +1007,9 @@ describe("orchestrator — visual prototype gate (intent result carries a traili
   });
 });
 
-// ============================================================================================
 // COMBINED apply-and-approve — the user types feedback AND clicks approve: the driver loops the
 // prototype back ONE round to apply the feedback, then auto-resolves the revised gate forward to
 // recon WITHOUT surfacing another review round. The latch (autoApproveNext) is driver-owned.
-// ============================================================================================
 
 describe("orchestrator — combined apply-and-approve (refinePrototype autoApprove)", () => {
   it("auto-approves the NEXT prototype turn: PROTOTYPE_READY → PROTOTYPE_APPROVED → recon, no lingering gate, no throw", async () => {
@@ -1582,13 +1566,13 @@ describe("orchestrator — full split-of-3 run", () => {
     for (const nnRaw of [1, 2, 3]) {
       const nn = nnOf(nnRaw);
       await dispatch({ type: "NODE_RECON_DONE", path: [nn] });
-      // PHASE 4: every non-root node runs the per-node sizer (single ⇒ the node IS the leaf).
+      // Every non-root node runs the per-node sizer (single ⇒ the node IS the leaf).
       await dispatch({
         type: "SIZER_DONE",
         path: [nn],
         outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
       });
-      // The draft lands through the REAL interactive path (gen-2: the DRIVER is the single
+      // The draft lands through the REAL interactive path (the DRIVER is the single
       // authoritative plan writer — Effect2 has no writeAgentPlan kind, so a raw NODE_DRAFTED
       // dispatch would record no write at all).
       await h.ingestPermission(exitPlanModeReq(`sub-${nn}-tu`, `sub ${nn} plan`));
@@ -1600,7 +1584,7 @@ describe("orchestrator — full split-of-3 run", () => {
         summaryText: `summary ${nn}`,
         summaryPath: pathOf(`/p/${nn}-summary.md`),
       });
-      // PHASE 5: a non-final child's summary parks the root in `reviewing`; the review turn's
+      // A non-final child's summary parks the root in `reviewing`; the review turn's
       // PARENT_REVIEW_DONE is the arc that activates the next sibling. Skipped after the last.
       if (nnRaw < 3) await dispatch({ type: "PARENT_REVIEW_DONE", path: [], note: null });
     }
@@ -1619,9 +1603,8 @@ describe("orchestrator — full split-of-3 run", () => {
       expect(w.treeId.length).toBeGreaterThan(0);
     }
 
-    // onAwaitingApproval fired for the ROOT decomposition gate (the unified gate — key "" — the
-    // gen-1 driver-side sentinel surface is gone) and once per leaf draft (3×); onSummaryWritten 3×
-    // path-keyed.
+    // onAwaitingApproval fired for the ROOT decomposition gate (the unified gate — key "") and once
+    // per leaf draft (3×); onSummaryWritten 3× path-keyed.
     expect(awaiting).toEqual([
       { key: "", kind: "decomposition", toolUseId: "master-tu" },
       { key: "01", kind: "leaf", toolUseId: "sub-1-tu" },
@@ -1664,13 +1647,13 @@ describe("orchestrator — full split-of-3 run", () => {
     // (reduce2): persist is emitted by START, INTENT_CLARIFIED, NODE_RECON_DONE, SIZER_DONE,
     // DECOMPOSITION_DRAFTED, CHILDREN_PARSED, DECOMPOSITION_APPROVED, NODE_DRAFTED, APPROVE,
     // REQUEST_CHANGES, DECOMPOSITION_CHANGES_REQUESTED, EXEC_DONE, SUMMARY_WRITTEN,
-    // PARENT_REVIEW_DONE (PHASE 5).
+    // PARENT_REVIEW_DONE.
     // (CLARIFY_REQUESTED / CLARIFY_ANSWERED / FATAL do NOT persist.) Our split run dispatches:
     //   START(1) INTENT_CLARIFIED(1) NODE_RECON_DONE(1) SIZER_DONE(1) DECOMPOSITION_DRAFTED(1)
     //   CHILDREN_PARSED(1) DECOMPOSITION_APPROVED(1)
-    //   + per child × 3: NODE_RECON_DONE, SIZER_DONE (PHASE 4: per-node sizer), NODE_DRAFTED,
+    //   + per child × 3: NODE_RECON_DONE, SIZER_DONE (per-node sizer), NODE_DRAFTED,
     //     APPROVE, EXEC_DONE, SUMMARY_WRITTEN (6 each)
-    //   + PARENT_REVIEW_DONE × 2 (PHASE 5: between siblings — skipped after the last child)
+    //   + PARENT_REVIEW_DONE × 2 (between siblings — skipped after the last child)
     //   = 7 + 18 + 2 = 27 persist-emitting events.
     let expectedPersists = 0;
 
@@ -1710,7 +1693,7 @@ describe("orchestrator — full split-of-3 run", () => {
         summaryPath: pathOf(`/p/${nn}-s.md`),
       });
       expectedPersists++;
-      // PHASE 5: the between-siblings review hop (PARENT_REVIEW_DONE persists too).
+      // The between-siblings review hop (PARENT_REVIEW_DONE persists too).
       if (nnRaw < 3) {
         await dispatch({ type: "PARENT_REVIEW_DONE", path: [], note: null });
         expectedPersists++;
@@ -1733,9 +1716,7 @@ describe("orchestrator — full split-of-3 run", () => {
   });
 });
 
-// ============================================================================================
-// PHASE 5 — the forced acceptance gate at the completion seam (baseline floor enforcement).
-// ============================================================================================
+// The forced acceptance gate at the completion seam (baseline floor enforcement).
 
 describe("orchestrator — forced acceptance gate (baseline present)", () => {
   // Drive a started handle through the WORKING-REFERENCE prototype gate (records baseline_) then a
@@ -2057,9 +2038,7 @@ describe("orchestrator — cancel purges a held approval", () => {
   });
 });
 
-// ============================================================================================
 // DRIVER CORE — live bridge / sequencer tests (drive ingest* entry points).
-// ============================================================================================
 
 describe("orchestrator — bootstrap + idempotent no-op", () => {
   it("start() opens a plan-mode session, sends the intent prompt, returns true; a 2nd start returns false", async () => {
@@ -2172,12 +2151,6 @@ describe("orchestrator — sequencer via scripted frames", () => {
 
     await h.cancel();
   });
-
-  // (The old "omitting the SIZER line goes FATAL" test was REMOVED 2026-06-10: the two-outcome
-  // sizer COERCES an unparseable sizer turn to split instead of ending the run — see
-  // "orchestrator — TWO-OUTCOME sizer: unknown decisions coerce to split" below. The SIZER-scan
-  // strictness it also pinned — chatter never parses as a decision — lives in plan-tree.test.ts's
-  // parseSizerDecision unit tests.)
 });
 
 describe("orchestrator — master-write contract via the REAL ingestPermission path", () => {
@@ -2216,7 +2189,7 @@ describe("orchestrator — master-write contract via the REAL ingestPermission p
     expect(rec.writeAgentPlan[0]).toEqual({ plan: masterPlan, treeId, nn: null });
     expect(rootPhase(h)).toBe("open/awaiting-decomposition-approval");
 
-    // Approve the decomposition → the stashed children materialize (gen-2: parsed children live in
+    // Approve the decomposition → the stashed children materialize (parsed children live in
     // a transient stash while the gate is held; the open→split replacement happens at approval) and
     // child 01 enters recon. The recon prompt is DEFERRED until the approval-resumed turn's result
     // arrives; then finish child 01's recon so it is leaf/drafting and a LEAF ExitPlanMode hold is
@@ -2227,7 +2200,7 @@ describe("orchestrator — master-write contract via the REAL ingestPermission p
     await h.ingestStream(resultFrame()); // the resume turn's result → deferred sub-recon send
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     expect(childPhase(h, 1)).toBe("leaf/drafting");
@@ -2274,7 +2247,7 @@ describe("orchestrator — TWO-OUTCOME sizer: unknown decisions coerce to split"
 
     // COERCED to split: phase is `decomposing`, a synthetic split outcome is recorded, and the
     // master-draft prompt was sent.
-    // FALSIFIED 2026-06-10: temporarily restored an escalate branch mapping (unparseable decision
+    // FALSIFIED: temporarily restored an escalate branch mapping (unparseable decision
     // → FATAL instead of the split coercion) → all three assertions went RED; restored → GREEN.
     expect(rootPhase(h)).toBe("open/decomposing");
     // (Schema 2 stores no sizer field — the coerced split is observable via the decomposing arc +
@@ -2312,7 +2285,7 @@ describe("orchestrator — TWO-OUTCOME sizer: unknown decisions coerce to split"
     await h.ingestStream(textFrame("I could not really size this request."));
     await h.ingestStream(resultFrame());
 
-    // FALSIFIED 2026-06-10: restored the old FATAL("plan-sizer emitted no SIZER decision line")
+    // FALSIFIED: restored the old FATAL("plan-sizer emitted no SIZER decision line")
     // branch → fatal captured the message + phase stayed `sizing` → RED; restored → GREEN.
     expect(fatal).toEqual([]);
     expect(rootPhase(h)).toBe("open/decomposing");
@@ -2344,7 +2317,7 @@ describe("orchestrator — ingest frame throw drives a visible fatal terminal st
     breakWrites = true;
 
     // The opening intent frame triggers INTENT_CLARIFIED → writePlanTreeFile throws inside the queued
-    // frame (same FATAL-isolation behavior the recon write previously exercised).
+    // frame.
     await h.ingestStream(textFrame("the confirmed intent", "agent-intent"));
     await h.ingestStream(resultFrame());
 
@@ -2375,7 +2348,7 @@ describe("orchestrator — approval-resume swallow rule", () => {
     // sub 01 recon → draft → hold.
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
@@ -2500,7 +2473,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     // The deferred send armed sub-recon: its turn's result advances to drafting (not swallowed).
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     expect(childPhase(h, 1)).toBe("leaf/drafting");
@@ -2520,7 +2493,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     // interrupting here would abort the user-approved execution itself.
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
@@ -2553,7 +2526,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     // Sub 01: recon → draft → approve → exec → summary text + result.
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
@@ -2564,7 +2537,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     const interruptsBefore = rec.interrupt;
     await h.ingestStream(resultFrame()); // summary result → SUMMARY_WRITTEN parks the root reviewing…
 
-    // …PHASE 5: the parent-review prompt fires INLINE off that same frame (the root is reviewing;
+    // …the parent-review prompt fires INLINE off that same frame (the root is reviewing;
     // sub 02 stays pending until the review turn ends). FALSIFY: restore the deferred
     // armResuming(nextNn) in the summary branch → no send lands here (and the run deadlocks) → RED.
     expect(activeKey(h)).toBe(""); // the reviewing ROOT is the active node
@@ -2598,7 +2571,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     // The inline send armed sub-recon: sub 02's recon turn advances normally (not swallowed).
     await h.ingestStream(textFrame("sub02 recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     expect(childPhase(h, 2)).toBe("leaf/drafting");
@@ -2674,7 +2647,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     // The deferred send armed sub-recon: the run still advances normally (not swallowed).
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     expect(childPhase(h, 1)).toBe("leaf/drafting");
@@ -2775,7 +2748,7 @@ describe("orchestrator — single authoritative plan write", () => {
     // and the record keeps its tree_id; a dotted nn here minted an orphan flavor:sub the Rust
     // arranger demoted to a standalone with tree_id NULLED, so the live sidebar placeholder never
     // ceded). FALSIFY: replace isRootCollapseChild(...) ? null : pathKey(path) with pathKey(path)
-    // at the leaf write site -> nn === "01" -> RED. (Confirmed red 2026-06-12.)
+    // at the leaf write site -> nn === "01" -> RED.
     expect(w.nn).toBe(null);
     expect(w.plan).toBe("the sub plan body");
 
@@ -2861,10 +2834,9 @@ describe("orchestrator — master decomposition gate", () => {
       allow: false,
       message: "split it differently",
     });
-    // Did NOT advance to running-children (the root is still pre-execution). GEN-2 DELTA (intent
-    // preserved, resting phase refined): DECOMPOSITION_CHANGES_REQUESTED is a first-class reducer
-    // event that moves the node BACK to open/decomposing for the same-turn redraft (gen-1 had no
-    // event and rested at awaiting-approval). FALSIFY: dispatch DECOMPOSITION_APPROVED in the
+    // Did NOT advance to running-children (the root is still pre-execution).
+    // DECOMPOSITION_CHANGES_REQUESTED is a first-class reducer event that moves the node BACK to
+    // open/decomposing for the same-turn redraft. FALSIFY: dispatch DECOMPOSITION_APPROVED in the
     // decomposition branch of requestChanges -> the root becomes split/running-children -> RED.
     expect(rootPhase(h)).toBe("open/decomposing");
     expect(activeKey(h)).toBe(""); // the ROOT is still the active node (no child activated)
@@ -2945,7 +2917,7 @@ describe("orchestrator — derived write policy (mode is a pure function of the 
     expect(planAsserts()).toBe(2);
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     // FALSIFY: keep the old unconditional setMode("plan") in the sub-recon branch → count becomes 3 → RED.
@@ -2970,7 +2942,7 @@ describe("orchestrator — derived write policy (mode is a pure function of the 
     // Sub 01: recon → draft → approve → exec → summary.
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
@@ -2980,7 +2952,7 @@ describe("orchestrator — derived write policy (mode is a pure function of the 
     const boundary = rec.calls.length;
     await h.ingestStream(textFrame("## Changes\nx\n## Findings\ny\n## Next-step inputs\nz"));
     await h.ingestStream(resultFrame()); // summary → SUMMARY_WRITTEN → root reviewing + review prompt
-    // PHASE 5: the parent-review turn sits between the siblings; NONE → INLINE sub-02 recon send.
+    // The parent-review turn sits between the siblings; NONE → INLINE sub-02 recon send.
     await h.ingestStream(textFrame("NONE"));
     await h.ingestStream(resultFrame());
 
@@ -3052,10 +3024,10 @@ describe("orchestrator — summary threading", () => {
     await h.approve(""); // root decomposition gate (pathKey "")
     await h.ingestStream(resultFrame()); // the resume turn's result → deferred sub-01 recon send
 
-    // ---- sub 01: recon → draft → approve → exec → summary ----
+    // sub 01: recon → draft → approve → exec → summary
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
@@ -3064,7 +3036,7 @@ describe("orchestrator — summary threading", () => {
     const SUB01_SUMMARY = "## Changes\nbuilt the thing for sub01\n## Findings\nok\n## Next-step inputs\nuse X";
     await h.ingestStream(textFrame(SUB01_SUMMARY));
     await h.ingestStream(resultFrame()); // summary turn completes → SUMMARY_WRITTEN + review prompt
-    // PHASE 5: the parent-review turn sits between the siblings; NONE → INLINE sub-02 recon send.
+    // The parent-review turn sits between the siblings; NONE → INLINE sub-02 recon send.
     await h.ingestStream(textFrame("NONE"));
     await h.ingestStream(resultFrame());
 
@@ -3079,14 +3051,12 @@ describe("orchestrator — summary threading", () => {
   });
 });
 
-// ============================================================================================
-// NO CROSS-RUN TRANSIENT BLEED (HIGH). Two runs share ONE orchestrator handle (the live app
+// NO CROSS-RUN TRANSIENT BLEED. Two runs share ONE orchestrator handle (the live app
 // uses a singleton). Every PER-RUN transient — the prior-sibling `summaries`, the per-child
 // `mandates`, the in-flight `clarifyQuestions`, the pending parent-review `adjustNote` — MUST be
 // reset when a fresh run starts, or run A's context bleeds into run B's prompts (a stale summary
 // threaded into a brand-new plan; a stale mandate titling a new node). These tests drive run A to
 // populate the transients, terminate it, then start run B and prove run B is clean.
-// ============================================================================================
 
 // Drive run A (SPLIT) far enough to populate `summaries["01"]`, `mandates` (RUNA_MANDATE_* titles),
 // and `adjustNote` (a pending ADJUST note scoped to the root's children). Distinctive markers make
@@ -3138,9 +3108,9 @@ describe("orchestrator — #2 no cross-run transient bleed", () => {
 
     await h.cancel(); // terminate run A — the on-disk ledger is left, the transients are NOT cleared by cancel.
 
-    // ---- RUN B: a CONFIDENT-SINGLE run (no decomposition, so `mandates` is never wholesale-replaced;
+    // RUN B: a CONFIDENT-SINGLE run (no decomposition, so `mandates` is never wholesale-replaced;
     // its single child threads priorSummaries([]) + mandateFor([01]) + adjustNoteFor([01]) — exactly
-    // the slots run A's leaked state would surface in). ----
+    // the slots run A's leaked state would surface in).
     await h.start({ cwd: "/work", request: "run B request" });
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon B"));
@@ -3212,21 +3182,19 @@ describe("orchestrator — #2 no cross-run transient bleed", () => {
   });
 });
 
-// ============================================================================================
-// PHASE 1 — characterization tests pinning CURRENT correct behavior that a later refactor touches.
+// Characterization tests pinning CURRENT correct behavior that a later refactor touches.
 //
 // These pin the ORDER of side-effects (not just end-state) across the approval gates, plus one
-// documented buggy-but-real observable (T1.5) that a later phase will intentionally fix. They MUST
+// documented buggy-but-real observable that a later phase will intentionally fix. They MUST
 // pass against UNMODIFIED orchestrator.ts / plan-tree.ts.
 //
 // ARM-BEFORE-AWAIT RACE ORACLE: the existing regression test at orchestrator.test.ts:617-661
 // ("recon result delivered during sendMessage resolution still advances past recon (no swallow)")
 // is the canonical guard that the driver arms `pendingStep` BEFORE awaiting `sendMessage`. A later
-// refactor of this Phase-1 surface MUST keep that test green — do NOT duplicate it here (T1.4).
-// ============================================================================================
+// refactor of this Phase-1 surface MUST keep that test green — do NOT duplicate it here.
 
 describe("orchestrator — PHASE 1: sub-plan change-request round trip (ordered trace)", () => {
-  // T1.1 — drive a SPLIT run to a held sub-plan gate, then exercise the full
+  // Drive a SPLIT run to a held sub-plan gate, then exercise the full
   // REQUEST_CHANGES → SUB_DRAFTED → APPROVE → exec-result cycle and assert the ORDERED rec.calls
   // trace: deny-resolve BEFORE re-draft notifyAwaitingApproval BEFORE approve-resolve + acceptEdits
   // BEFORE exactly one `## Changes` summary prompt off the post-approve result frame.
@@ -3251,7 +3219,7 @@ describe("orchestrator — PHASE 1: sub-plan change-request round trip (ordered 
     await h.ingestStream(resultFrame()); // the resume turn's result → deferred sub-01 recon send
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1a", "first draft"));
@@ -3315,7 +3283,7 @@ describe("orchestrator — PHASE 1: sub-plan change-request round trip (ordered 
 });
 
 describe("orchestrator — PHASE 1: decomposition gate → approve(\"\") → first-child routing SEQUENCE", () => {
-  // T1.3 — from a held master gate, assert the ORDER (not just the end state, which :731-748 covers):
+  // From a held master gate, assert the ORDER (not just the end state, which :731-748 covers):
   // approve("") resolves {id:"master-tu", allow:true} BEFORE the first child recon sendMessage, and
   // NO APPROVE was dispatched (reaching running/sub-recon proves it — APPROVE at pointer -1 throws).
   it("resolves the master id BEFORE the first sub-recon prompt; never dispatches APPROVE", async () => {
@@ -3401,14 +3369,11 @@ describe("orchestrator — PHASE 2: re-arm null-nn falls back to idle", () => {
 });
 
 describe("orchestrator — PHASE 2: exec→summary buffer isolation (REALIZED fix)", () => {
-  // T1.5 — REALIZED PHASE 2 FIX. Under the `Awaiting` union, the `exec` variant carries its OWN
-  // buffer:"" (unread by design) and the `summary` variant gets a FRESH per-variant buffer:"" at arm
-  // time. So assistant_text emitted DURING execution (before the exec result) appends to the exec
-  // variant's buffer and is DROPPED at the exec→summary boundary — it can NEVER prepend onto the
-  // summary capture. (Pre-refactor, a single shared assistantBuffer was never cleared at the exec
-  // boundary, so exec chatter leaked into the next summary; this test pinned that buggy observable and
-  // is now updated to assert the CLEAN one.) We assert the written summary file contains ONLY the real
-  // summary text, with the exec-phase chatter absent.
+  // Under the `Awaiting` union, the `exec` variant carries its OWN buffer:"" (unread by design) and
+  // the `summary` variant gets a FRESH per-variant buffer:"" at arm time. So assistant_text emitted
+  // DURING execution (before the exec result) appends to the exec variant's buffer and is DROPPED at
+  // the exec→summary boundary — it can NEVER prepend onto the summary capture. We assert the written
+  // summary file contains ONLY the real summary text, with the exec-phase chatter absent.
   it("summary capture DROPS exec-phase assistant_text (clean summary, no carry-over)", async () => {
     const { deps, rec } = makeDeps();
     const h = createOrchestrator(deps);
@@ -3442,8 +3407,8 @@ describe("orchestrator — PHASE 2: exec→summary buffer isolation (REALIZED fi
     // The single-plan run completed; the DRIVER physically wrote NN-summary.md with the captured
     // summary text (SUMMARY_WRITTEN carries the write's returned PATH — the text-as-path shape is
     // now uncompilable). We assert the WRITTEN summary file contains ONLY the real summary text —
-    // the exec-phase chatter is GONE (the realized Phase 2 fix: per-variant buffers isolate the
-    // exec phase from the summary capture).
+    // the exec-phase chatter is GONE (per-variant buffers isolate the exec phase from the summary
+    // capture).
     const summaryWrite = rec.writePlanTreeFile.find((w) => w.name === "01-summary.md");
     expect(summaryWrite).toBeDefined();
     const captured = summaryWrite!.contents;
@@ -3458,10 +3423,8 @@ describe("orchestrator — PHASE 2: exec→summary buffer isolation (REALIZED fi
   });
 });
 
-// ============================================================================================
-// PHASE 3 — primitive-obsession eliminations: branded summary path (driver-side write), Nn range
+// Primitive-obsession eliminations: branded summary path (driver-side write), Nn range
 // validation, structured Mandate prompts, sizer decomposition bias, and updated_ms stamping.
-// ============================================================================================
 
 describe("orchestrator — PHASE 3: onSummaryWritten carries the written FILE's path, never the text", () => {
   it("observers receive the write's returned path; the recorded write's contents === summaryText", async () => {
@@ -3576,7 +3539,7 @@ describe("orchestrator — INV-2: a HEADER-LESS decomposition draft denies-for-r
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
     await h.ingestStream(resultFrame());
-    // The master draft has NO `### Sub-Plan NN:` headers at all (the O1 finding's header-less draft).
+    // The master draft has NO `### Sub-Plan NN:` headers at all.
     await h.ingestPermission(
       exitPlanModeReq("master-tu", "Here is my plan in prose with no sub-plan headers whatsoever."),
     );
@@ -3694,7 +3657,7 @@ describe("orchestrator — INV-2: a HEADER-LESS decomposition draft denies-for-r
     // came from the write, not from validation. The throwing override REPLACES the recorder body, so
     // `rec.writeAgentPlan` is never pushed — the load-bearing observable is the mock's own call count.
     // FALSIFY: move validation back BEFORE the write (so the invalid path never reaches writeAgentPlan)
-    // → mock.calls.length is 0 → RED. (Replaces the old vacuous `length + 1 >= 1`, which always passed.)
+    // → mock.calls.length is 0 → RED.
     expect((deps.writeAgentPlan as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(1);
   });
 });
@@ -3736,7 +3699,7 @@ describe("orchestrator — PHASE 3: the Mandate carries the master section body 
     // The sub-01 DRAFT prompt (sent off the recon result) carries the same mandate body.
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
-    // PHASE 4: the per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
+    // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
     await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
     await h.ingestStream(resultFrame());
     const draftPrompt01 = rec.sendMessage.at(-1)!;
@@ -3762,7 +3725,7 @@ describe("orchestrator — PHASE 3: sizerPrompt carries the decomposition-bias b
 
   it("carries the bounded-working-prototype override (DEFAULT SMALL)", () => {
     // FALSIFY: delete the override clause from sizerPrompt()'s DECOMPOSITION-BIAS block → RED.
-    // This pins the R1 default-small rule: a bounded working prototype biases to `single`, and the
+    // This pins the default-small rule: a bounded working prototype biases to `single`, and the
     // greenfield 2+-subsystem split rule does NOT apply when one exists.
     const p = sizerPrompt();
     expect(p).toContain("bounded, working prototype");
@@ -3804,14 +3767,12 @@ describe("orchestrator — PHASE 2: decomposition drafts are slice-first (capabi
   });
 });
 
-// ============================================================================================
-// PHASE 4 (R4 + R5) — baseline-gated prompt clauses. When a frozen working-reference baseline
-// exists (hasBaseline=true) the master draft injects the OUTCOME-bar acceptance criterion (R4) and
-// the sub-plan draft/summary prompts inject the integrated behavioral-envelope-test mandate (R5).
-// When NO baseline exists (hasBaseline=false, the default) every prompt is BYTE-IDENTICAL to its
-// pre-Phase-4 form. Every test below is gated BOTH directions: it asserts the clause is PRESENT with
-// the flag true AND ABSENT (and byte-identical to the default) with the flag false.
-// ============================================================================================
+// Baseline-gated prompt clauses. When a frozen working-reference baseline exists (hasBaseline=true)
+// the master draft injects the OUTCOME-bar acceptance criterion and the sub-plan draft/summary
+// prompts inject the integrated behavioral-envelope-test mandate. When NO baseline exists
+// (hasBaseline=false, the default) every prompt is BYTE-IDENTICAL to its pre-Phase-4 form. Every
+// test below is gated BOTH directions: it asserts the clause is PRESENT with the flag true AND
+// ABSENT (and byte-identical to the default) with the flag false.
 describe("orchestrator — PHASE 4: baseline-gated acceptance bar (R4) + envelope test (R5)", () => {
   const MANDATE: Mandate = {
     title: "Sim node",
@@ -3819,8 +3780,6 @@ describe("orchestrator — PHASE 4: baseline-gated acceptance bar (R4) + envelop
     masterPreamble: "shared preamble",
   };
   const PATH = [parseNn(1)];
-
-  // ---- R4: masterDraftPrompt OUTCOME-bar acceptance criterion ----------------------------------
 
   it("R4: masterDraftPrompt injects the OUTCOME-bar acceptance criterion when a baseline exists", () => {
     // FALSIFY: drop baselineAcceptanceLines() (or its `if (!hasBaseline) return []` true-branch
@@ -3852,7 +3811,6 @@ describe("orchestrator — PHASE 4: baseline-gated acceptance bar (R4) + envelop
     expect(dflt).not.toContain("divergences ABOVE the floor are GOOD");
   });
 
-  // ---- R4 (nested): nestedDecompositionDraftPrompt OUTCOME-bar acceptance criterion -------------
   // A baseline'd tree that decomposes a sub-plan FURTHER (depth >= 2) drafts a nested master via
   // nestedDecompositionDraftPrompt; it must carry the SAME OUTCOME-bar acceptance criterion the root
   // master draft injects, so the outcome-bar reminder is not lost at the nested master.
@@ -3881,8 +3839,6 @@ describe("orchestrator — PHASE 4: baseline-gated acceptance bar (R4) + envelop
     expect(dflt).not.toContain("ACCEPTANCE CRITERION (top-level");
     expect(dflt).not.toContain("divergences ABOVE the floor are GOOD");
   });
-
-  // ---- R5: subDraftPrompt + summaryPrompt integrated behavioral-envelope-test mandate ----------
 
   it("R5: subDraftPrompt injects the envelope-test mandate (a/b/c) when a baseline exists", () => {
     // FALSIFY: drop baselineEnvelopeTestLines() from subDraftPrompt → every assertion goes RED.
@@ -3961,10 +3917,8 @@ describe("orchestrator — PHASE 3: updated_ms is stamped fresh at every persist
   });
 });
 
-// ============================================================================================
 // Stop → New plan FRESH-SESSION semantics — every terminal path must leave the SDK session
 // DEAD, and the next start must open a brand-new session (never reuse the prior one).
-// ============================================================================================
 
 describe("orchestrator — every terminal path ends the SDK session (fresh session after stop)", () => {
   it("FATAL ends the SDK session (cancelRun + endSession), not just deactivation", async () => {
