@@ -20,10 +20,12 @@
 import DOMPurify from "dompurify";
 import { renderMarkdown } from "../render/markdown";
 import { attachLinkHandler } from "../render/links";
+import { nodeKey } from "./stream";
 import type {
   RenderTree,
   TopNode,
   RenderNode,
+  SubagentGroupNode,
   ToolNode,
   ToolStatus,
   QuestionRequestNode,
@@ -509,18 +511,22 @@ function renderTextBubble(
   return bubble;
 }
 
-// The countdown is driven by ONE module-level setInterval that, every tick, recomputes the TRUE
+// The waiting-banner countdown is driven by ONE module-level setInterval bound to the LIFETIME of the
+// specific banner element it updates: it is armed in renderQuotaBanner when that element is built, and
+// torn down by renderTree once the element leaves the stream container (replaced/removed during
+// reconciliation) or by teardownQuotaCountdown on pane teardown. Every tick recomputes the TRUE
 // remaining time as `resetAt - Date.now()` (wall-clock — NOT a stored decrementing counter, which
-// would freeze/drift while the WebView is occluded/suspended and resume from a stale value). Each
-// renderTree() call rebuilds the DOM (replaceChildren), so any prior interval/listener would point at
-// detached nodes — we therefore CLEAR the prior interval + visibilitychange listener at the top of
-// every render and re-arm at most one for the waiting banner present in the new tree. This guarantees
-// EXACTLY ONE live interval ever exists, so intervals never leak across rebuilds/teardowns.
+// would freeze/drift while the WebView is occluded/suspended and resume from a stale value).
+// Teardown-before-arm plus the single module slot guarantee at most one live interval ever exists, so
+// an unchanged banner reused across frames keeps its original interval and intervals never leak.
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 let countdownVisHandler: (() => void) | null = null;
+// The banner element the live interval belongs to (null when none is armed). renderTree tears the
+// interval down once this element is no longer a child of the stream container.
+let countdownBannerElem: HTMLElement | null = null;
 
-// Clear the single live countdown interval + visibilitychange listener (idempotent). Called at the top
-// of every renderTree (before re-arming) and on teardown, so no stale interval survives a rebuild.
+// Clear the single live countdown interval + visibilitychange listener (idempotent). Called before
+// arming a new banner's interval and on teardown, so no stale interval survives a rebuild.
 function teardownCountdown(): void {
   if (countdownTimer !== null) {
     clearInterval(countdownTimer);
@@ -530,6 +536,7 @@ function teardownCountdown(): void {
     document.removeEventListener("visibilitychange", countdownVisHandler);
     countdownVisHandler = null;
   }
+  countdownBannerElem = null;
 }
 
 // EXPORTED teardown for the controller (index.ts) to call on pane teardown — clears the lone interval
@@ -629,11 +636,14 @@ function renderQuotaBanner(node: QuotaBannerNode, handlers?: RenderHandlers): HT
     pill.textContent = `⟳ Auto-resume armed · ${n} attempt${n === 1 ? "" : "s"} left this session`;
     banner.appendChild(pill);
 
-    // Arm the SINGLE wall-clock countdown interval + visibilitychange recompute.
-    // (renderTree already cleared any prior interval before calling us, so this is the only live one.)
+    // Arm the SINGLE wall-clock countdown interval + visibilitychange recompute, bound to THIS banner
+    // element. renderQuotaBanner runs only when a banner element is (re)built, so arming here ties the
+    // interval to element creation; renderTree tears it down when this element later leaves the
+    // container. Teardown-first keeps the single-slot invariant across a rebuild-in-place.
     // DEMO-ONLY seam: a frozen countdown is static (a pure f(T)) — arm NOTHING. Production omits
     // frozenRemainingMs, so this guard is a no-op there and the live wall-clock behavior is unchanged.
     if (frozen === undefined) {
+      teardownCountdown();
       const tick = (): void => {
         // Recompute TRUE remaining each tick from wall-clock — never decrement a stored counter (so an
         // occluded/suspended WebView shows the correct value the instant it wakes).
@@ -646,6 +656,7 @@ function renderQuotaBanner(node: QuotaBannerNode, handlers?: RenderHandlers): HT
         if (!document.hidden) tick();
       };
       document.addEventListener("visibilitychange", countdownVisHandler);
+      countdownBannerElem = banner;
     }
   } else {
     // EXHAUSTED: the once-per-session auto-resume budget is spent — no countdown, no auto-resume.
@@ -781,114 +792,264 @@ function renderNodeInner(node: RenderNode, handlers?: RenderHandlers): HTMLEleme
   }
 }
 
-// Render the full tree into `container` (replacing prior content). EXPORTED — the renderer entry
-// point used by index.ts. A SINGLE in-place working indicator is appended last (never per-event)
-// when `tree.working` is set, so it always sits at the bottom of the stream while a turn generates
-// and disappears when the turn completes / the session exits / it is gated off by the controller.
+// Per-container keyed-reconciliation state. `byKey` maps each currently-rendered node's key (nodeKey)
+// to the DOM element it produced and the node OBJECT it was built from; a subagent-group entry also
+// carries its own child cache for recursive reconciliation. `working` is the single persistent working
+// indicator element (a tail, kept last). Object identity is the reuse signal: stream.ts copy-on-writes
+// a node only when its content changes, so `entry.node === incomingNode` proves the DOM is still
+// correct and the element can be reused instead of rebuilt.
+interface ReconcileEntry {
+  node: RenderNode | SubagentGroupNode;
+  elem: HTMLElement;
+  children?: Map<string, ReconcileEntry>;
+}
+interface ContainerState {
+  byKey: Map<string, ReconcileEntry>;
+  working: HTMLElement | null;
+}
+const reconcileState = new WeakMap<HTMLElement, ContainerState>();
+
+// Interactive nodes carry un-submitted user state in the DOM (a question card's checked radios / draft
+// text; a pending-permission prompt's affordances) that reusing the element would wrongly persist
+// across rerenders — so they are ALWAYS rebuilt, never reused even when the node object is ===. They
+// are O(1)-count, so rebuilding costs nothing.
+function isInteractiveNode(node: RenderNode | SubagentGroupNode): boolean {
+  return node.type === "question_request" || node.type === "permission_request";
+}
+
+// The top-level nodes to render, in order, after the two skip rules: whitespace-only text (a backstop
+// for blank frames persisted in older stored state) and the redundant standalone Task/Agent tool_use
+// row that duplicates a subagent group's labeled header (the group's agentId equals the Task's id).
+function visibleTopNodes(tree: RenderTree): TopNode[] {
+  const subagentGroupIds = new Set<string>();
+  for (const node of tree.nodes) {
+    if (node.type === "subagent") subagentGroupIds.add(node.agentId);
+  }
+  const out: TopNode[] = [];
+  for (const node of tree.nodes) {
+    if (node.type === "subagent") {
+      out.push(node);
+      continue;
+    }
+    if (node.type === "text" && node.text.trim() === "") continue;
+    if (node.type === "tool" && isAgentTool(node.tool) && subagentGroupIds.has(node.id)) continue;
+    out.push(node);
+  }
+  return out;
+}
+
+// A subagent group's non-empty children (same whitespace backstop the top level applies).
+function visibleGroupChildren(node: SubagentGroupNode): RenderNode[] {
+  return node.children.filter((c) => !(c.type === "text" && c.text.trim() === ""));
+}
+
+// The accent-bordered subagent shell (no header/children yet). Kept byte-identical to the element the
+// non-reconciling renderer produced so render.test.ts's group assertions still hold.
+function buildSubagentShell(node: SubagentGroupNode): HTMLElement {
+  const group = document.createElement("div");
+  group.className = "conv-subagent";
+  group.dataset.agentId = node.agentId;
+  // Stamp the group's seq (mirrors renderNode) for mock-animate pulse/cursor targeting.
+  group.dataset.seq = String(node.seq);
+  return group;
+}
+
+// The labeled subagent header (identity + task), or null when no `subagent_started` metadata arrived
+// (older sidecar → anonymous box). Header presence is keyed on subagentType/description exactly as the
+// non-reconciling renderer keyed it.
+function buildSubagentHeader(node: SubagentGroupNode): HTMLElement | null {
+  if (node.subagentType === null && node.description === null) return null;
+  const header = document.createElement("div");
+  header.className = "conv-subagent-header";
+
+  const title = document.createElement("span");
+  title.className = "conv-subagent-title";
+  // textContent only — subagent_type/description are model-influenceable.
+  title.textContent = node.subagentType ? `Subagent · ${node.subagentType}` : "Subagent";
+  header.appendChild(title);
+
+  if (node.description) {
+    const desc = document.createElement("span");
+    desc.className = "conv-subagent-desc";
+    desc.textContent = node.description; // textContent — never innerHTML
+    header.appendChild(desc);
+  }
+
+  if (node.prompt) {
+    const prompt = document.createElement("div");
+    prompt.className = "conv-subagent-prompt";
+    prompt.textContent = node.prompt; // textContent — never innerHTML
+    header.appendChild(prompt);
+  }
+
+  return header;
+}
+
+// (Re)build the group's header only when its identity fields changed — a child-only change leaves them
+// untouched (copy-on-write), so the existing header element (and its identity) survives.
+function syncSubagentHeader(
+  group: HTMLElement,
+  node: SubagentGroupNode,
+  prev: SubagentGroupNode | undefined,
+): void {
+  const unchanged =
+    prev !== undefined &&
+    prev.subagentType === node.subagentType &&
+    prev.description === node.description &&
+    prev.prompt === node.prompt;
+  if (unchanged) return;
+  group.querySelector(":scope > .conv-subagent-header")?.remove();
+  const header = buildSubagentHeader(node);
+  if (header) group.insertBefore(header, group.firstChild);
+}
+
+// The single persistent working indicator element (a tail kept last). Built once and reused; only its
+// label textContent is updated when the label changes.
+function buildWorkingIndicator(label: string): HTMLElement {
+  const working = document.createElement("div");
+  working.className = "conv-working";
+  working.setAttribute("role", "status");
+  working.setAttribute("aria-live", "polite");
+  const dot = document.createElement("span");
+  dot.className = "conv-working-dot";
+  dot.setAttribute("aria-hidden", "true");
+  const labelEl = document.createElement("span");
+  labelEl.className = "conv-working-label";
+  labelEl.textContent = label; // textContent — label only, never markup
+  working.appendChild(dot);
+  working.appendChild(labelEl);
+  return working;
+}
+
+// Obtain the element for `node` — reuse the cached one when the node object is unchanged, else build
+// fresh (a group also reconciles its header + children into a reused/rebuilt shell). Updates `cache`.
+function obtainElem(
+  parent: HTMLElement,
+  node: RenderNode | SubagentGroupNode,
+  key: string,
+  cache: Map<string, ReconcileEntry>,
+  handlers: RenderHandlers | undefined,
+): HTMLElement {
+  const entry = cache.get(key);
+
+  if (node.type === "subagent") {
+    // Whole-group reuse: a COW'd group is a fresh object IFF any child/metadata changed, so an
+    // unchanged group object means its entire subtree is unchanged — reuse without recursing.
+    if (entry && entry.node === node && entry.elem.parentNode === parent) return entry.elem;
+    // Reuse the shell (same agentId) when we already have one here; else build it. Reconcile the
+    // header and children so a single new child does not rebuild the group's siblings.
+    const reusable =
+      entry && entry.children && entry.elem.parentNode === parent ? entry : undefined;
+    const group = reusable ? reusable.elem : buildSubagentShell(node);
+    group.dataset.seq = String(node.seq);
+    const childCache = reusable?.children ?? new Map<string, ReconcileEntry>();
+    syncSubagentHeader(group, node, reusable?.node as SubagentGroupNode | undefined);
+    const header = group.querySelector<HTMLElement>(":scope > .conv-subagent-header");
+    reconcileInto(group, visibleGroupChildren(node), childCache, handlers, header ?? null);
+    if (entry && entry.elem !== group) entry.elem.remove();
+    cache.set(key, { node, elem: group, children: childCache });
+    return group;
+  }
+
+  if (entry && entry.node === node && !isInteractiveNode(node) && entry.elem.parentNode === parent) {
+    return entry.elem;
+  }
+  const elem = renderNode(node, handlers);
+  if (entry && entry.elem !== elem) entry.elem.remove();
+  cache.set(key, { node, elem });
+  return elem;
+}
+
+// Reconcile `nodes` (already skip-filtered, in order) into `parent`, positioning elements in list order
+// AFTER `leading` (a group's header, or null at the top level). Reused elements move only when out of
+// position; cache entries whose keys are absent from `nodes` have their elements removed.
+function reconcileInto(
+  parent: HTMLElement,
+  nodes: (RenderNode | SubagentGroupNode)[],
+  cache: Map<string, ReconcileEntry>,
+  handlers: RenderHandlers | undefined,
+  leading: ChildNode | null,
+): void {
+  const used = new Set<string>();
+  let prev: ChildNode | null = leading;
+  for (const node of nodes) {
+    const key = nodeKey(node);
+    used.add(key);
+    const elem = obtainElem(parent, node, key, cache, handlers);
+    const ref = prev ? prev.nextSibling : parent.firstChild;
+    if (ref !== elem) parent.insertBefore(elem, ref);
+    prev = elem;
+  }
+  for (const [key, entry] of cache) {
+    if (!used.has(key)) {
+      entry.elem.remove();
+      cache.delete(key);
+    }
+  }
+}
+
+// True when any cached element has been detached from `container` — the signature of an external wipe
+// (the empty-state branch's replaceChildren, teardown, or any other code that cleared the container).
+// A normal frame ends with every cached element in the container, so this only trips on a foreign wipe.
+function cacheDetached(container: HTMLElement, state: ContainerState): boolean {
+  for (const entry of state.byKey.values()) {
+    if (entry.elem.parentNode !== container) return true;
+  }
+  return state.working !== null && state.working.parentNode !== container;
+}
+
+// Render the full tree into `container` via KEYED RECONCILIATION: reuse the element for a node whose
+// object identity is unchanged across derives, move it only when out of position, build only new/changed
+// nodes, and remove elements whose keys vanished. EXPORTED — the renderer entry point used by index.ts.
+// A SINGLE in-place working indicator is kept last when `tree.working` is set, so it always sits at the
+// bottom of the stream while a turn generates and disappears when the turn completes / the session exits
+// / it is gated off by the controller.
 export function renderTree(
   container: HTMLElement,
   tree: RenderTree,
   handlers?: RenderHandlers,
 ): void {
-  container.replaceChildren();
-  // Leak guard: tear down any prior countdown interval + visibilitychange listener BEFORE rebuilding.
-  // replaceChildren() above detached the old banner node, so its interval would tick against a dead
-  // element; renderQuotaBanner re-arms exactly one for a waiting banner present in THIS tree. This
-  // keeps the invariant "at most one live countdown interval" across every rebuild.
-  teardownCountdown();
-  // Ids of subagent groups present in this tree — used to SUPPRESS the redundant standalone Task/Agent
-  // tool_use row (the group header is now the primary display of that subagent's identity + task, so
-  // showing both the "Agent {…json…} running" row AND the labeled group is duplicative). The group's
-  // agentId equals the Task tool_use's id, so we match the suppressed row by tool node id.
-  const subagentGroupIds = new Set<string>();
-  for (const node of tree.nodes) {
-    if (node.type === "subagent") subagentGroupIds.add(node.agentId);
+  let state = reconcileState.get(container);
+  // Foreign-wipe recovery: if the container was cleared out from under us, our cached elements no longer
+  // live in it — discard the cache (and any banner interval bound to a now-detached element) and rebuild
+  // from a clean container so we never re-slot detached nodes.
+  if (state && cacheDetached(container, state)) {
+    teardownCountdown();
+    state = undefined;
+  }
+  if (!state) {
+    container.replaceChildren();
+    state = { byKey: new Map(), working: null };
+    reconcileState.set(container, state);
   }
 
-  for (const node of tree.nodes) {
-    if (node.type === "subagent") {
-      // Accent-bordered nested subagent group, keyed by agent_id. When `subagent_started` metadata is
-      // present, a labeled header identifies the subagent + its task; otherwise it falls back to the
-      // anonymous box (older sidecar with no metadata).
-      const group = document.createElement("div");
-      group.className = "conv-subagent";
-      group.dataset.agentId = node.agentId;
-      // Stamp the group's seq (mirrors renderNode) for mock-animate pulse/cursor targeting.
-      group.dataset.seq = String(node.seq);
+  reconcileInto(container, visibleTopNodes(tree), state.byKey, handlers, null);
 
-      if (node.subagentType !== null || node.description !== null) {
-        const header = document.createElement("div");
-        header.className = "conv-subagent-header";
-
-        const title = document.createElement("span");
-        title.className = "conv-subagent-title";
-        // textContent only — subagent_type/description are model-influenceable.
-        title.textContent = node.subagentType
-          ? `Subagent · ${node.subagentType}`
-          : "Subagent";
-        header.appendChild(title);
-
-        if (node.description) {
-          const desc = document.createElement("span");
-          desc.className = "conv-subagent-desc";
-          desc.textContent = node.description; // textContent — never innerHTML
-          header.appendChild(desc);
-        }
-
-        if (node.prompt) {
-          const prompt = document.createElement("div");
-          prompt.className = "conv-subagent-prompt";
-          prompt.textContent = node.prompt; // textContent — never innerHTML
-          header.appendChild(prompt);
-        }
-
-        group.appendChild(header);
-      }
-
-      for (const child of node.children) {
-        // Backstop for whitespace-only text nodes from older stored state (derive() now drops
-        // them, but persisted trees may still carry them) — never draw an empty bubble.
-        if (child.type === "text" && child.text.trim() === "") continue;
-        group.appendChild(renderNode(child, handlers));
-      }
-      container.appendChild(group);
-    } else {
-      // Backstop for whitespace-only text nodes from older stored state (derive() now drops
-      // them, but persisted trees may still carry them) — never draw an empty bubble.
-      if (node.type === "text" && node.text.trim() === "") continue;
-      // Suppress the standalone Task/Agent tool_use row when a subagent group exists for its id — the
-      // group header already shows that subagent's identity + task.
-      if (
-        node.type === "tool" &&
-        isAgentTool(node.tool) &&
-        subagentGroupIds.has(node.id)
-      ) {
-        continue;
-      }
-      container.appendChild(renderNode(node as TopNode as RenderNode, handlers));
-    }
-  }
   if (tree.working) {
-    const working = document.createElement("div");
-    working.className = "conv-working";
-    working.setAttribute("role", "status");
-    working.setAttribute("aria-live", "polite");
-    const dot = document.createElement("span");
-    dot.className = "conv-working-dot";
-    dot.setAttribute("aria-hidden", "true");
-    const label = document.createElement("span");
-    label.className = "conv-working-label";
-    label.textContent = tree.working.label; // textContent — label only, never markup
-    working.appendChild(dot);
-    working.appendChild(label);
-    container.appendChild(working);
+    let working = state.working;
+    if (!working || working.parentNode !== container) {
+      working = buildWorkingIndicator(tree.working.label);
+      state.working = working;
+    } else {
+      const label = working.querySelector<HTMLElement>(".conv-working-label");
+      if (label && label.textContent !== tree.working.label) label.textContent = tree.working.label;
+    }
+    container.appendChild(working); // move/keep last
+  } else if (state.working) {
+    state.working.remove();
+    state.working = null;
+  }
+
+  // Banner countdown lifecycle: if the element the live interval belongs to was replaced or removed
+  // during reconciliation (it is no longer a child of the container), tear the interval down. A reused,
+  // unchanged banner keeps its element — and therefore its original interval — untouched.
+  if (countdownBannerElem !== null && countdownBannerElem.parentNode !== container) {
+    teardownCountdown();
   }
 
   // govern this pane's links with the ONE shared policy. The container is the persistent
-  // #conversation-stream element (stable across the per-frame replaceChildren() above), and the
-  // listener is DELEGATED on it, so attaching here every frame is safe: attachLinkHandler is
-  // idempotent (WeakSet-keyed on the container), so repeat calls are a no-op — a single delegated
-  // listener survives every rebuild. Without this, a live bubble <a href> would top-level-navigate
-  // and brick the single WebView.
+  // #conversation-stream element, and the listener is DELEGATED on it, so attaching here every frame is
+  // safe: attachLinkHandler is idempotent (WeakSet-keyed on the container), so repeat calls are a no-op.
+  // Without this, a live bubble <a href> would top-level-navigate and brick the single WebView.
   attachLinkHandler(container);
 }
