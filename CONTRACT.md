@@ -4678,3 +4678,54 @@ spawned-binary e2e must stay in that single file (parallel test files would race
 **`SCENARIO_NAMES` delta.** Since the 2026-06-26 amendment the registry has grown 12 → 16; the four
 additions (each with a golden) are: `overloaded-midturn`, `auth-failure`, `thrown-quota`,
 `stream-abort`. The 12 names listed in that amendment are unchanged and still valid.
+
+## Amendment 2026-07-02 (frontend golden replay) — `src/mock/golden.ts` is the sanctioned golden→mock bridge (test/dev-only, additive, non-breaking)
+
+Distinct from the same-dated amendment above (which committed the goldens themselves); this one
+commits how the FRONTEND consumes them. The frame goldens (`sidecar/__goldens__/<name>.jsonl`) are
+now replayed through the mock harness and the frontend test suite via exactly one adapter:
+`src/mock/golden.ts`. No other module may parse a golden or fabricate golden-equivalent frames — one
+frame registry, no second frame-generation path.
+
+**The adapter.** An eager `?raw` `import.meta.glob` over `sidecar/__goldens__/*.jsonl` loads every
+golden identically under vitest and the browser mock harness (`npm run mock`); the scene roster IS
+the glob's basenames (never a hardcoded list or count, kept in lockstep with the shared
+`SCENARIO_EXIT_CODES` map by test). Each line is routed by `demuxLine`, then `goldenScene(name)`
+appends the synthesized `agent-exit`. Golden-derived scenes live in the separate `GOLDEN_SCENES`
+registry (the hand-typed `SCENES` registry keeps its exhaustive tsc/signature guarantees); the mock
+deck lists them as a second preset group, and hand scenes whose response class a golden fully covers
+now source their frames from the golden under their existing `SCENES` key.
+
+**Demux fidelity obligation.** `demuxLine` is a TypeScript port of the host's fd-1 →
+event-channel seam (`src-tauri/src/agent.rs` `parse_stream_line` + `normalize_error_payload`) and
+MUST track it:
+
+- whitespace-only (after trim) → skipped, never a frame;
+- `kind:"tool_permission_requested"` → the `tool-permission-requested` channel, payload untouched;
+- `kind:"error"` → the `agent-error` channel with the internal `error_kind` lifted into the public
+  `kind` (default `"sdk"`) and dropped; every other field carries through verbatim;
+- any other `kind` → the `agent-stream` channel, payload untouched;
+- a non-JSON line → a synthetic `agent-error` `{kind:"contamination", message, fatal:false}`
+  carrying the raw line in its diagnostic (the embedded parser text differs between serde and
+  `JSON.parse`; only the shape is contractual).
+
+The port's guard is the golden-diff gate in `src/mock/golden-scenes.test.ts` (run on the bad-path
+`overloaded-exhausted` golden): every pass-through frame parsed-JSON-equal to its golden line —
+nothing dropped, nothing reordered, `seq` preserved — and the terminal `error` line equal to a
+hand-written normalized-expected shape derived from this contract (never from adapter output).
+Golden-derived frames are raw JSON casts that bypass the typed scene builders; their drift guard is
+that gate plus the per-class render tests, NOT `tsc`.
+
+**The two non-golden seams** (deliberate, documented — no golden exists and none will):
+
+1. **`agent-exit` synthesis.** Process termination never appears on fd-1, so no golden line carries
+   it. The adapter synthesizes the trailing `agent-exit {code}` from `SCENARIO_EXIT_CODES`
+   (`sidecar/exit-codes.ts`) — the single shared per-golden exit-code map, keyed by golden BASENAME
+   (`resume-fallback`'s basename ≠ its `EMU_SCENARIO`), consumed by BOTH the spawned-binary e2e
+   (`sidecar/emulator-e2e.test.ts` asserts the real exit codes against it) and this adapter. Only
+   the fatal-error scenarios exit 1 (`overloaded-exhausted`, `auth-failure`, `stream-abort`);
+   `error-midstream`, `thrown-quota`, and `overloaded-midturn` end gracefully (0).
+2. **`tool-permission-requested` injection.** The interactive prompt is driven by the sidecar's
+   `canUseTool` path, which the `EMU_SCENARIO` query()-seam emulator cannot produce. It stays
+   covered by the hand-built scenes (`questionCard` / `exitPlanMode` / `permissionThenReply`) that
+   inject the event directly onto the mock channel, grouped in `SCENES` as non-golden seams.

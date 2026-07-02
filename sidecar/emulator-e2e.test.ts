@@ -48,6 +48,7 @@ import {
   THROWN_QUOTA_ERROR_MESSAGE,
   STREAM_ABORT_ERROR_MESSAGE,
 } from "./emulator-scenes";
+import { SCENARIO_EXIT_CODES } from "./exit-codes";
 import { SECOND_START_MESSAGE } from "./session-start";
 import { RESUME_FALLBACK_REASON } from "./session-resume";
 
@@ -232,11 +233,11 @@ function checkGolden(name: string, rawLines: string[]): void {
 }
 
 interface Spec {
-  /** Test id AND golden basename. Equals the EMU_SCENARIO except for protocol-driven cases. */
+  /** Test id AND golden basename — ALSO the SCENARIO_EXIT_CODES key that pins this spec's
+   *  expected exit code. Equals the EMU_SCENARIO except for protocol-driven cases. */
   name: string;
   scenario: string;
   start?: Record<string, unknown>;
-  exitCode: number;
   kinds: string[];
   verify?: (frames: Frame[]) => void;
 }
@@ -245,7 +246,6 @@ const SPECS: Spec[] = [
   {
     name: "happy-text",
     scenario: "happy-text",
-    exitCode: 0,
     kinds: ["system_init", "assistant_text", "assistant_text", "result"],
     verify: (frames) => {
       const result = firstOf(frames, "result");
@@ -256,7 +256,6 @@ const SPECS: Spec[] = [
   {
     name: "tool-call",
     scenario: "tool-call",
-    exitCode: 0,
     kinds: ["system_init", "tool_use", "tool_result", "assistant_text", "result"],
     verify: (frames) => {
       assertToolCorrelation(frames);
@@ -268,7 +267,6 @@ const SPECS: Spec[] = [
   {
     name: "plan-write",
     scenario: "plan-write",
-    exitCode: 0,
     kinds: ["system_init", "tool_use", "tool_result", "assistant_text", "result"],
     verify: (frames) => {
       assertToolCorrelation(frames);
@@ -280,7 +278,6 @@ const SPECS: Spec[] = [
   {
     name: "prototype-write",
     scenario: "prototype-write",
-    exitCode: 0,
     kinds: ["system_init", "tool_use", "tool_result", "result"],
     verify: (frames) => {
       assertToolCorrelation(frames);
@@ -291,7 +288,6 @@ const SPECS: Spec[] = [
   {
     name: "review-cycle",
     scenario: "review-cycle",
-    exitCode: 0,
     kinds: ["system_init", "assistant_text", "tool_use", "tool_result", "result"],
     verify: (frames) => {
       assertToolCorrelation(frames);
@@ -301,7 +297,6 @@ const SPECS: Spec[] = [
   {
     name: "subagent-fanout",
     scenario: "subagent-fanout",
-    exitCode: 0,
     kinds: [
       "system_init",
       "tool_use",
@@ -326,7 +321,6 @@ const SPECS: Spec[] = [
   {
     name: "quota-rate-limit",
     scenario: "quota-rate-limit",
-    exitCode: 0,
     kinds: ["system_init", "quota_exceeded"],
     verify: (frames) => {
       const quota = firstOf(frames, "quota_exceeded");
@@ -341,7 +335,6 @@ const SPECS: Spec[] = [
     // is asserted at the in-process tier (emulator.test.ts).
     name: "quota-result",
     scenario: "quota-result",
-    exitCode: 0,
     kinds: ["system_init", "quota_exceeded"],
     verify: (frames) => {
       const quota = firstOf(frames, "quota_exceeded");
@@ -352,7 +345,6 @@ const SPECS: Spec[] = [
   {
     name: "overloaded-retry",
     scenario: "overloaded-retry",
-    exitCode: 0,
     kinds: ["status", "status", "system_init", "assistant_text", "result"],
     verify: (frames) => {
       // Two retry notices, then RECOVERY: the third attempt streams normally.
@@ -367,7 +359,6 @@ const SPECS: Spec[] = [
   {
     name: "overloaded-exhausted",
     scenario: "overloaded-exhausted",
-    exitCode: 1,
     kinds: ["status", "status", "status", "status", "status", "status", "error"],
     verify: (frames) => {
       const statuses = frames.filter((f) => f.kind === "status");
@@ -383,7 +374,6 @@ const SPECS: Spec[] = [
   {
     name: "permission-denied",
     scenario: "permission-denied",
-    exitCode: 0,
     kinds: ["system_init", "permission_denied", "result"],
     verify: (frames) => {
       const denied = firstOf(frames, "permission_denied");
@@ -394,7 +384,6 @@ const SPECS: Spec[] = [
   {
     name: "error-midstream",
     scenario: "error-midstream",
-    exitCode: 0,
     kinds: ["system_init", "assistant_text", "result"],
     verify: (frames) => {
       const result = firstOf(frames, "result");
@@ -405,7 +394,6 @@ const SPECS: Spec[] = [
   {
     name: "overloaded-midturn",
     scenario: "overloaded-midturn",
-    exitCode: 0,
     kinds: ["system_init", "assistant_text", "status", "result"],
     verify: (frames) => {
       // Mid-turn branch: an informational status + the SYNTHETIC terminal result — and NO retry
@@ -424,7 +412,6 @@ const SPECS: Spec[] = [
   {
     name: "auth-failure",
     scenario: "auth-failure",
-    exitCode: 1,
     kinds: ["system_init", "error"],
     verify: (frames) => {
       const err = firstOf(frames, "error");
@@ -436,7 +423,6 @@ const SPECS: Spec[] = [
   {
     name: "thrown-quota",
     scenario: "thrown-quota",
-    exitCode: 0,
     kinds: ["system_init", "quota_exceeded"],
     verify: (frames) => {
       const quota = firstOf(frames, "quota_exceeded");
@@ -447,7 +433,6 @@ const SPECS: Spec[] = [
   {
     name: "stream-abort",
     scenario: "stream-abort",
-    exitCode: 1,
     kinds: ["system_init", "assistant_text", "error"],
     verify: (frames) => {
       const err = firstOf(frames, "error");
@@ -464,7 +449,6 @@ const SPECS: Spec[] = [
     name: "resume-fallback",
     scenario: "happy-text",
     start: { resume: "emu-bogus-resume-id" },
-    exitCode: 0,
     kinds: ["resume_fallback", "system_init", "assistant_text", "assistant_text", "result"],
     verify: (frames) => {
       expect(firstOf(frames, "resume_fallback").reason).toBe(RESUME_FALLBACK_REASON);
@@ -504,13 +488,16 @@ describeE2E("emulator e2e — spawned agent-driver binary, per-scenario frame st
 
   for (const spec of SPECS) {
     it(
-      `${spec.name} — frame sequence, key fields, exit ${spec.exitCode}, golden`,
+      `${spec.name} — frame sequence, key fields, exit ${SCENARIO_EXIT_CODES[spec.name]}, golden`,
       async () => {
+        // The shared per-golden exit map (also consumed by the frontend golden-replay adapter's
+        // agent-exit synthesis) MUST cover every spec — an uncovered name is a drift bug, not a 0.
+        expect(SCENARIO_EXIT_CODES[spec.name]).toBeDefined();
         const { frames, rawLines, exitCode } = await runScenario(spec.scenario, spec.start ?? {});
         expect(frames.map((f) => f.kind)).toEqual(spec.kinds);
         assertSeqMonotonic(frames);
         spec.verify?.(frames);
-        expect(exitCode).toBe(spec.exitCode);
+        expect(exitCode).toBe(SCENARIO_EXIT_CODES[spec.name]);
         checkGolden(spec.name, rawLines);
       },
       TEST_TIMEOUT_MS,

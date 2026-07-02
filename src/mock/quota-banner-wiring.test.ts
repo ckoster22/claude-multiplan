@@ -34,6 +34,7 @@ import { installMockApi } from "./api";
 import { installMockOrchestrator } from "./orchestrator";
 import { getMockNotifications, clearMockNotifications } from "./notification";
 import { __resetNotifyPermissionCacheForTests } from "../notify";
+import { goldenFrames } from "./golden";
 
 async function flush(n = 20): Promise<void> {
   for (let i = 0; i < n; i++) await Promise.resolve();
@@ -191,6 +192,34 @@ describe("quota banner — REAL index.ts wiring via the mock observer", () => {
     // clock string appears → this goes RED.
     expect(notes[0].body).toBe("Auto-resume budget spent — waiting for manual action.");
     expect(notes[0].body).not.toMatch(/resets at/);
+  });
+
+  // GOLDEN-FED: the same observer wiring, driven by the CAPTURED quota payload from the sidecar
+  // frame golden (quota-rate-limit.jsonl, demuxed by src/mock/golden.ts) instead of a synthetic
+  // offset-from-now instant. The reducer keeps quota_exceeded INERT (golden-scenes.test.ts asserts
+  // that half); the banner is owned by THIS wiring — so the two halves of the quota class are both
+  // exercised by golden-derived data.
+  it("GOLDEN payload: the captured quota_exceeded frame's resetAt/source drive the waiting banner", async () => {
+    bootDom();
+    await flush();
+
+    const quota = goldenFrames("quota-rate-limit").find(
+      (f) => (f.payload as { kind?: string }).kind === "quota_exceeded",
+    )!;
+    const { resetAt, source } = quota.payload as { resetAt: number; source: string };
+    expect(resetAt).toBe(1_750_000_000_000); // the golden's pinned FIXED_RESET_EPOCH_MS
+    expect(source).toBe("rate_limit_event");
+
+    const { __getMockObserversForTest } = await import("./orchestrator");
+    for (const o of __getMockObserversForTest()) {
+      o.onQuotaPaused?.({ resetAt, remaining: 1, source });
+    }
+    await flush();
+
+    const banner = document.querySelector("#conversation-stream .conv-quota-banner")!;
+    expect(banner).toBeTruthy();
+    expect((banner as HTMLElement).dataset.state).toBe("waiting");
+    expect(banner.querySelector(".conv-qb-pill")!.textContent).toContain("armed");
   });
 
   it("onQuotaResumed clears the banner and appends the resumed notice", async () => {

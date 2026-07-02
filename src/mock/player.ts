@@ -15,7 +15,21 @@
 import type { ConversationModel } from "../conversation/stream";
 import type { AgentStream, ToolPermissionRequested, AgentError, AgentExit } from "../conversation/types";
 import { emitMockEvent, clearMockBuffer } from "./event";
-import type { SceneFrame } from "./fixtures/scenes";
+import { SCENES, type SceneFrame, type SceneBuilder } from "./fixtures/scenes";
+import { GOLDEN_SCENES, GOLDEN_SCENE_NAMES } from "./golden";
+
+// Resolve a playable scene by name across BOTH registries — the hand-typed SCENES and the
+// golden-derived GOLDEN_SCENES (a hand key wins on collision, though the namespaces are disjoint:
+// camelCase vs golden kebab-case basenames). Every play path (api.ts jumps, core.ts
+// start_agent_session, the deck presets) resolves through here so golden scenes are first-class.
+export function resolveSceneBuilder(name: string): SceneBuilder | undefined {
+  return (SCENES as Record<string, SceneBuilder | undefined>)[name] ?? GOLDEN_SCENES[name];
+}
+
+/** Every playable scene name: the hand registry's keys followed by the golden basenames. */
+export function allSceneNames(): string[] {
+  return [...Object.keys(SCENES), ...GOLDEN_SCENE_NAMES];
+}
 
 // The agent event names the conversation domain subscribes to AND the player emits on. Cleared
 // per-scene-load so a stale scene's history can never replay to a fresh subscriber. (`agent-stream`

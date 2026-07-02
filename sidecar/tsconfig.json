@@ -37,6 +37,7 @@
     "session-command.ts",
     "emulator.ts",
     "emulator-scenes.ts",
+    "exit-codes.ts",
     "user-content.ts",
     "frames.ts",
     "cli-plans.ts",
