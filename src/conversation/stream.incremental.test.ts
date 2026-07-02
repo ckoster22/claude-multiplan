@@ -13,7 +13,7 @@
 // block, added alongside the copy-on-write work.
 
 import { describe, it, expect } from "vitest";
-import { ConversationModel, WAITING_INPUT_LABEL } from "./stream";
+import { ConversationModel, WAITING_INPUT_LABEL, nodeKey } from "./stream";
 import type {
   SystemInit,
   AssistantText,
@@ -431,5 +431,39 @@ describe("ConversationModel — node object identity is stable iff content is un
     for (let i = 0; i < a.nodes.length; i++) {
       expect(b.nodes[i]).toBe(a.nodes[i]);
     }
+  });
+});
+
+// The segment stamp + the exported nodeKey the renderer will use for DOM reuse. A resume resets the
+// wire seq, so two same-type nodes at the same seq must be distinguishable by segment.
+describe("ConversationModel — segment stamp on nodes + segment-qualified nodeKey", () => {
+  it("stamps segment 0 before a resume and segment 1 after, and nodeKey keeps same-seq nodes distinct", () => {
+    const m = new ConversationModel();
+    m.appendStream(sysInit({ seq: 0 })); // segment 0
+    m.appendStream(text(5, "a")); // segment 0, wire seq 5
+    m.appendExit({ code: 0 }, SYNTH); // terminal
+    m.appendStream(sysInit({ seq: 0 })); // RESUME — fresh system_init → segment 1, wire seq reset
+    m.appendStream(text(5, "a")); // segment 1, SAME wire seq + text as the first
+
+    const nodes = m.derive().nodes;
+    const texts = nodes.filter((n) => n.type === "text");
+    expect(texts).toHaveLength(2);
+
+    // Each text carries its arrival-order segment. FALSIFY: don't stamp segment → both undefined → RED.
+    expect(texts.map((t) => t.segment).sort()).toEqual([0, 1]);
+
+    // The two byte-equal-except-segment nodes get DISTINCT keys. FALSIFY: drop the segment qualifier
+    // from nodeKey's (type, seq) branch → the keys collide → Set size 1 → RED (and the renderer would
+    // mis-slot one element onto the other across the resume boundary).
+    const keys = texts.map((t) => nodeKey(t));
+    expect(new Set(keys).size).toBe(2);
+    expect(keys).toContain("0:text:5");
+    expect(keys).toContain("1:text:5");
+
+    // An id-keyed node ignores segment (ids are globally unique) — pin the two key families.
+    m.reset();
+    m.appendStream(toolUse(1, "t1", "Read"));
+    const tool = m.derive().nodes.find((n) => n.type === "tool")!;
+    expect(nodeKey(tool)).toBe("tool:t1");
   });
 });

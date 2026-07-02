@@ -35,6 +35,7 @@ export type ToolStatus = "running" | "done" | "error" | "interrupted";
 export interface ToolNode {
   type: "tool";
   seq: number;
+  segment?: number;
   id: string;
   tool: string;
   input: unknown;
@@ -48,6 +49,7 @@ export interface ToolNode {
 export interface TextNode {
   type: "text";
   seq: number;
+  segment?: number;
   text: string;
 }
 
@@ -59,6 +61,7 @@ export interface TextNode {
 export interface UserMessageNode {
   type: "user";
   seq: number;
+  segment?: number;
   text: string;
   // Multimodal: DISPLAY data URLs (`data:<media_type>;base64,<data>`) for images the user attached to
   // this message, in attach order. Rendered as a thumbnail row ABOVE the text in the user bubble.
@@ -73,6 +76,7 @@ export interface UserMessageNode {
 export interface SystemMessageNode {
   type: "system";
   seq: number;
+  segment?: number;
   text: string;
 }
 
@@ -80,6 +84,7 @@ export interface SystemMessageNode {
 export interface ModeNode {
   type: "mode";
   seq: number;
+  segment?: number;
   mode: string;
 }
 
@@ -87,6 +92,7 @@ export interface ModeNode {
 export interface PermissionRequestNode {
   type: "permission_request";
   seq: number;
+  segment?: number;
   id: string;
   tool: string;
   agentId: string | null;
@@ -100,6 +106,7 @@ export interface PermissionRequestNode {
 export interface QuestionRequestNode {
   type: "question_request";
   seq: number;
+  segment?: number;
   // The SDK toolUseID — what the controller round-trips via resolve_tool_permission.
   id: string;
   questions: AskUserQuestionItem[];
@@ -111,6 +118,7 @@ export interface QuestionRequestNode {
 export interface PermissionDeniedNode {
   type: "permission_denied";
   seq: number;
+  segment?: number;
   tool: string;
   toolUseId: string;
   reasonType: string;
@@ -121,6 +129,7 @@ export interface PermissionDeniedNode {
 export interface ResultNode {
   type: "result";
   seq: number;
+  segment?: number;
   isError: boolean;
   result: string;
   // The SDK result subtype (e.g. "success" | "error_during_execution") — RECORD ONLY, never keyed
@@ -137,6 +146,7 @@ export interface ResultNode {
 export interface ErrorNode {
   type: "error";
   seq: number;
+  segment?: number;
   errorKind: AgentError["kind"];
   message: string;
   fatal: boolean;
@@ -146,6 +156,7 @@ export interface ErrorNode {
 export interface ExitNode {
   type: "exit";
   seq: number;
+  segment?: number;
   code: number;
 }
 
@@ -154,6 +165,7 @@ export interface ExitNode {
 export interface NoticeNode {
   type: "notice";
   seq: number;
+  segment?: number;
   message: string;
 }
 
@@ -171,6 +183,7 @@ export interface NoticeNode {
 export interface QuotaBannerNode {
   type: "quota-banner";
   seq: number;
+  segment?: number;
   state: "waiting" | "exhausted";
   resetAt: number;
   remaining: number;
@@ -199,6 +212,13 @@ export interface SubagentGroupNode {
   children: RenderNode[];
 }
 
+// Every render node carries an optional `segment`: the arrival-order session segment it was derived
+// in (0 for the first session, bumped on each resume's fresh system_init — see the segment counting in
+// replayAll/derive). It is the DOM-key qualifier for `nodeKey`: a resume RESETS the wire seq to 0, so
+// two same-type nodes at the same seq in different segments would otherwise collide on `${type}:${seq}`
+// and the renderer would reuse the wrong element. Optional so hand-built node literals (tests, mock
+// scenes) need not set it; derive() always stamps it.
+//
 // Any node that can appear at the top level of the timeline OR inside a subagent group.
 // (A subagent group only appears at the top level.)
 export type RenderNode =
@@ -792,12 +812,13 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
         // Whitespace-only text frames render as empty bubbles (and a blank subagent child would seed
         // an empty group via its parent_tool_use_id) — drop them entirely.
         if (ev.text.trim() === "") break;
-        sink.emit({ type: "text", seq: ev.seq, text: ev.text }, ev.parent_tool_use_id);
+        sink.emit({ type: "text", seq: ev.seq, segment, text: ev.text }, ev.parent_tool_use_id);
         break;
       case "tool_use": {
         const node: ToolNode = {
           type: "tool",
           seq: ev.seq,
+          segment,
           id: ev.id,
           tool: ev.tool,
           input: ev.input,
@@ -818,7 +839,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
         break;
       case "mode_change":
         acc.permissionMode = ev.mode;
-        sink.emit({ type: "mode", seq: ev.seq, mode: ev.mode }, null);
+        sink.emit({ type: "mode", seq: ev.seq, segment, mode: ev.mode }, null);
         break;
       case "result":
         acc.complete = true;
@@ -831,6 +852,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
           {
             type: "result",
             seq: ev.seq,
+            segment,
             isError: ev.is_error,
             result: ev.result,
             subtype: ev.subtype,
@@ -845,6 +867,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
           {
             type: "permission_denied",
             seq: ev.seq,
+            segment,
             tool: ev.tool,
             toolUseId: ev.tool_use_id,
             reasonType: ev.decision_reason_type,
@@ -874,6 +897,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
       const node: QuestionRequestNode = {
         type: "question_request",
         seq: ev.seq,
+        segment,
         id: ev.id,
         questions,
         // Seed from any answer ALREADY recorded — on the fast path the answered event can arrive
@@ -888,6 +912,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
         {
           type: "permission_request",
           seq: ev.seq,
+          segment,
           id: ev.id,
           tool: ev.tool,
           agentId: ev.agent_id,
@@ -930,6 +955,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
       {
         type: "error",
         seq: ev.seq,
+        segment,
         errorKind: ev.kind,
         message: ev.message,
         fatal: ev.fatal,
@@ -941,7 +967,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
 
   if (ev.__event === "notice") {
     // A plain notice — never touches session state (no exited/active flip). Pure render row.
-    sink.emit({ type: "notice", seq: ev.seq, message: ev.message }, null);
+    sink.emit({ type: "notice", seq: ev.seq, segment, message: ev.message }, null);
     return;
   }
 
@@ -952,6 +978,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
       {
         type: "user",
         seq: ev.seq,
+        segment,
         text: ev.text,
         // Carry the display image URLs onto the node ONLY when present (omitted otherwise so a
         // text-only bubble renders no thumbnail row).
@@ -965,7 +992,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
   if (ev.__event === "system_message") {
     // A verbatim SYSTEM-message echo (harness-injected plumbing turn) — a top-level dim bubble. Never
     // touches session state; sorts into the timeline by its seq, exactly like user_message.
-    sink.emit({ type: "system", seq: ev.seq, text: ev.text }, null);
+    sink.emit({ type: "system", seq: ev.seq, segment, text: ev.text }, null);
     return;
   }
 
@@ -978,6 +1005,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
         {
           type: "quota-banner",
           seq: ev.seq,
+          segment,
           state: ev.state,
           resetAt: ev.resetAt,
           remaining: ev.remaining,
@@ -995,7 +1023,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
   acc.exited = true;
   acc.active = false;
   noteTerminal(ev.seq);
-  sink.emit({ type: "exit", seq: ev.seq, code: ev.code }, null);
+  sink.emit({ type: "exit", seq: ev.seq, segment, code: ev.code }, null);
 }
 
 // Fold submitted answers onto their question_request nodes (form → chosen answers).
@@ -1249,12 +1277,13 @@ function liveSink(acc: DeriveAccum): DeriveSink {
   };
 }
 
-// A stable identity key for reconciliation, derivable from the node alone. Nodes with a natural id
-// (tools, question / permission requests, subagent groups) key on it; the rest key on (type, seq),
-// which is unique WITHIN a session segment. Across a resume seqs repeat, so two content-IDENTICAL
-// nodes in different segments may share a key — harmless: reconciliation only ever reuses a previous
-// object when it is byte-equal to the rebuilt one, so a collision can never change observable content.
-function nodeKey(n: RenderNode | SubagentGroupNode): string {
+// A stable identity key for a node, derivable from the node ALONE. Nodes with a natural id (tools,
+// question / permission requests, subagent groups) key on it; the rest key on (segment, type, seq).
+// The segment qualifier is load-bearing: a resume RESETS the wire seq to 0, so two same-type nodes at
+// the same seq in different segments would collide on (type, seq) — and for DOM reuse a collision
+// mis-slots an element (not merely a harmless byte-equal reuse). EXPORTED so the renderer keys DOM
+// reuse with the SAME function the model's replay reconciliation uses (one keying rule, not two).
+export function nodeKey(n: RenderNode | SubagentGroupNode): string {
   switch (n.type) {
     case "tool":
       return `tool:${n.id}`;
@@ -1265,7 +1294,7 @@ function nodeKey(n: RenderNode | SubagentGroupNode): string {
     case "subagent":
       return `group:${n.agentId}`;
     default:
-      return `${n.type}:${n.seq}`;
+      return `${n.segment ?? 0}:${n.type}:${n.seq}`;
   }
 }
 
