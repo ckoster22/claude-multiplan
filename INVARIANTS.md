@@ -407,7 +407,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** an incrementally-fed model drifting from a fresh full replay (the storyboard oracle covers only the replay path).
 
-**Anchor:** `src/conversation/stream.ts:630` — `let fallback = this.acc === null || this.quotaDirty;`
+**Anchor:** `src/conversation/stream.ts:651` — `let fallback = this.acc === null || this.quotaDirty;`
 
 **Tests:** `stream.incremental.test.ts incremental-equals-fresh equivalence battery over adversarial sequences`
 
@@ -416,21 +416,21 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** seq-order scrambling across a resume (which resets the wire seq)
 
-**Anchor:** `src/conversation/stream.ts:706` — `const segmentOf = new Map<ModelEvent, number>();`
+**Anchor:** `src/conversation/stream.ts:727` — `const segmentOf = new Map<ModelEvent, number>();`
 
 ### turn-end-demotion-segment-and-seq-scoped
 **`reducer-total`** — a still-running tool is demoted to interrupted iff a turn-terminal frame is causally after it, compared (segment,seq) lexicographically.
 
 **Prevents:** a running turn-N tool flipped by an earlier turn's terminal, or a resumed-session tool flipped by the prior session's synthetic exit
 
-**Anchor:** `src/conversation/stream.ts:1053` — `function demoteAbandonedTools(acc: DeriveAccum): void {`
+**Anchor:** `src/conversation/stream.ts:1074` — `function demoteAbandonedTools(acc: DeriveAccum): void {`
 
 ### derive-snapshot-isolation
 **`runtime-guard`** — the fast path edits an earlier node copy-on-write (a fresh object replaces the old), never mutating a node a prior derive() already handed out.
 
 **Prevents:** a caller-held tree mutating underneath the renderer's object-identity checks.
 
-**Anchor:** `src/conversation/stream.ts:1233` — `function liveSink(acc: DeriveAccum): DeriveSink {`
+**Anchor:** `src/conversation/stream.ts:1254` — `function liveSink(acc: DeriveAccum): DeriveSink {`
 
 **Tests:** `stream.incremental.test.ts identity test (a) — a correlating tool_result yields a NEW node while a tree held from before still shows 'running'`
 
@@ -439,7 +439,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a full-replay fallback needlessly re-creating every node object and forcing the renderer to rebuild unchanged DOM
 
-**Anchor:** `src/conversation/stream.ts:1319` — `function reconcileIdentity(fresh: DeriveAccum, prev: DeriveAccum): void {`
+**Anchor:** `src/conversation/stream.ts:1340` — `function reconcileIdentity(fresh: DeriveAccum, prev: DeriveAccum): void {`
 
 ## App shell — selection / review / gates
 
