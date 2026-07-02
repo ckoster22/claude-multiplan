@@ -7128,4 +7128,40 @@ mod tests {
         let res = read_plan_contents(sentinel);
         assert!(res.is_err(), "a sentinel path must never resolve to a readable plan file");
     }
+
+    // INVARIANT[csp-script-src-never-inline] (test-pinned): the bundled production CSP in tauri.conf.json keeps a script-src that admits neither 'unsafe-inline' nor 'unsafe-eval', and pins object-src to 'none'.
+    //   prevents: a config edit from silently re-opening inline/eval script execution (an XSS foothold) or plugin/object embedding in the shipped WebView.
+    //   test: csp_production_script_src_forbids_inline_and_eval
+    #[test]
+    fn csp_production_script_src_forbids_inline_and_eval() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json parses");
+        let csp = config["app"]["security"]["csp"]
+            .as_str()
+            .expect("app.security.csp is a non-null string");
+        assert!(!csp.trim().is_empty(), "csp must not be empty");
+
+        let directive = |name: &str| -> Option<Vec<String>> {
+            csp.split(';').map(str::trim).find_map(|d| {
+                let mut parts = d.split_whitespace();
+                match parts.next() {
+                    Some(n) if n == name => Some(parts.map(str::to_string).collect()),
+                    _ => None,
+                }
+            })
+        };
+
+        let script_src = directive("script-src").expect("csp declares a script-src directive");
+        assert!(
+            !script_src.iter().any(|s| s == "'unsafe-inline'"),
+            "script-src must not allow 'unsafe-inline' (got {script_src:?})"
+        );
+        assert!(
+            !script_src.iter().any(|s| s == "'unsafe-eval'"),
+            "script-src must not allow 'unsafe-eval' (got {script_src:?})"
+        );
+
+        let object_src = directive("object-src").expect("csp declares an object-src directive");
+        assert_eq!(object_src, vec!["'none'".to_string()], "object-src must be 'none'");
+    }
 }
