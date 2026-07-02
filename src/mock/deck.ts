@@ -29,6 +29,7 @@ import { installMockOrchestrator } from "./orchestrator";
 import { KNOBS, seedKnobDefaults, type Knob, type KnobGroup } from "./knobs";
 import { getKnob, restoreKnobsFromSession } from "./state";
 import { SCENE_NAMES, type SceneName } from "./fixtures/scenes";
+import { GOLDEN_SCENE_NAMES } from "./golden";
 
 const DECK_CSS = `
 #mock-deck.mockdeck-root {
@@ -298,6 +299,15 @@ function mountDeck(): void {
     );
   }
   body.appendChild(convPresets);
+
+  // Golden-replay scenes (the captured sidecar frame goldens, demuxed — src/mock/golden.ts) as a
+  // second, clearly separated group so the hand-scene presets above stay the curated set.
+  body.appendChild(sectionTitle("Presets · golden replay"));
+  const goldenPresets = el("div", "mockdeck-presets");
+  for (const name of GOLDEN_SCENE_NAMES) {
+    goldenPresets.appendChild(presetButton(name, () => void playScene(name)));
+  }
+  body.appendChild(goldenPresets);
 
   body.appendChild(sectionTitle("Presets · states"));
   const statePresets = el("div", "mockdeck-presets");
