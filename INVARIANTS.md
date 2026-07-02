@@ -25,8 +25,9 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Conversation / live-session | 7 | 25 | 0 | 1 | 0 | 0 | 0 | 5 | 38 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
 | Sidecar / agent-driver | 3 | 13 | 0 | 0 | 4 | 0 | 0 | 3 | 23 |
+| Rust backend (`src-tauri/`) | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | 3 |
 | Other | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | 17 | 65 | 5 | 1 | 4 | 3 | 0 | 21 | 116 |
+| **Total** | 17 | 67 | 5 | 1 | 4 | 3 | 1 | 21 | 119 |
 
 ## Reading-pane render
 
@@ -846,6 +847,35 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `sidecar/session-start.ts:38` — `export function decideStart(alreadyStarted: boolean, permissionMode: unknown): StartDecision {`
 
+## Rust backend (`src-tauri/`)
+
+### viewed-stamp-outlasts-simultaneous-edit
+**`runtime-guard`** — the recorded view stamp is `max(now, mtime + 1)`, so a just-viewed plan can never re-appear unread against a same-instant or future-dated edit; a stat failure falls back to `now`.
+
+**Prevents:** a plan you just opened flashing back to unread because an edit landed at the same millisecond (mtime == now) or the file carries a future mtime (mtime > now).
+
+**Anchor:** `src-tauri/src/lib.rs:2451` — `fn viewed_stamp(now_ms: i64, mtime_ms: Option<i64>) -> i64 {`
+
+**Tests:** `viewed_stamp_outlasts_simultaneous_and_future_edits`
+
+### settings-refuse-on-unparseable
+**`runtime-guard`** — a present-but-unparseable settings file yields Err so callers (install/uninstall) propagate via `?` and refuse to write — an absent file yields Ok({}).
+
+**Prevents:** install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
+
+**Anchor:** `src-tauri/src/lib.rs:3156` — `Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {`
+
+**Tests:** `read_settings_value_refuses_unparseable_and_defaults_absent`
+
+### csp-script-src-never-inline
+**`test-pinned`** — the bundled production CSP in tauri.conf.json keeps a script-src that admits neither 'unsafe-inline' nor 'unsafe-eval', and pins object-src to 'none'.
+
+**Prevents:** a config edit from silently re-opening inline/eval script execution (an XSS foothold) or plugin/object embedding in the shipped WebView.
+
+**Anchor:** `src-tauri/src/lib.rs:7179` — `#[test]`
+
+**Tests:** `csp_production_script_src_forbids_inline_and_eval`
+
 ## Other
 
 ### remote-data-exhaustive-five-state
@@ -861,11 +891,6 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 **Prevents:** two affordances painted into the bar at once
 
 **Anchor:** `src/resume-banner.ts:30` — `export function computeAffordance(signals: {`
-
-## §Rust backend (`src-tauri/`)
-
-NOT YET AUDITED — this branch did not touch it; tracked as a follow-up.
-(Static placeholder — the generator does not scan this tree.)
 
 ## §Mock harness (`src/mock/`)
 

@@ -2445,11 +2445,8 @@ fn set_open_plan(path: Option<String>, state: tauri::State<'_, Mutex<AppState>>)
     guard.open_path = path;
 }
 
-// INVARIANT[viewed-stamp-outlasts-simultaneous-edit] (runtime-guard): the recorded view stamp
-// is `max(now, mtime + 1)`, so a just-viewed plan can never re-appear unread against a
-// same-instant or future-dated edit; a stat failure falls back to `now`.
-//   prevents: a plan you just opened flashing back to unread because an edit landed at the
-//     same millisecond (mtime == now) or the file carries a future mtime (mtime > now).
+// INVARIANT[viewed-stamp-outlasts-simultaneous-edit] (runtime-guard): the recorded view stamp is `max(now, mtime + 1)`, so a just-viewed plan can never re-appear unread against a same-instant or future-dated edit; a stat failure falls back to `now`.
+//   prevents: a plan you just opened flashing back to unread because an edit landed at the same millisecond (mtime == now) or the file carries a future mtime (mtime > now).
 //   test: viewed_stamp_outlasts_simultaneous_and_future_edits
 fn viewed_stamp(now_ms: i64, mtime_ms: Option<i64>) -> i64 {
     match mtime_ms {
@@ -3153,11 +3150,8 @@ fn hook_status() -> Result<bool, String> {
 ///   - file parses ⇒ `Ok(value)`.
 fn read_settings_value(path: &Path) -> Result<Value, String> {
     match std::fs::read(path) {
-        // INVARIANT[settings-refuse-on-unparseable] (runtime-guard): a present-but-unparseable
-        // settings file yields Err so callers (install/uninstall) propagate via `?` and refuse
-        // to write — an absent file yields Ok({}).
-        //   prevents: install/uninstall merging over — clobbering — a momentarily-corrupt user
-        //     ~/.claude/settings.json.
+        // INVARIANT[settings-refuse-on-unparseable] (runtime-guard): a present-but-unparseable settings file yields Err so callers (install/uninstall) propagate via `?` and refuse to write — an absent file yields Ok({}).
+        //   prevents: install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
         //   test: read_settings_value_refuses_unparseable_and_defaults_absent
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {
             "~/.claude/settings.json is not valid JSON — refusing to modify it to avoid \
