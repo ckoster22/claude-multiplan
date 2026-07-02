@@ -2,7 +2,8 @@
 // Generator for the co-located invariant catalog.
 //
 // Source of truth: the `// INVARIANT[name] (tier): ...` doc-comments sitting
-// directly above the construct they describe in src/**/*.ts and sidecar/**/*.ts.
+// directly above the construct they describe in src/**/*.ts, sidecar/**/*.ts, and
+// src-tauri/**/*.rs (Rust uses the same `//` line-comment syntax, so the parser is shared).
 // This script greps those blocks, resolves a FRESH anchor (the line number of the
 // first real code line below each block, computed now so it never rots), and emits
 // a deterministic INVARIANTS.md index at the repo root.
@@ -25,11 +26,12 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const OUT_PATH = path.join(REPO_ROOT, "INVARIANTS.md");
 
 // Scan roots (recursive) and exclusion rules.
-const SCAN_ROOTS = ["src", "sidecar"];
+const SCAN_ROOTS = ["src", "sidecar", "src-tauri"];
 const isExcluded = (rel) =>
   rel.endsWith(".test.ts") ||
   rel.endsWith(".d.ts") ||
-  rel.startsWith("src/mock/");
+  rel.startsWith("src/mock/") ||
+  rel.startsWith("src-tauri/target/"); // Cargo build artifacts, not source
 
 // Tiers ranked strongest -> weakest (PART A order). Drives the legend, the summary
 // table columns, and tier validation.
@@ -61,6 +63,7 @@ const DOMAINS = [
   "Conversation / live-session",
   "App shell — selection / review / gates",
   "Sidecar / agent-driver",
+  "Rust backend (`src-tauri/`)",
   "Other",
 ];
 
@@ -70,6 +73,7 @@ function domainFor(rel) {
   if (rel === "src/main.ts" || rel === "src/review.ts" || rel === "src/prototype.ts")
     return "App shell — selection / review / gates";
   if (rel.startsWith("sidecar/")) return "Sidecar / agent-driver";
+  if (rel.startsWith("src-tauri/")) return "Rust backend (`src-tauri/`)";
   return "Other";
 }
 
@@ -88,7 +92,7 @@ function walk(absDir, relDir, out, excludes) {
       walk(path.join(absDir, ent.name), rel, out, excludes);
     } else if (
       ent.isFile() &&
-      ent.name.endsWith(".ts") &&
+      (ent.name.endsWith(".ts") || ent.name.endsWith(".rs")) &&
       !isExcluded(rel) &&
       !excludes.has(rel)
     ) {
@@ -294,11 +298,6 @@ function generate(blocks) {
   }
 
   // Trailing static stubs (NOT scanned by the generator).
-  out.push("## §Rust backend (`src-tauri/`)");
-  out.push("");
-  out.push("NOT YET AUDITED — this branch did not touch it; tracked as a follow-up.");
-  out.push("(Static placeholder — the generator does not scan this tree.)");
-  out.push("");
   out.push("## §Mock harness (`src/mock/`)");
   out.push("");
   out.push("NOT YET AUDITED — this branch did not touch it; tracked as a follow-up.");

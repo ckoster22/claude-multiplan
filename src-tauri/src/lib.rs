@@ -2445,16 +2445,19 @@ fn set_open_plan(path: Option<String>, state: tauri::State<'_, Mutex<AppState>>)
     guard.open_path = path;
 }
 
-/// Mark a plan viewed: `viewed[path] = max(now_ms, file_mtime_ms + 1)`. The `max` clamp
-/// prevents an edit landing at the same instant from out-stamping the recorded view. If the
-/// file can't be stat'd, fall back to `now_ms`. Persists atomically (outside the lock).
+// INVARIANT[viewed-stamp-outlasts-simultaneous-edit] (runtime-guard): the recorded view stamp is `max(now, mtime + 1)`, so a just-viewed plan can never re-appear unread against a same-instant or future-dated edit; a stat failure falls back to `now`.
+//   prevents: a plan you just opened flashing back to unread because an edit landed at the same millisecond (mtime == now) or the file carries a future mtime (mtime > now).
+//   test: viewed_stamp_outlasts_simultaneous_and_future_edits
+fn viewed_stamp(now_ms: i64, mtime_ms: Option<i64>) -> i64 {
+    match mtime_ms {
+        Some(mtime) => now_ms.max(mtime + 1),
+        None => now_ms,
+    }
+}
+
 #[tauri::command]
 fn mark_viewed(path: String, state: tauri::State<'_, Mutex<AppState>>) {
-    let now = now_ms();
-    let stamp = match file_mtime_ms(&path) {
-        Some(mtime) => now.max(mtime + 1),
-        None => now,
-    };
+    let stamp = viewed_stamp(now_ms(), file_mtime_ms(&path));
 
     let (snapshot, data_dir) = {
         let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -3145,6 +3148,9 @@ fn hook_status() -> Result<bool, String> {
 ///   - file parses ⇒ `Ok(value)`.
 fn read_settings_value(path: &Path) -> Result<Value, String> {
     match std::fs::read(path) {
+        // INVARIANT[settings-refuse-on-unparseable] (runtime-guard): `read_settings_value` returns Err on a present-but-unparseable settings file (leaving it byte-for-byte untouched) and Ok({}) when absent; install/uninstall then refuse to write by propagating that Err via `?`. The guard is test-pinned; the `?` propagation at the two call sites (install_hook, uninstall_hook) is relied upon, not unit-exercised, because both are Tauri-command-bound to the real home dir.
+        //   prevents: install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
+        //   test: read_settings_value_refuses_unparseable_and_defaults_absent
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {
             "~/.claude/settings.json is not valid JSON — refusing to modify it to avoid \
              clobbering your config"
@@ -4273,6 +4279,18 @@ mod tests {
     }
 
     #[test]
+    fn viewed_stamp_outlasts_simultaneous_and_future_edits() {
+        // mtime == now ⇒ now + 1 (the +1 clears a same-instant edit).
+        assert_eq!(viewed_stamp(1_000, Some(1_000)), 1_001);
+        // mtime > now (future-dated edit) ⇒ mtime + 1.
+        assert_eq!(viewed_stamp(1_000, Some(5_000)), 5_001);
+        // mtime < now ⇒ now (already strictly past the edit).
+        assert_eq!(viewed_stamp(1_000, Some(500)), 1_000);
+        // No mtime (stat failure) ⇒ now.
+        assert_eq!(viewed_stamp(1_000, None), 1_000);
+    }
+
+    #[test]
     fn open_plan_is_read_by_fiat_even_when_mtime_newer() {
         let p = "/tmp/live.md";
         // mtime (3000) is strictly newer than the viewed stamp (1000) — normally unread.
@@ -5050,6 +5068,36 @@ mod tests {
 
         let after = std::fs::read(&path).expect("file still present");
         assert_eq!(after, garbage, "corrupt cwd cache must not be destructively rewritten");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_settings_value_refuses_unparseable_and_defaults_absent() {
+        let dir = unique_dir("persSettings");
+
+        // Present but unparseable ⇒ Err, so install/uninstall refuse to write over it.
+        let corrupt = dir.join("settings.json");
+        let garbage: &[u8] = b"{ not : valid json @@@ ";
+        std::fs::write(&corrupt, garbage).expect("write garbage");
+        assert!(
+            read_settings_value(&corrupt).is_err(),
+            "a present-but-corrupt settings file must yield Err (refuse to clobber)"
+        );
+        // The guard is read-only: the corrupt file is left byte-for-byte untouched. This is the
+        // clobber pin at the guard tier; the refuse-to-write at the install/uninstall call sites
+        // is carried by `?` propagation (see settings-refuse-on-unparseable), not exercised here.
+        let after = std::fs::read(&corrupt).expect("corrupt file still present");
+        assert_eq!(after, garbage, "read_settings_value must not rewrite the corrupt file");
+
+        // Absent ⇒ Ok(empty object): nothing to preserve, a fresh merge target.
+        let absent = dir.join("does-not-exist.json");
+        let value = read_settings_value(&absent).expect("absent settings ⇒ Ok");
+        assert_eq!(
+            value,
+            Value::Object(serde_json::Map::new()),
+            "absent settings file must default to an empty object"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -7127,5 +7175,41 @@ mod tests {
         assert_eq!(sentinel, "plan-tree-resume://tree-X");
         let res = read_plan_contents(sentinel);
         assert!(res.is_err(), "a sentinel path must never resolve to a readable plan file");
+    }
+
+    // INVARIANT[csp-script-src-never-inline] (test-pinned): the bundled production CSP in tauri.conf.json keeps a script-src that admits neither 'unsafe-inline' nor 'unsafe-eval', and pins object-src to 'none'.
+    //   prevents: a config edit from silently re-opening inline/eval script execution (an XSS foothold) or plugin/object embedding in the shipped WebView.
+    //   test: csp_production_script_src_forbids_inline_and_eval
+    #[test]
+    fn csp_production_script_src_forbids_inline_and_eval() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json parses");
+        let csp = config["app"]["security"]["csp"]
+            .as_str()
+            .expect("app.security.csp is a non-null string");
+        assert!(!csp.trim().is_empty(), "csp must not be empty");
+
+        let directive = |name: &str| -> Option<Vec<String>> {
+            csp.split(';').map(str::trim).find_map(|d| {
+                let mut parts = d.split_whitespace();
+                match parts.next() {
+                    Some(n) if n == name => Some(parts.map(str::to_string).collect()),
+                    _ => None,
+                }
+            })
+        };
+
+        let script_src = directive("script-src").expect("csp declares a script-src directive");
+        assert!(
+            !script_src.iter().any(|s| s == "'unsafe-inline'"),
+            "script-src must not allow 'unsafe-inline' (got {script_src:?})"
+        );
+        assert!(
+            !script_src.iter().any(|s| s == "'unsafe-eval'"),
+            "script-src must not allow 'unsafe-eval' (got {script_src:?})"
+        );
+
+        let object_src = directive("object-src").expect("csp declares an object-src directive");
+        assert_eq!(object_src, vec!["'none'".to_string()], "object-src must be 'none'");
     }
 }

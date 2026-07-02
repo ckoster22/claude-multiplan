@@ -246,7 +246,10 @@ describe("quota banner — frozen countdown (DEMO-ONLY mock-animate seam)", () =
 });
 
 describe("quota banner — single interval, no leak", () => {
-  it("re-rendering does not accumulate intervals (one created per rebuild, prior cleared)", () => {
+  it("reusing an unchanged banner across renders keeps ONE interval (no per-frame re-arm)", () => {
+    // The interval is bound to the banner ELEMENT's lifetime, not to each render. Re-rendering the SAME
+    // unchanged model reuses the element (keyed reconciliation), so the original interval keeps ticking
+    // and is never re-armed.
     vi.useFakeTimers();
     const setSpy = vi.spyOn(globalThis, "setInterval");
     const clearSpy = vi.spyOn(globalThis, "clearInterval");
@@ -259,17 +262,43 @@ describe("quota banner — single interval, no leak", () => {
       source: "retry-after",
     });
 
-    render(m); // rebuild #1 — arms 1 interval
-    render(m); // rebuild #2 — must clear #1's interval, arm 1 new one
-    render(m); // rebuild #3 — same
+    render(m);
+    render(m);
+    render(m);
 
-    // 3 intervals created, but at least 2 cleared (one before each re-arm) — so at most 1 is live.
-    expect(setSpy).toHaveBeenCalledTimes(3);
-    expect(clearSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // FALSIFY: revert to per-frame teardown + re-arm → setSpy would be 3 → RED.
+    expect(setSpy).toHaveBeenCalledTimes(1);
 
-    // Teardown clears the lone remaining interval.
     teardownQuotaCountdown();
-    expect(clearSpy.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(clearSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("a CHANGED banner rebuilds its element and re-arms (prior interval cleared)", () => {
+    // When the banner node changes (waiting → different remaining), reconciliation rebuilds the element,
+    // so the old interval is torn down and a fresh one armed — still at most one live interval.
+    vi.useFakeTimers();
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+
+    const m = new ConversationModel();
+    m.appendQuotaBanner({
+      state: "waiting",
+      resetAt: Date.now() + 3_600_000,
+      remaining: 2,
+      source: "retry-after",
+    });
+    render(m);
+
+    m.updateQuotaBanner({
+      state: "waiting",
+      resetAt: Date.now() + 3_600_000,
+      remaining: 1,
+      source: "retry-after",
+    });
+    render(m);
+
+    expect(setSpy).toHaveBeenCalledTimes(2);
+    expect(clearSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("rendering a tree with NO waiting banner clears a previously-armed interval", () => {

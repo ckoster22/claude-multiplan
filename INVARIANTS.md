@@ -22,11 +22,12 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Domain | type-level | runtime-guard | precedence | reducer-total | containment | sanitization | test-pinned | convention | Total |
 |---|---|---|---|---|---|---|---|---|---|
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
-| Conversation / live-session | 7 | 19 | 0 | 1 | 0 | 0 | 0 | 5 | 32 |
+| Conversation / live-session | 7 | 25 | 0 | 1 | 0 | 0 | 0 | 5 | 38 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
 | Sidecar / agent-driver | 3 | 13 | 0 | 0 | 4 | 0 | 0 | 3 | 23 |
+| Rust backend (`src-tauri/`) | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | 3 |
 | Other | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | 17 | 59 | 5 | 1 | 4 | 3 | 0 | 21 | 110 |
+| **Total** | 17 | 67 | 5 | 1 | 4 | 3 | 1 | 21 | 119 |
 
 ## Reading-pane render
 
@@ -366,7 +367,34 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** an interrupted tool mislabeled 'done'/rendered pulsing
 
-**Anchor:** `src/conversation/render.ts:129` — `function statusLabel(status: ToolStatus): string {`
+**Anchor:** `src/conversation/render.ts:131` — `function statusLabel(status: ToolStatus): string {`
+
+### countdown-single-interval-per-banner-lifetime
+**`runtime-guard`** — at most one live countdown interval exists — armed once when a waiting-banner element is built (teardown-before-arm) and torn down when that element leaves the container; a reused unchanged banner keeps its original interval.
+
+**Prevents:** a leaked or stale-rearmed countdown interval ticking against a replaced / removed banner.
+
+**Anchor:** `src/conversation/render.ts:525` — `let countdownTimer: ReturnType<typeof setInterval> | null = null;`
+
+**Tests:** `render.reconcile.test.ts (d) an unchanged waiting banner across two renders arms setInterval exactly once, plus the quota-banner tests`
+
+### reconcile-interactive-always-rebuilt
+**`runtime-guard`** — question_request / permission_request nodes are rebuilt every render even when the node object is ===, never reusing the element.
+
+**Prevents:** un-submitted form state (checked radios / draft text) persisting across rerenders.
+
+**Anchor:** `src/conversation/render.ts:822` — `function isInteractiveNode(node: RenderNode | SubagentGroupNode): boolean {`
+
+**Tests:** `render.reconcile.test.ts (f) — rerendering the same model does NOT reuse the question card element`
+
+### keyed-element-reuse-by-node-identity
+**`runtime-guard`** — a node whose object identity is unchanged across derives reuses its cached DOM element; a fresh element is built only when the object changed or is missing.
+
+**Prevents:** a full-DOM rebuild every frame — interval churn, image flicker, and lost scroll / selection / focus.
+
+**Anchor:** `src/conversation/render.ts:935` — `function obtainElem(`
+
+**Tests:** `render.reconcile.test.ts identity tests (a) same-tree rerender reuses every element and (b) an append reuses all prior elements`
 
 ### tool-status-four-state
 **`type-level`** — a tool-call row's status is exactly running|done|error|interrupted.
@@ -375,19 +403,44 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `src/conversation/stream.ts:32` — `export type ToolStatus = "running" | "done" | "error" | "interrupted";`
 
+### incremental-derive-equals-fresh-replay
+**`runtime-guard`** — the incremental fast path is taken only when it provably matches a from-scratch replay; a first derive, a dirtied quota banner, a terminal frame, or an out-of-order wire seq forces a full replay instead.
+
+**Prevents:** an incrementally-fed model drifting from a fresh full replay (the storyboard oracle covers only the replay path).
+
+**Anchor:** `src/conversation/stream.ts:651` — `let fallback = this.acc === null || this.quotaDirty;`
+
+**Tests:** `stream.incremental.test.ts incremental-equals-fresh equivalence battery over adversarial sequences`
+
 ### segment-arrival-monotonic
 **`runtime-guard`** — each event gets a session-segment number in arrival order; each subsequent system_init opens the next segment.
 
 **Prevents:** seq-order scrambling across a resume (which resets the wire seq)
 
-**Anchor:** `src/conversation/stream.ts:498` — `const segmentOf = new Map<ModelEvent, number>();`
+**Anchor:** `src/conversation/stream.ts:727` — `const segmentOf = new Map<ModelEvent, number>();`
 
 ### turn-end-demotion-segment-and-seq-scoped
 **`reducer-total`** — a still-running tool is demoted to interrupted iff a turn-terminal frame is causally after it, compared (segment,seq) lexicographically.
 
 **Prevents:** a running turn-N tool flipped by an earlier turn's terminal, or a resumed-session tool flipped by the prior session's synthetic exit
 
-**Anchor:** `src/conversation/stream.ts:833` — `for (const tool of toolById.values()) {`
+**Anchor:** `src/conversation/stream.ts:1074` — `function demoteAbandonedTools(acc: DeriveAccum): void {`
+
+### derive-snapshot-isolation
+**`runtime-guard`** — the fast path edits an earlier node copy-on-write (a fresh object replaces the old), never mutating a node a prior derive() already handed out.
+
+**Prevents:** a caller-held tree mutating underneath the renderer's object-identity checks.
+
+**Anchor:** `src/conversation/stream.ts:1254` — `function liveSink(acc: DeriveAccum): DeriveSink {`
+
+**Tests:** `stream.incremental.test.ts identity test (a) — a correlating tool_result yields a NEW node while a tree held from before still shows 'running'`
+
+### replay-reconciles-node-identity
+**`runtime-guard`** — after a full replay, a content-unchanged node keeps its previous object identity (only changed/new nodes are fresh).
+
+**Prevents:** a full-replay fallback needlessly re-creating every node object and forcing the renderer to rebuild unchanged DOM
+
+**Anchor:** `src/conversation/stream.ts:1340` — `function reconcileIdentity(fresh: DeriveAccum, prev: DeriveAccum): void {`
 
 ## App shell — selection / review / gates
 
@@ -794,6 +847,35 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `sidecar/session-start.ts:38` — `export function decideStart(alreadyStarted: boolean, permissionMode: unknown): StartDecision {`
 
+## Rust backend (`src-tauri/`)
+
+### viewed-stamp-outlasts-simultaneous-edit
+**`runtime-guard`** — the recorded view stamp is `max(now, mtime + 1)`, so a just-viewed plan can never re-appear unread against a same-instant or future-dated edit; a stat failure falls back to `now`.
+
+**Prevents:** a plan you just opened flashing back to unread because an edit landed at the same millisecond (mtime == now) or the file carries a future mtime (mtime > now).
+
+**Anchor:** `src-tauri/src/lib.rs:2451` — `fn viewed_stamp(now_ms: i64, mtime_ms: Option<i64>) -> i64 {`
+
+**Tests:** `viewed_stamp_outlasts_simultaneous_and_future_edits`
+
+### settings-refuse-on-unparseable
+**`runtime-guard`** — `read_settings_value` returns Err on a present-but-unparseable settings file (leaving it byte-for-byte untouched) and Ok({}) when absent; install/uninstall then refuse to write by propagating that Err via `?`. The guard is test-pinned; the `?` propagation at the two call sites (install_hook, uninstall_hook) is relied upon, not unit-exercised, because both are Tauri-command-bound to the real home dir.
+
+**Prevents:** install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
+
+**Anchor:** `src-tauri/src/lib.rs:3156` — `Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {`
+
+**Tests:** `read_settings_value_refuses_unparseable_and_defaults_absent`
+
+### csp-script-src-never-inline
+**`test-pinned`** — the bundled production CSP in tauri.conf.json keeps a script-src that admits neither 'unsafe-inline' nor 'unsafe-eval', and pins object-src to 'none'.
+
+**Prevents:** a config edit from silently re-opening inline/eval script execution (an XSS foothold) or plugin/object embedding in the shipped WebView.
+
+**Anchor:** `src-tauri/src/lib.rs:7185` — `#[test]`
+
+**Tests:** `csp_production_script_src_forbids_inline_and_eval`
+
 ## Other
 
 ### remote-data-exhaustive-five-state
@@ -809,11 +891,6 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 **Prevents:** two affordances painted into the bar at once
 
 **Anchor:** `src/resume-banner.ts:30` — `export function computeAffordance(signals: {`
-
-## §Rust backend (`src-tauri/`)
-
-NOT YET AUDITED — this branch did not touch it; tracked as a follow-up.
-(Static placeholder — the generator does not scan this tree.)
 
 ## §Mock harness (`src/mock/`)
 

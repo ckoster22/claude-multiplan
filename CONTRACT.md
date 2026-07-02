@@ -4522,3 +4522,80 @@ type — it never crosses the IPC boundary in either direction.
 
 Net effect: this amendment records a **frontend-only read-model adoption** with a **zero-delta wire
 contract**. No prior section is rewritten, reordered, or deleted.
+
+---
+
+## Amendment 2026-07-01 — Content-Security-Policy (additive; nothing above is altered)
+
+The app shipped with `app.security.csp: null` (no CSP) and `withGlobalTauri: true`. This amendment
+records the hardened policy now pinned in `src-tauri/tauri.conf.json`. It changes **no** command or
+event surface and **no** DOM contract — it is a WebView-tier hardening only. `withGlobalTauri` is now
+`false`: the frontend reaches Tauri exclusively through `@tauri-apps/api` imports (verified: zero
+`window.__TAURI__` references anywhere in `src/` or `index.html`), so the injected global is dead
+weight and removing it shrinks the attack surface.
+
+### Production policy (`app.security.csp`)
+
+```
+default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
+```
+
+### Development policy (`app.security.devCsp`)
+
+```
+default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 http://localhost:1420; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
+```
+
+Dev needs the two extra concessions because it runs against the Vite dev server, not the bundled
+frontend: `script-src` gains `'unsafe-inline' 'unsafe-eval'` (Vite's HMR client and dev transforms),
+and `connect-src` gains `ws://localhost:1420 http://localhost:1420` (the HMR WebSocket + dev asset
+fetches). Neither concession exists in the production policy.
+
+### Per-concession rationale (production)
+
+- **`script-src 'self'` with NO `'unsafe-inline'`** — the only inline `<script>` in the app is the
+  theme bootstrap in `index.html` (avoids a flash of the wrong theme). Tauri **hashes that inline
+  script at build time** and injects the hash into the bundled HTML's CSP automatically, so `'self'`
+  suffices for the production bundle without opening inline execution. This hashing happens ONLY for
+  the bundled HTML — it does NOT happen for the externally-served dev server HTML, which is why
+  `devCsp` must keep `'unsafe-inline'`.
+- **`style-src 'self' 'unsafe-inline'`** — mermaid renders diagrams whose sanitized SVG carries inline
+  `style="…"` attributes, injected into the reading pane via `stage.innerHTML`. **CSP nonces and
+  hashes do not apply to inline style *attributes*** (they only cover `<style>` elements and inline
+  event/script), so `'unsafe-inline'` on `style-src` is the only mechanism that keeps mermaid styling
+  intact. Highlight.js themes and app CSS are bundled stylesheets covered by `'self'`.
+- **`img-src 'self' data: https: http:`** — `data:` admits the base64 images the `read_image_as_data_url`
+  command returns (local plan images cannot use Tauri's asset protocol, see the app README/CLAUDE.md)
+  and attachment thumbnails; `https:`/`http:` admit remote images referenced directly in plan markdown.
+- **`connect-src 'self' ipc: http://ipc.localhost`** — Tauri v2 routes IPC over the `ipc:` scheme and
+  the `http://ipc.localhost` origin on macOS WKWebView; both must be allowed or every command
+  `invoke` is blocked. The production frontend makes no other network connections (no `fetch`/XHR/
+  WebSocket outside IPC).
+- **`object-src 'none'`, `frame-src 'none'`, `worker-src 'none'`, `frame-ancestors 'none'`,
+  `base-uri 'self'`, `form-action 'none'`, `media-src 'none'`** — the app embeds no plugins, iframes,
+  web workers, forms, or media, and must never be framed; these lock those sinks shut.
+
+### Nonce-injection caveat
+
+Tauri injects per-load nonces/hashes into the CSP it serves for the bundled HTML. Nonces cover
+`<script>`/`<style>` elements — they do **not** cover inline `style=` *attributes*, which is precisely
+what mermaid emits. That is why the `style-src 'unsafe-inline'` concession is load-bearing and cannot
+be replaced by a nonce. If a future Tauri upgrade were to strip `'unsafe-inline'` during its CSP
+modification, the documented fallback ladder is: (a) `app.security.dangerousDisableAssetCspModification`
+scoped to `["style-src"]`, then (b) `'unsafe-hashes'` on `style-src`, then (c) normalizing mermaid's
+inline styles into a bundled stylesheet.
+
+### Verification story
+
+- **Config pin (Rust):** `csp_production_script_src_forbids_inline_and_eval` in `src-tauri/src/lib.rs`
+  parses `tauri.conf.json` via `include_str!` + serde and asserts the production `csp` is a non-empty
+  string whose `script-src` admits neither `'unsafe-inline'` nor `'unsafe-eval'` and whose `object-src`
+  is `'none'`. Falsifier-verified: setting `csp` to `null` turns it red. Carries the
+  `INVARIANT[csp-script-src-never-inline]` header (tier `test-pinned`). NOTE: the `INVARIANTS.md`
+  generator (`scripts/gen-invariants.mjs`) scans only `src/**/*.ts` + `sidecar/**/*.ts`, so this
+  Rust-side header does not flow into the generated catalog; the enforcing construct is the test itself.
+- **Real-WebView functional check:** exercised against the bundled production `.app` (dev proves
+  nothing for `script-src` because Tauri does not hash externally-served dev HTML) — sidebar plan list
+  loads (JS bundle executes + IPC `connect-src` works), a mermaid diagram renders WITH styling and
+  multi-line labels intact (`style-src` concession survives Tauri's nonce injection), a local image
+  displays (`img-src data:`), and a highlighted code block renders.
