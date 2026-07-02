@@ -2445,16 +2445,24 @@ fn set_open_plan(path: Option<String>, state: tauri::State<'_, Mutex<AppState>>)
     guard.open_path = path;
 }
 
-/// Mark a plan viewed: `viewed[path] = max(now_ms, file_mtime_ms + 1)`. The `max` clamp
-/// prevents an edit landing at the same instant from out-stamping the recorded view. If the
-/// file can't be stat'd, fall back to `now_ms`. Persists atomically (outside the lock).
+// INVARIANT[viewed-stamp-outlasts-simultaneous-edit] (runtime-guard): the recorded view stamp
+// is `max(now, mtime + 1)`, so a just-viewed plan can never re-appear unread against a
+// same-instant or future-dated edit; a stat failure falls back to `now`.
+//   prevents: a plan you just opened flashing back to unread because an edit landed at the
+//     same millisecond (mtime == now) or the file carries a future mtime (mtime > now).
+//   test: viewed_stamp_outlasts_simultaneous_and_future_edits
+fn viewed_stamp(now_ms: i64, mtime_ms: Option<i64>) -> i64 {
+    match mtime_ms {
+        Some(mtime) => now_ms.max(mtime + 1),
+        None => now_ms,
+    }
+}
+
+/// Mark a plan viewed: `viewed[path] = viewed_stamp(now_ms, file_mtime_ms)`. Persists
+/// atomically (outside the lock).
 #[tauri::command]
 fn mark_viewed(path: String, state: tauri::State<'_, Mutex<AppState>>) {
-    let now = now_ms();
-    let stamp = match file_mtime_ms(&path) {
-        Some(mtime) => now.max(mtime + 1),
-        None => now,
-    };
+    let stamp = viewed_stamp(now_ms(), file_mtime_ms(&path));
 
     let (snapshot, data_dir) = {
         let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -4276,6 +4284,18 @@ mod tests {
         assert!(compute_unread(1_500, None, baseline));
         // Exactly at baseline ⇒ read (not strictly greater).
         assert!(!compute_unread(1_000, None, baseline));
+    }
+
+    #[test]
+    fn viewed_stamp_outlasts_simultaneous_and_future_edits() {
+        // mtime == now ⇒ now + 1 (the +1 clears a same-instant edit).
+        assert_eq!(viewed_stamp(1_000, Some(1_000)), 1_001);
+        // mtime > now (future-dated edit) ⇒ mtime + 1.
+        assert_eq!(viewed_stamp(1_000, Some(5_000)), 5_001);
+        // mtime < now ⇒ now (already strictly past the edit).
+        assert_eq!(viewed_stamp(1_000, Some(500)), 1_000);
+        // No mtime (stat failure) ⇒ now.
+        assert_eq!(viewed_stamp(1_000, None), 1_000);
     }
 
     #[test]
