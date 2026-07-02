@@ -3145,6 +3145,12 @@ fn hook_status() -> Result<bool, String> {
 ///   - file parses ⇒ `Ok(value)`.
 fn read_settings_value(path: &Path) -> Result<Value, String> {
     match std::fs::read(path) {
+        // INVARIANT[settings-refuse-on-unparseable] (runtime-guard): a present-but-unparseable
+        // settings file yields Err so callers (install/uninstall) propagate via `?` and refuse
+        // to write — an absent file yields Ok({}).
+        //   prevents: install/uninstall merging over — clobbering — a momentarily-corrupt user
+        //     ~/.claude/settings.json.
+        //   test: read_settings_value_refuses_unparseable_and_defaults_absent
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {
             "~/.claude/settings.json is not valid JSON — refusing to modify it to avoid \
              clobbering your config"
@@ -5050,6 +5056,30 @@ mod tests {
 
         let after = std::fs::read(&path).expect("file still present");
         assert_eq!(after, garbage, "corrupt cwd cache must not be destructively rewritten");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_settings_value_refuses_unparseable_and_defaults_absent() {
+        let dir = unique_dir("persSettings");
+
+        // Present but unparseable ⇒ Err, so install/uninstall refuse to write over it.
+        let corrupt = dir.join("settings.json");
+        std::fs::write(&corrupt, b"{ not : valid json @@@ ").expect("write garbage");
+        assert!(
+            read_settings_value(&corrupt).is_err(),
+            "a present-but-corrupt settings file must yield Err (refuse to clobber)"
+        );
+
+        // Absent ⇒ Ok(empty object): nothing to preserve, a fresh merge target.
+        let absent = dir.join("does-not-exist.json");
+        let value = read_settings_value(&absent).expect("absent settings ⇒ Ok");
+        assert_eq!(
+            value,
+            Value::Object(serde_json::Map::new()),
+            "absent settings file must default to an empty object"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
