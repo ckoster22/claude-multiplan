@@ -195,3 +195,24 @@ describe("reconcile — interactive cards are always rebuilt", () => {
     expect(card2).not.toBe(card1);
   });
 });
+
+describe("reconcile — consecutive user echoes each render their own bubble", () => {
+  it("(g) two back-to-back user echoes with no intervening wire frame render TWO .conv-text-user bubbles", () => {
+    const m = new ConversationModel();
+    m.appendStream({ seq: 1, kind: "assistant_text", text: "agent turn", parent_tool_use_id: null });
+    // The composer stays typable while the agent is active and its next frame lags, so the user sends
+    // two messages before any wire frame arrives.
+    m.appendUserMessage("first message");
+    m.appendUserMessage("second message");
+
+    renderTree(host, m.derive());
+
+    // FALSIFY: revert appendUserMessage to a fixed `lastWireSeq + 0.5` → both echoes share the nodeKey
+    // `${segment}:user:1.5` → the keyed renderer maps them to one element and the first bubble is
+    // dropped → only 1 → RED. This is the direct regression pin.
+    const userBubbles = host.querySelectorAll(".conv-text-user");
+    expect(userBubbles).toHaveLength(2);
+    const texts = Array.from(userBubbles).map((b) => b.textContent?.trim());
+    expect(texts).toEqual(["first message", "second message"]);
+  });
+});

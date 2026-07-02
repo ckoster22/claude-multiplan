@@ -467,3 +467,34 @@ describe("ConversationModel — segment stamp on nodes + segment-qualified nodeK
     expect(nodeKey(tool)).toBe("tool:t1");
   });
 });
+
+// Two live user echoes with NO intervening wire frame must not share a seq (and thus a nodeKey) — the
+// keyed renderer would otherwise map both to one element and drop the first bubble.
+describe("ConversationModel — consecutive user echoes get distinct, ordered keys", () => {
+  it("two back-to-back appendUserMessage produce DISTINCT nodeKeys and a stable order across derives", () => {
+    const m = new ConversationModel();
+    m.appendStream(text(1, "agent turn"));
+    m.appendUserMessage("first"); // seq 1.5
+    m.appendUserMessage("second"); // seq 1.75 (no wire frame advanced lastWireSeq between them)
+
+    const first = m.derive();
+    const users = first.nodes.filter((n) => n.type === "user");
+    expect(users.map((u) => (u.type === "user" ? u.text : ""))).toEqual(["first", "second"]);
+
+    // Distinct keys. FALSIFY: revert appendUserMessage to a fixed `lastWireSeq + 0.5` → both echoes
+    // key to the same `${segment}:user:1.5` → Set size 1 → RED.
+    const keys = users.map((u) => nodeKey(u));
+    expect(new Set(keys).size).toBe(2);
+
+    // The first echo is still at exactly +0.5 (ordering unchanged), and order + identity are stable
+    // across a re-derive.
+    expect(users[0].seq).toBe(1.5);
+    expect(users[1].seq).toBeGreaterThan(1.5);
+    expect(users[1].seq).toBeLessThan(2); // strictly before the next wire frame's slot
+    const second = m.derive();
+    const users2 = second.nodes.filter((n) => n.type === "user");
+    expect(users2.map((u) => (u.type === "user" ? u.text : ""))).toEqual(["first", "second"]);
+    expect(users2[0]).toBe(users[0]);
+    expect(users2[1]).toBe(users[1]);
+  });
+});

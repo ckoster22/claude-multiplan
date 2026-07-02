@@ -440,6 +440,12 @@ export class ConversationModel {
   // event at append time so the placement is stable across re-derives.
   private lastWireSeq = -1;
 
+  // Count of live user echoes since `lastWireSeq` last advanced. Consecutive echoes with NO intervening
+  // wire frame would otherwise all land at `lastWireSeq + 0.5` and thus share a `nodeKey` — the keyed
+  // renderer maps them to one cache entry and drops all but one bubble. Reset whenever a wire frame
+  // advances lastWireSeq (a fresh tiebreaker window); see appendUserMessage for the bisection scheme.
+  private echoCount = 0;
+
   // The retained derivation state, carried across derive() calls so a derive amortizes to O(new
   // events). null until the first derive (or after reset()). `nextEventIndex` is how many events have
   // been folded into `acc`; `maxProcessedSeq` is the highest WIRE seq folded in (the fast-path
@@ -453,13 +459,19 @@ export class ConversationModel {
   // Append a committed agent-stream frame.
   appendStream(ev: AgentStream): void {
     this.events.push(ev);
-    if (ev.seq > this.lastWireSeq) this.lastWireSeq = ev.seq;
+    if (ev.seq > this.lastWireSeq) {
+      this.lastWireSeq = ev.seq;
+      this.echoCount = 0; // a new wire frame opens a fresh echo-tiebreaker window
+    }
   }
 
   // Append a tool-permission-requested marker.
   appendPermissionRequest(ev: ToolPermissionRequested): void {
     this.events.push(ev);
-    if (ev.seq > this.lastWireSeq) this.lastWireSeq = ev.seq;
+    if (ev.seq > this.lastWireSeq) {
+      this.lastWireSeq = ev.seq;
+      this.echoCount = 0; // a new wire frame opens a fresh echo-tiebreaker window
+    }
   }
 
   // Append a normalized agent-error. `seq` is assigned by the controller (the wire shape
@@ -491,10 +503,18 @@ export class ConversationModel {
   // Multimodal: `images` (optional) are DISPLAY data URLs rendered as thumbnails in the bubble. OMITTED
   // when absent/empty so a text-only echo is unchanged. Stored verbatim on the event (frozen across
   // re-derives like the seq).
+  // CONSECUTIVE ECHOES: the composer stays typable while the agent is active and its first frame can
+  // lag, so a user may send two messages before any wire frame arrives. Both would land at
+  // `lastWireSeq + 0.5` and collide on `nodeKey` (the keyed renderer would drop the first bubble). So
+  // each echo since the last wire frame BISECTS the gap toward the next integer: +0.5 (first, unchanged),
+  // then +0.75, +0.833… — strictly increasing, always < `lastWireSeq + 1` (the agent's reply), so
+  // arrival order holds and no echo can collide with a wire seq or a later echo.
   appendUserMessage(text: string, images?: string[]): void {
+    const seq = this.lastWireSeq + 0.5 + 0.5 * (1 - 1 / (this.echoCount + 1));
+    this.echoCount++;
     this.events.push({
       __event: "user_message",
-      seq: this.lastWireSeq + 0.5,
+      seq,
       text,
       ...(images && images.length ? { images } : {}),
     });
@@ -607,6 +627,7 @@ export class ConversationModel {
   reset(): void {
     this.events = [];
     this.lastWireSeq = -1;
+    this.echoCount = 0;
     this.quotaBanner = null;
     this.acc = null;
     this.nextEventIndex = 0;
