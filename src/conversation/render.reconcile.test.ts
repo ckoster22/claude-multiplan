@@ -30,7 +30,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Map every [data-seq] element currently in `host` by its seq (top-level + nested group children).
 function seqElements(): Map<string, HTMLElement> {
   const out = new Map<string, HTMLElement>();
   for (const el of host.querySelectorAll<HTMLElement>("[data-seq]")) {
@@ -48,7 +47,7 @@ describe("reconcile — unchanged rows keep element identity", () => {
 
     renderTree(host, m.derive());
     const first = seqElements();
-    expect(first.size).toBe(2); // one .conv-text (seq 1), one .conv-tool (seq 2)
+    expect(first.size).toBe(2);
 
     renderTree(host, m.derive());
     const second = seqElements();
@@ -76,11 +75,9 @@ describe("reconcile — incremental append touches only the new row", () => {
     renderTree(host, m.derive());
     const after = seqElements();
 
-    // Every prior element is the SAME object (reused, not rebuilt).
     for (const [seq, el] of before) {
       expect(after.get(seq)).toBe(el);
     }
-    // Exactly one new row was added (the seq-3 bubble), and it is NOT one of the prior elements.
     expect(after.size).toBe(before.size + 1);
     const added = after.get("3")!;
     expect(added).toBeTruthy();
@@ -105,7 +102,6 @@ describe("reconcile — segment-qualified keys keep same-seq rows distinct", () 
 
   it("(c) a two-segment tree (same wire seqs per segment) renders every row exactly once", () => {
     const m = new ConversationModel();
-    // Segment 0.
     m.appendStream(systemInit(0, "s0"));
     m.appendStream({ seq: 1, kind: "assistant_text", text: "alpha", parent_tool_use_id: null });
     // Segment 1 — a resume RESETS the wire seq, so this text reuses seq 1.
@@ -113,7 +109,6 @@ describe("reconcile — segment-qualified keys keep same-seq rows distinct", () 
     m.appendStream({ seq: 1, kind: "assistant_text", text: "beta", parent_tool_use_id: null });
 
     const tree = m.derive();
-    // Sanity: two text nodes at the same seq but different segments.
     expect(tree.nodes.filter((n) => n.type === "text")).toHaveLength(2);
 
     renderTree(host, tree);

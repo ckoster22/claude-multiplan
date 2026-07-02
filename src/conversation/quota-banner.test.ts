@@ -262,14 +262,13 @@ describe("quota banner — single interval, no leak", () => {
       source: "retry-after",
     });
 
-    render(m); // create → arms exactly one interval
-    render(m); // element reused (node unchanged) → NO re-arm
-    render(m); // element reused → NO re-arm
+    render(m);
+    render(m);
+    render(m);
 
     // FALSIFY: revert to per-frame teardown + re-arm → setSpy would be 3 → RED.
     expect(setSpy).toHaveBeenCalledTimes(1);
 
-    // Teardown clears the lone live interval.
     teardownQuotaCountdown();
     expect(clearSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
@@ -288,7 +287,7 @@ describe("quota banner — single interval, no leak", () => {
       remaining: 2,
       source: "retry-after",
     });
-    render(m); // arms interval #1
+    render(m);
 
     m.updateQuotaBanner({
       state: "waiting",
@@ -296,7 +295,7 @@ describe("quota banner — single interval, no leak", () => {
       remaining: 1,
       source: "retry-after",
     });
-    render(m); // node changed → rebuild → clear #1, arm #2
+    render(m);
 
     expect(setSpy).toHaveBeenCalledTimes(2);
     expect(clearSpy.mock.calls.length).toBeGreaterThanOrEqual(1);

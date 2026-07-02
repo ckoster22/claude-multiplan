@@ -162,8 +162,8 @@ describe("ConversationModel — incremental derive equals a from-scratch replay 
   it("out-of-order: tool_result arrives BEFORE its tool_use, then a normal in-order pair", () => {
     assertIncrementalEqualsFresh([
       (m) => m.appendStream(sysInit({ seq: 0 })),
-      (m) => m.appendStream(toolResult(2, "t1", "early result")), // result first (lower id, higher seq)
-      (m) => m.appendStream(toolUse(1, "t1", "Read")), // its tool_use lands later, at a LOWER seq
+      (m) => m.appendStream(toolResult(2, "t1", "early result")),
+      (m) => m.appendStream(toolUse(1, "t1", "Read")),
       (m) => m.appendStream(toolUse(3, "t2", "Bash")),
       (m) => m.appendStream(toolResult(4, "t2", "later result", true)),
     ]);
@@ -172,7 +172,7 @@ describe("ConversationModel — incremental derive equals a from-scratch replay 
   it("mismatched ids: an orphan tool_result (no matching tool_use) is dropped, tool stays running", () => {
     assertIncrementalEqualsFresh([
       (m) => m.appendStream(toolUse(1, "t1", "Read")),
-      (m) => m.appendStream(toolResult(2, "DIFFERENT", "orphan")), // no matching tool_use → dropped
+      (m) => m.appendStream(toolResult(2, "DIFFERENT", "orphan")),
       (m) => m.appendStream(text(3, "more")),
     ]);
   });
@@ -181,7 +181,7 @@ describe("ConversationModel — incremental derive equals a from-scratch replay 
     assertIncrementalEqualsFresh([
       (m) => m.appendStream(sysInit({ seq: 0 })),
       (m) => m.appendStream(toolUse(1, "t1", "Read")), // segment 0 tool, abandoned
-      (m) => m.appendExit({ code: 0 }, SYNTH), // segment-0 terminal at the synth base
+      (m) => m.appendExit({ code: 0 }, SYNTH),
       (m) => m.appendStream(sysInit({ seq: 0 })), // RESUME — fresh sidecar, wire seq reset → segment 1
       (m) => m.appendStream(toolUse(1, "t2", "Bash")), // segment-1 tool, genuinely running
       (m) => m.appendStream(toolResult(2, "t2", "done seg1")),
@@ -227,7 +227,7 @@ describe("ConversationModel — incremental derive equals a from-scratch replay 
       (m) => m.appendStream(toolUse(1, "t1", "Read")),
       (m) => m.appendStream(toolResult(2, "t1", "ok")),
       (m) => m.appendStream(result(3)),
-      (m) => m.appendStream(text(4, "next turn begins")), // frames continue past the terminal
+      (m) => m.appendStream(text(4, "next turn begins")),
       (m) => m.appendStream(toolUse(5, "t2", "Bash")), // legitimately running — NOT demoted
     ]);
   });
@@ -256,7 +256,7 @@ describe("ConversationModel — incremental derive equals a from-scratch replay 
     assertIncrementalEqualsFresh([
       (m) => m.appendStream(sysInit({ seq: 1 })),
       (m) => m.appendPermissionRequest(permReq(2, "p1", "ExitPlanMode")),
-      (m) => m.appendPermissionResolved("p1", SYNTH), // synthetic, high seq
+      (m) => m.appendPermissionResolved("p1", SYNTH),
       (m) => m.appendNotice("a note", SYNTH + 1),
       (m) => m.appendStream(text(3, "turn resumes")), // WIRE frame after the synthetics — fast path must re-engage
       (m) => m.appendStream(toolUse(4, "t9", "Read")),
@@ -276,7 +276,7 @@ describe("ConversationModel — incremental derive equals a from-scratch replay 
         m.appendStream(r);
         r.deliberateInterrupt = true;
       },
-      (m) => m.appendStream(sysInit({ seq: 0 })), // resume after the deliberate interrupt
+      (m) => m.appendStream(sysInit({ seq: 0 })),
       (m) => m.appendStream(text(1, "resumed work")),
     ]);
   });
@@ -300,10 +300,10 @@ describe("ConversationModel — incremental derive equals a from-scratch replay 
 
   it("whitespace-only assistant_text (dropped) interleaved with real text + a blank subagent child", () => {
     assertIncrementalEqualsFresh([
-      (m) => m.appendStream(text(1, "   \n  ")), // dropped
+      (m) => m.appendStream(text(1, "   \n  ")),
       (m) => m.appendStream(text(2, "real")),
       (m) => m.appendStream(text(3, "  ", "agent-Z")), // blank child — must NOT seed a group
-      (m) => m.appendStream(toolUse(4, "c1", "Read", "agent-Z")), // now the group forms
+      (m) => m.appendStream(toolUse(4, "c1", "Read", "agent-Z")),
     ]);
   });
 
@@ -361,14 +361,13 @@ describe("ConversationModel — node object identity is stable iff content is un
     const priorText = first.nodes.find((n) => n.type === "text")!;
     const priorTool = first.nodes.find((n) => n.type === "tool")!;
 
-    m.appendStream(text(3, "b")); // unrelated, later, top-level
+    m.appendStream(text(3, "b"));
     const second = m.derive();
 
     // Every prior node keeps its exact object identity across the derive. FALSIFY: rebuild fresh
     // objects every derive (no retained accumulator) → these `toBe`s go RED.
     expect(second.nodes.find((n) => n.type === "text" && n.text === "a")).toBe(priorText);
     expect(second.nodes.find((n) => n.type === "tool")).toBe(priorTool);
-    // The new node is genuinely new.
     expect(second.nodes.find((n) => n.type === "text" && n.text === "b")).not.toBe(priorText);
   });
 
@@ -382,10 +381,10 @@ describe("ConversationModel — node object identity is stable iff content is un
     m.appendStream(text(2, "a"));
     m.appendPermissionRequest(permReq(3, "p1", "ExitPlanMode"));
     const first = m.derive();
-    expect(first.working).toEqual({ label: WAITING_INPUT_LABEL }); // the hold is active
+    expect(first.working).toEqual({ label: WAITING_INPUT_LABEL });
     const priorText = first.nodes.find((n) => n.type === "text")!;
 
-    m.appendPermissionResolved("p1", SYNTH); // synthetic, seq 1e9
+    m.appendPermissionResolved("p1", SYNTH);
     const second = m.derive();
 
     // The synthetic took effect on the fast path (the hold cleared). FALSIFY: drop the
@@ -439,11 +438,11 @@ describe("ConversationModel — node object identity is stable iff content is un
 describe("ConversationModel — segment stamp on nodes + segment-qualified nodeKey", () => {
   it("stamps segment 0 before a resume and segment 1 after, and nodeKey keeps same-seq nodes distinct", () => {
     const m = new ConversationModel();
-    m.appendStream(sysInit({ seq: 0 })); // segment 0
-    m.appendStream(text(5, "a")); // segment 0, wire seq 5
-    m.appendExit({ code: 0 }, SYNTH); // terminal
+    m.appendStream(sysInit({ seq: 0 }));
+    m.appendStream(text(5, "a"));
+    m.appendExit({ code: 0 }, SYNTH);
     m.appendStream(sysInit({ seq: 0 })); // RESUME — fresh system_init → segment 1, wire seq reset
-    m.appendStream(text(5, "a")); // segment 1, SAME wire seq + text as the first
+    m.appendStream(text(5, "a"));
 
     const nodes = m.derive().nodes;
     const texts = nodes.filter((n) => n.type === "text");
@@ -486,8 +485,6 @@ describe("ConversationModel — consecutive user echoes get distinct, ordered ke
     const keys = users.map((u) => nodeKey(u));
     expect(new Set(keys).size).toBe(2);
 
-    // The first echo is still at exactly +0.5 (ordering unchanged), and order + identity are stable
-    // across a re-derive.
     expect(users[0].seq).toBe(1.5);
     expect(users[1].seq).toBeGreaterThan(1.5);
     expect(users[1].seq).toBeLessThan(2); // strictly before the next wire frame's slot

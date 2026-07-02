@@ -2455,8 +2455,6 @@ fn viewed_stamp(now_ms: i64, mtime_ms: Option<i64>) -> i64 {
     }
 }
 
-/// Mark a plan viewed: `viewed[path] = viewed_stamp(now_ms, file_mtime_ms)`. Persists
-/// atomically (outside the lock).
 #[tauri::command]
 fn mark_viewed(path: String, state: tauri::State<'_, Mutex<AppState>>) {
     let stamp = viewed_stamp(now_ms(), file_mtime_ms(&path));
