@@ -24,10 +24,10 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
 | Conversation / live-session | 7 | 25 | 0 | 1 | 0 | 0 | 0 | 5 | 38 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
-| Sidecar / agent-driver | 5 | 15 | 0 | 0 | 4 | 0 | 0 | 4 | 28 |
+| Sidecar / agent-driver | 4 | 16 | 0 | 0 | 4 | 0 | 0 | 4 | 28 |
 | Rust backend (`src-tauri/`) | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | 3 |
 | Other | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | 19 | 69 | 5 | 1 | 4 | 3 | 1 | 22 | 124 |
+| **Total** | 18 | 70 | 5 | 1 | 4 | 3 | 1 | 22 | 124 |
 
 ## Reading-pane render
 
@@ -715,7 +715,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 **Anchor:** `sidecar/index.ts:674` — `function currentSession(): Session {`
 
 ### hostpolicy-unconditional-write
-**`type-level`** — hostPolicy is a required field on every decision and applied unconditionally before the action switch.
+**`runtime-guard`** — hostPolicy is a required field on every decision and applied unconditionally before the action switch.
 
 **Prevents:** a late command on a dead session leaving the host-policy backstop stale.
 

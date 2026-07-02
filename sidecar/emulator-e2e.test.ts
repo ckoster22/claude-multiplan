@@ -25,8 +25,8 @@
 // Date.now(). The goldens' correctness is established by the per-scenario frame assertions that run
 // BEFORE the golden comparison — the goldens then pin the exact bytes against drift.
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { spawn, spawnSync, execFileSync, type ChildProcess } from "node:child_process";
 import {
   readdirSync,
   readFileSync,
@@ -101,11 +101,19 @@ interface Sidecar {
 let binaryPath = "";
 let scratchCwd = "";
 
+// A test that times out mid-await would otherwise orphan its spawned binary.
+const liveChildren = new Set<ChildProcess>();
+
+afterEach(() => {
+  for (const child of liveChildren) child.kill();
+});
+
 function startSidecar(scenario: string): Sidecar {
   const child = spawn(binaryPath, [], {
     env: { ...process.env, EMU_SCENARIO: scenario, CLAUDE_CODE_OAUTH_TOKEN: "emu-invalid" },
     stdio: ["pipe", "pipe", "pipe"],
   });
+  liveChildren.add(child);
   // Self-exiting scenarios (quota / fatal error) close the pipe under us — swallow the async EPIPE
   // instead of letting it surface as an uncaught stream error.
   child.stdin.on("error", () => {});
@@ -133,6 +141,7 @@ function startSidecar(scenario: string): Sidecar {
 
   const closed = new Promise<number | null>((resolveClosed) => {
     child.on("close", (code) => {
+      liveChildren.delete(child);
       // Release pending waiters: a child that exits without the awaited frame must fail the
       // caller's frame assertions with a real diff, not hang into the test timeout.
       for (const w of waiters.splice(0)) w.resolve();

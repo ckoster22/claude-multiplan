@@ -789,7 +789,7 @@ async function handleCommand(line: string): Promise<void> {
       // "acceptEdits"/"prototype" → "plan".
       const session = currentSession();
       const decision = decideSessionCommand(session, cmd);
-      // INVARIANT[hostpolicy-unconditional-write] (type-level): hostPolicy is a required field on every decision and applied unconditionally before the action switch.
+      // INVARIANT[hostpolicy-unconditional-write] (runtime-guard): hostPolicy is a required field on every decision and applied unconditionally before the action switch.
       //   prevents: a late command on a dead session leaving the host-policy backstop stale.
       hostPolicy = decision.hostPolicy;
       switch (decision.action) {
