@@ -3150,7 +3150,7 @@ fn hook_status() -> Result<bool, String> {
 ///   - file parses ⇒ `Ok(value)`.
 fn read_settings_value(path: &Path) -> Result<Value, String> {
     match std::fs::read(path) {
-        // INVARIANT[settings-refuse-on-unparseable] (runtime-guard): a present-but-unparseable settings file yields Err so callers (install/uninstall) propagate via `?` and refuse to write — an absent file yields Ok({}).
+        // INVARIANT[settings-refuse-on-unparseable] (runtime-guard): `read_settings_value` returns Err on a present-but-unparseable settings file (leaving it byte-for-byte untouched) and Ok({}) when absent; install/uninstall then refuse to write by propagating that Err via `?`. The guard is test-pinned; the `?` propagation at the two call sites (install_hook, uninstall_hook) is relied upon, not unit-exercised, because both are Tauri-command-bound to the real home dir.
         //   prevents: install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
         //   test: read_settings_value_refuses_unparseable_and_defaults_absent
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {
@@ -5080,11 +5080,17 @@ mod tests {
 
         // Present but unparseable ⇒ Err, so install/uninstall refuse to write over it.
         let corrupt = dir.join("settings.json");
-        std::fs::write(&corrupt, b"{ not : valid json @@@ ").expect("write garbage");
+        let garbage: &[u8] = b"{ not : valid json @@@ ";
+        std::fs::write(&corrupt, garbage).expect("write garbage");
         assert!(
             read_settings_value(&corrupt).is_err(),
             "a present-but-corrupt settings file must yield Err (refuse to clobber)"
         );
+        // The guard is read-only: the corrupt file is left byte-for-byte untouched. This is the
+        // clobber pin at the guard tier; the refuse-to-write at the install/uninstall call sites
+        // is carried by `?` propagation (see settings-refuse-on-unparseable), not exercised here.
+        let after = std::fs::read(&corrupt).expect("corrupt file still present");
+        assert_eq!(after, garbage, "read_settings_value must not rewrite the corrupt file");
 
         // Absent ⇒ Ok(empty object): nothing to preserve, a fresh merge target.
         let absent = dir.join("does-not-exist.json");

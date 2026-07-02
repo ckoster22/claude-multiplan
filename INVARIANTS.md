@@ -859,7 +859,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 **Tests:** `viewed_stamp_outlasts_simultaneous_and_future_edits`
 
 ### settings-refuse-on-unparseable
-**`runtime-guard`** — a present-but-unparseable settings file yields Err so callers (install/uninstall) propagate via `?` and refuse to write — an absent file yields Ok({}).
+**`runtime-guard`** — `read_settings_value` returns Err on a present-but-unparseable settings file (leaving it byte-for-byte untouched) and Ok({}) when absent; install/uninstall then refuse to write by propagating that Err via `?`. The guard is test-pinned; the `?` propagation at the two call sites (install_hook, uninstall_hook) is relied upon, not unit-exercised, because both are Tauri-command-bound to the real home dir.
 
 **Prevents:** install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
 
@@ -872,7 +872,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a config edit from silently re-opening inline/eval script execution (an XSS foothold) or plugin/object embedding in the shipped WebView.
 
-**Anchor:** `src-tauri/src/lib.rs:7179` — `#[test]`
+**Anchor:** `src-tauri/src/lib.rs:7185` — `#[test]`
 
 **Tests:** `csp_production_script_src_forbids_inline_and_eval`
 
