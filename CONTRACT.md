@@ -4638,3 +4638,43 @@ The emulator bytes ship in the production binary (reachable from `index.ts`), bu
 on the distinctive opt-in `EMU_SCENARIO` env var, so production behavior is unchanged. The fixtures are
 derived from the shapes pinned in `sidecar/normalize.test.ts` / `quota.test.ts`; in-process falsifiable
 tests (`sidecar/emulator.test.ts`) drive every scenario through the real normalize/decider functions.
+
+## Amendment 2026-07-02 — `sidecar/__goldens__/<name>.jsonl` frame-golden fixtures (captured fd-1 contract, additive, non-breaking)
+
+The `EMU_SCENARIO` emulator (Amendment 2026-06-26 above) now has a **spawned-binary e2e tier**
+(`sidecar/emulator-e2e.test.ts`) that pins the sidecar's fd-1 output as **committed golden fixtures**.
+These goldens are the **frame-contract source of truth** for what a real `agent-driver` process writes
+to stdout per scenario, intended for downstream replay — the frontend mock layer consumes them in the
+next sub-plan.
+
+**What a golden is.** `sidecar/__goldens__/<name>.jsonl` holds the *exact* stdout JSON lines — the
+committed `agent-stream` frames, one per line, trailing newline — captured from the REAL compiled
+`agent-driver` binary (`bun build --compile`, built once per suite run) spawned with `EMU_SCENARIO=<scenario>`
+and driven over the stdin JSON-lines protocol (`start` → `user` → terminal frame → `end`). A golden is
+captured/compared only **after** that scenario's behavioral assertions pass (frame-kind sequence, key
+fields, monotonic `seq`, `tool_use_id` correlation, exit code) — the assertions establish correctness;
+the golden then pins the exact bytes against drift (`checkGolden` compares byte-for-byte).
+
+**Which cases have goldens.** 17 files: one per registered scenario (all 16 `SCENARIO_NAMES`) plus
+`resume-fallback.jsonl` — a protocol-driven case (the `happy-text` scenario started with a bogus
+`start.resume`, pinning the `resume_fallback` frame; its `getSessionInfo` pre-flight is the one
+un-emulated SDK call, a local no-network session-store lookup). The `second-start-reject` e2e case is
+deliberately **assertions-only, no golden**: its pre-reject frame stream is `happy-text`'s, already pinned.
+
+**Determinism (no scrubbing).** The goldens are byte-stable *by construction*, not by post-capture
+scrubbing: `system_init` hardcodes cwd `/Users/emulator/work`, model `claude-emulator`, session id
+`emu-session`; every quota `resetAt` derives from the pinned `FIXED_RESET_EPOCH_MS`
+(`1750000000000`), never `Date.now()`. One binary-tier nuance: `quota-result.jsonl` shows
+`source:"rate_limit_event"`, because the rejected rate-limit event that pins that scenario's reset
+instant itself pauses the live session (`index.ts` gracefulExit 0 on the first `quota_exceeded`), so
+the trailing result-carrier message is never consumed at this tier — `decideResultQuota`'s
+structured-reuse branch is asserted in-process (`sidecar/emulator.test.ts`).
+
+**Regeneration.** `UPDATE_GOLDENS=1 npx vitest run sidecar/emulator-e2e.test.ts` rewrites every golden
+from a fresh binary run; without the env var a missing or mismatching golden fails the test. All
+spawned-binary e2e must stay in that single file (parallel test files would race two `bun build
+--compile` runs on the same output path and corrupt the binary).
+
+**`SCENARIO_NAMES` delta.** Since the 2026-06-26 amendment the registry has grown 12 → 16; the four
+additions (each with a golden) are: `overloaded-midturn`, `auth-failure`, `thrown-quota`,
+`stream-abort`. The 12 names listed in that amendment are unchanged and still valid.

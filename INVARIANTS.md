@@ -24,10 +24,10 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
 | Conversation / live-session | 7 | 25 | 0 | 1 | 0 | 0 | 0 | 5 | 38 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
-| Sidecar / agent-driver | 3 | 13 | 0 | 0 | 4 | 0 | 0 | 3 | 23 |
+| Sidecar / agent-driver | 5 | 15 | 0 | 0 | 4 | 0 | 0 | 4 | 28 |
 | Rust backend (`src-tauri/`) | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | 3 |
 | Other | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | 17 | 67 | 5 | 1 | 4 | 3 | 1 | 21 | 119 |
+| **Total** | 19 | 69 | 5 | 1 | 4 | 3 | 1 | 22 | 124 |
 
 ## Reading-pane render
 
@@ -705,35 +705,35 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** the SDK's silent self-flip widening the backstop.
 
-**Anchor:** `sidecar/index.ts:182` — `let hostPolicy: HostPolicy = "plan";`
+**Anchor:** `sidecar/index.ts:174` — `let hostPolicy: HostPolicy = "plan";`
 
 ### draining-flag-precedes-drain-await
 **`runtime-guard`** — sessionDraining is set before the drain await, and currentSession checks draining/dead first.
 
 **Prevents:** a command mid-drain routing to apply on a query being closed.
 
-**Anchor:** `sidecar/index.ts:694` — `function currentSession(): Session {`
+**Anchor:** `sidecar/index.ts:674` — `function currentSession(): Session {`
 
 ### hostpolicy-unconditional-write
 **`type-level`** — hostPolicy is a required field on every decision and applied unconditionally before the action switch.
 
 **Prevents:** a late command on a dead session leaving the host-policy backstop stale.
 
-**Anchor:** `sidecar/index.ts:814` — `hostPolicy = decision.hostPolicy;`
+**Anchor:** `sidecar/index.ts:794` — `hostPolicy = decision.hostPolicy;`
 
 ### setpermissionmode-toctou-trycatch-backstop
 **`runtime-guard`** — the await q.setPermissionMode is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
 
 **Prevents:** an unhandled rejection killing the sidecar process.
 
-**Anchor:** `sidecar/index.ts:828` — `try {`
+**Anchor:** `sidecar/index.ts:808` — `try {`
 
 ### setpermissionmode-exhaustiveness-guard
 **`type-level`** — every SessionCommandDecision.action is handled; an unhandled future variant is a compile error.
 
 **Prevents:** a new action silently falling through into the sibling case.
 
-**Anchor:** `sidecar/index.ts:847` — `const _exhaustive: never = decision.action;`
+**Anchor:** `sidecar/index.ts:827` — `const _exhaustive: never = decision.action;`
 
 ### plan-bash-write-blocklist-preserves-tests
 **`runtime-guard`** — under plan, write-shaped Bash is denied while read-only test runs stay allowed (best-effort blocklist, NOT a sandbox).
@@ -898,7 +898,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
 
-**Anchor:** `src-tauri/src/lib.rs:3156` — `Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {`
+**Anchor:** `src-tauri/src/lib.rs:3154` — `Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {`
 
 **Tests:** `read_settings_value_refuses_unparseable_and_defaults_absent`
 
@@ -907,7 +907,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a config edit from silently re-opening inline/eval script execution (an XSS foothold) or plugin/object embedding in the shipped WebView.
 
-**Anchor:** `src-tauri/src/lib.rs:7185` — `#[test]`
+**Anchor:** `src-tauri/src/lib.rs:7183` — `#[test]`
 
 **Tests:** `csp_production_script_src_forbids_inline_and_eval`
 
