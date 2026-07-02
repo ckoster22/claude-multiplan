@@ -19,7 +19,7 @@
 import { describe, it, expect } from "vitest";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createNormalizer, isOverloadedMessage, type SeqCounter } from "./normalize";
-import { decideRateLimitFrame, decideResultQuota } from "./quota";
+import { decideRateLimitFrame, decideResultQuota, parseResetFromError } from "./quota";
 import { decideBackoff, BACKOFF_MAX_RETRIES } from "./backoff";
 import {
   selectEmulatorScenario,
@@ -30,6 +30,11 @@ import {
   EMULATOR_SCENARIOS,
   SCENARIO_NAMES,
   SESSION_LIMIT_TEXT,
+  FIXED_RESET_EPOCH_MS,
+  AUTH_ERROR_MESSAGE,
+  THROWN_QUOTA_ERROR_MESSAGE,
+  STREAM_ABORT_ERROR_MESSAGE,
+  attemptMessages,
   resultOverload529,
   resultSuccess,
   assistantOverloaded,
@@ -52,9 +57,9 @@ function runAttempt(messages: SDKMessage[]): Array<Record<string, unknown>> {
   return frames;
 }
 
-/** The attempts[0] stream of a named scenario (the common single-attempt case). */
+/** The attempts[0] message stream of a named scenario (the common single-attempt case). */
 function scenarioAttempt0(name: string): SDKMessage[] {
-  return EMULATOR_SCENARIOS[name].attempts[0];
+  return attemptMessages(EMULATOR_SCENARIOS[name].attempts[0]);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +129,22 @@ describe("makeEmulatorQuery — per-attempt fake Query", () => {
     expect(a3.map((m) => (m as { type?: string }).type)).toEqual(
       a2.map((m) => (m as { type?: string }).type),
     );
+  });
+
+  it("a throw-tailed attempt yields its messages THEN throws out of the iteration", async () => {
+    const make = makeEmulatorQuery(EMULATOR_SCENARIOS["auth-failure"]);
+    const q = make({ prompt: "x" }) as AsyncIterable<SDKMessage>;
+    const seen: SDKMessage[] = [];
+    // FALSIFY: drop the `if (thenThrow) throw thenThrow()` tail in makeEmulatorQuery → the
+    // iteration completes normally → `.rejects` fails → RED.
+    await expect(
+      (async () => {
+        for await (const m of q) seen.push(m);
+      })(),
+    ).rejects.toThrow(AUTH_ERROR_MESSAGE);
+    // The scripted messages were yielded BEFORE the throw (index.ts emits them, THEN catches).
+    expect(seen.length).toBe(1);
+    expect((seen[0] as { type?: string }).type).toBe("system");
   });
 
   it("the fake Query exposes async iteration + no-op interrupt/setPermissionMode", async () => {
@@ -297,22 +318,25 @@ describe("scenario quota-rate-limit — rate_limit_event → quota_exceeded", ()
 });
 
 describe("scenario quota-result — usage-limit result → quota_exceeded", () => {
-  it("the usage-limit result normalizes to a quota_exceeded frame (parseable resetAt > 0)", () => {
+  it("the usage-limit result normalizes to a quota_exceeded frame pinned by the structured resetsAt", () => {
     const frames = runAttempt(scenarioAttempt0("quota-result"));
-    const quota = frames.find((f) => f.kind === "quota_exceeded")!;
+    // The preceding rejected rate_limit_event pins the reset instant: the normalizer retains its
+    // structured resetsAt (lastRateLimitInfo), so decideResultQuota takes the structured-reuse
+    // branch instead of parsing the wall string against an implicit Date.now() (which rolls daily).
+    // Two quota frames result IN-PROCESS (the event's own + the result-carrier's); the LIVE
+    // pipeline pauses on the first (index.ts gracefulExit(0) on any quota_exceeded).
+    const quotas = frames.filter((f) => f.kind === "quota_exceeded");
+    expect(quotas.length).toBe(2);
+    expect(quotas[0].source).toBe("rate_limit_event");
     // FALSIFY: change the fixture string to a NON-limit string → isUsageLimitText false → a plain
-    // `result` frame instead of quota_exceeded → RED.
-    expect(quota).toBeDefined();
-    expect(quota.source).toBe("result_error");
-    // The SESSION_LIMIT_TEXT carries a parseable "resets 2:10pm (America/Chicago)" clause, so the
-    // resetAt is a real future instant, NOT the sentinel 0. We assert it is a positive epoch-ms WITHOUT
-    // an exact-equality to a SECOND, independently-computed decideResultQuota(...) call: both the
-    // normalizer and such a cross-check default `nowMs` to their OWN `Date.now()`, so across a
-    // day-boundary tick the two could disagree by 24h (parseClockTimeInTz rolls to "next future"
-    // relative to each call's now). That is a real, if rare, flake — so the frame-level assertion
-    // stays day-boundary-agnostic.
-    expect(quota.resetAt as number).toBeGreaterThan(0);
-    // And it is NOT a plain result.
+    // `result` frame instead of the second quota_exceeded → RED.
+    expect(quotas[1].source).toBe("result_error");
+    // Deterministic: BOTH carry the pinned epoch, never a Date.now()-dependent parse.
+    // FALSIFY: drop the rateLimitRejected fixture → the result-carrier resetAt comes from
+    // parseClockTimeInTz(Date.now()) ≠ the pinned epoch → RED.
+    expect(quotas[0].resetAt).toBe(FIXED_RESET_EPOCH_MS);
+    expect(quotas[1].resetAt).toBe(FIXED_RESET_EPOCH_MS);
+    // And the usage-limit result is NOT a plain result.
     expect(frames.some((f) => f.kind === "result")).toBe(false);
   });
 
@@ -335,7 +359,7 @@ describe("scenario quota-result — usage-limit result → quota_exceeded", () =
 // ---------------------------------------------------------------------------
 describe("scenario overloaded-retry — overload predicate + backoff schedule", () => {
   it("attempts[0][0] is an in-band 529 overload (pre-output → retryable)", () => {
-    const a0 = EMULATOR_SCENARIOS["overloaded-retry"].attempts[0];
+    const a0 = attemptMessages(EMULATOR_SCENARIOS["overloaded-retry"].attempts[0]);
     // FALSIFY: replace resultOverload529() with a plain resultSuccess() → isOverloadedMessage false → RED.
     expect(isOverloadedMessage(a0[0])).toBe(true);
     // It is the FIRST message of the attempt → nothing emitted yet → index.ts treats it as retryable.
@@ -343,7 +367,7 @@ describe("scenario overloaded-retry — overload predicate + backoff schedule", 
   });
 
   it("the recovery attempt (index 2) is NOT an overload → the loop stops retrying", () => {
-    const a2 = EMULATOR_SCENARIOS["overloaded-retry"].attempts[2];
+    const a2 = attemptMessages(EMULATOR_SCENARIOS["overloaded-retry"].attempts[2]);
     // FALSIFY: make a2[0] a resultOverload529() → isOverloadedMessage true → the loop would retry → RED.
     expect(isOverloadedMessage(a2[0])).toBe(false);
     const frames = runAttempt(a2);
@@ -384,7 +408,7 @@ describe("scenario overloaded-exhausted — backoff exhaustion", () => {
     // 7 attempts → retries 1..6 are real, retry 7 exhausts (BACKOFF_MAX_RETRIES = 6).
     expect(sc.attempts.length).toBe(BACKOFF_MAX_RETRIES + 1);
     for (const att of sc.attempts) {
-      expect(isOverloadedMessage(att[0])).toBe(true);
+      expect(isOverloadedMessage(attemptMessages(att)[0])).toBe(true);
     }
   });
 
@@ -459,5 +483,59 @@ describe("emulator-scenes overload fixtures — predicate alignment", () => {
     expect(isOverloadedMessage(assistantOverloaded())).toBe(true);
     // FALSIFY: assert `.toBe(true)` here → a plain assistant text is NOT an overload → RED.
     expect(isOverloadedMessage(assistantText("just some prose"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// overloaded-midturn — the 529 carrier is positioned AFTER rendered output, so index.ts's
+// emittedAnyFrame gate routes it to the mid-turn branch (status + synthetic result, NO retry).
+// The frame emissions themselves are asserted at the spawned-binary tier (emulator-e2e.test.ts).
+// ---------------------------------------------------------------------------
+describe("scenario overloaded-midturn — overload AFTER rendered output", () => {
+  it("the 529 carrier follows a renderable assistant_text (mid-turn, not pre-output)", () => {
+    const msgs = scenarioAttempt0("overloaded-midturn");
+    const overloadIdx = msgs.findIndex((m) => isOverloadedMessage(m));
+    // FALSIFY: move resultOverload529() to the front of the fixture → overloadIdx 0 / no
+    // preceding assistant_text → RED (the scenario would exercise the pre-output retry instead).
+    expect(overloadIdx).toBeGreaterThan(0);
+    const before = runAttempt(msgs.slice(0, overloadIdx));
+    expect(before.some((f) => f.kind === "assistant_text")).toBe(true);
+    // Single attempt — the mid-turn branch must never re-query (a retry would clamp back onto
+    // this same attempt and duplicate the already-emitted text).
+    expect(EMULATOR_SCENARIOS["overloaded-midturn"].attempts.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Thrown-error scenarios — the PURE classification index.ts's catch block applies to the exact
+// thrown texts. (The resulting frame emissions + exit codes are asserted at the e2e tier.)
+// ---------------------------------------------------------------------------
+describe("thrown-error scenarios — catch-block classification of the thrown texts", () => {
+  // index.ts stringifies the caught Error, so the classified text carries the "Error: " prefix.
+  const asThrown = (msg: string) => "Error: " + msg;
+
+  it("auth-failure's text is auth-shaped — the quota backstop refuses it", () => {
+    // parseResetFromError's auth guard returns null FIRST, so even if index.ts's isAuth were
+    // bypassed this text could never be misclassified as a pausable quota.
+    // FALSIFY: strip the auth words from AUTH_ERROR_MESSAGE (leaving digits) → the guard no longer
+    // fires → RED.
+    expect(parseResetFromError(asThrown(AUTH_ERROR_MESSAGE))).toBeNull();
+  });
+
+  it("thrown-quota's text parses to the pinned, Date.now()-independent resetAt", () => {
+    // The bare-epoch branch must not consult nowMs — inject two absurd values and expect the SAME
+    // pinned instant from both.
+    // FALSIFY: reword the fixture to a relative form ("retry-after: 60") → the parse becomes
+    // nowMs + 60s → the two calls disagree → RED.
+    expect(parseResetFromError(asThrown(THROWN_QUOTA_ERROR_MESSAGE), 0)).toBe(FIXED_RESET_EPOCH_MS);
+    expect(parseResetFromError(asThrown(THROWN_QUOTA_ERROR_MESSAGE), 9_999_999_999_999)).toBe(
+      FIXED_RESET_EPOCH_MS,
+    );
+  });
+
+  it("stream-abort's text is neither auth nor quota-parseable → falls to the fatal sdk path", () => {
+    // FALSIFY: embed a 13-digit epoch in STREAM_ABORT_ERROR_MESSAGE → parseResetFromError returns
+    // it → index.ts would pause instead of dying → RED.
+    expect(parseResetFromError(asThrown(STREAM_ABORT_ERROR_MESSAGE))).toBeNull();
   });
 });

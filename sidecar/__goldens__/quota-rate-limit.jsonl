@@ -1,0 +1,2 @@
+{"seq":0,"kind":"system_init","model":"claude-emulator","cwd":"/Users/emulator/work","tools":["Read","Edit","Bash","Write","Task"],"skills":[],"slash_commands":[],"permission_mode":"default","session_id":"emu-session"}
+{"seq":1,"kind":"quota_exceeded","resetAt":1750000000000,"source":"rate_limit_event"}

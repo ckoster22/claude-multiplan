@@ -16,7 +16,7 @@ import type {
   Options,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { EMULATOR_SCENARIOS, type EmulatorScenario } from "./emulator-scenes";
+import { EMULATOR_SCENARIOS, attemptMessages, type EmulatorScenario } from "./emulator-scenes";
 
 // The compressed backoff cap used ONLY when the emulator is active (index.ts clamps the real 1–30min
 // schedule to this so the retry path stays genuinely exercised but fast). Inert when EMU_SCENARIO is
@@ -48,7 +48,9 @@ interface QueryArgs {
  * `attemptIndex`; each call picks `scenario.attempts[min(attemptIndex++, last)]` (so a backoff RETRY
  * gets the NEXT attempt; once past the last attempt it repeats the last). The returned `Query` is an
  * `async function*` over that attempt's messages — natively async-iterable — `Object.assign`-ed with
- * no-op control stubs and cast `as unknown as Query`.
+ * no-op control stubs and cast `as unknown as Query`. A throw-tailed attempt
+ * (`{ messages, thenThrow }`) yields its messages then throws `thenThrow()` out of the iteration,
+ * landing in index.ts's consume-loop catch exactly like a thrown SDK error.
  *
  * THE `as unknown as Query` CAST IS INTENTIONALLY LOAD-BEARING. An async generator natively provides
  * `next`/`return`/`throw`/`[Symbol.asyncIterator]`; the cast suppresses tsc errors for the ~15 `Query`
@@ -66,12 +68,15 @@ export function makeEmulatorQuery(
   const last = scenario.attempts.length - 1;
 
   return function emulatorQuery(_args: QueryArgs): Query {
-    const messages = scenario.attempts[Math.min(attemptIndex++, last)];
+    const attempt = scenario.attempts[Math.min(attemptIndex++, last)];
+    const messages = attemptMessages(attempt);
+    const thenThrow = Array.isArray(attempt) ? null : attempt.thenThrow;
 
     async function* gen(): AsyncGenerator<SDKMessage> {
       for (const msg of messages) {
         yield msg;
       }
+      if (thenThrow) throw thenThrow();
     }
 
     const q = gen();

@@ -201,16 +201,42 @@ export function resultUsageLimit(text: string = SESSION_LIMIT_TEXT): SDKMessage 
 // ---------------------------------------------------------------------------
 // Scenario registry. `attempts[i]` is the message stream the i-th query() call replays; index >= 1
 // only occurs on a backoff retry (the overloaded scenarios). All others have a single attempt.
+// An attempt is either a plain message array (the stream ends normally) or a throw-tailed shape:
+// the fake query yields `messages` then THROWS `thenThrow()` — driving index.ts's catch block
+// (auth / thrown-quota / generic-sdk classification), which a message fixture cannot reach.
 // ---------------------------------------------------------------------------
+
+export type EmulatorAttempt =
+  | SDKMessage[]
+  | { messages: SDKMessage[]; thenThrow: () => Error };
+
+/** The raw messages of an attempt, regardless of how it ends (normal return or throw). */
+export function attemptMessages(attempt: EmulatorAttempt): SDKMessage[] {
+  return Array.isArray(attempt) ? attempt : attempt.messages;
+}
 
 export interface EmulatorScenario {
   name: string;
-  attempts: SDKMessage[][];
+  attempts: EmulatorAttempt[];
 }
 
 // Borrowed realistic tool inputs (paths mirror the app's plan/prototype/review conventions).
 const PLANS_PATH = "/Users/emulator/.claude/plans/emulator-plan.md";
 const PROTOTYPE_PATH = "/Users/emulator/work/.plan-tree/prototype/preview.html";
+
+// The one pinned reset instant every quota fixture carries. Epoch-MS (>= 1e12 → passes through
+// toEpochMs unchanged) and embedded VERBATIM in the thrown-quota error text so parseResetFromError's
+// bare-epoch branch yields it Date.now()-independently. Relative forms (retry-after deltas, ISO
+// offsets) are BANNED in fixtures — they resolve against the wall clock and flake the goldens.
+export const FIXED_RESET_EPOCH_MS = 1_750_000_000_000;
+
+// Thrown-error texts, exported so tests assert the classification the REAL index.ts catch block
+// applies to these exact strings (isAuth regex / parseResetFromError).
+export const AUTH_ERROR_MESSAGE = "401 Unauthorized: OAuth token expired";
+export const THROWN_QUOTA_ERROR_MESSAGE =
+  "Claude usage limit reached; the limit will reset at " + FIXED_RESET_EPOCH_MS + ".";
+export const STREAM_ABORT_ERROR_MESSAGE =
+  "stream disconnected: ECONNRESET while reading the response body";
 
 const SCENARIOS: EmulatorScenario[] = [
   {
@@ -305,7 +331,7 @@ const SCENARIOS: EmulatorScenario[] = [
       [
         sysInit(),
         // epoch-ms (>= 1e12) so it passes through extractResetAt unchanged.
-        rateLimitRejected(1_750_000_000_000),
+        rateLimitRejected(FIXED_RESET_EPOCH_MS),
       ],
     ],
   },
@@ -314,6 +340,13 @@ const SCENARIOS: EmulatorScenario[] = [
     attempts: [
       [
         sysInit(),
+        // The rejected event PINS the reset instant: without it, decideResultQuota falls back to
+        // parseClockTimeInTz on the wall string with an implicit Date.now() — a resetAt that rolls
+        // DAILY (nondeterministic fixtures/goldens). With it, the structured-reuse branch yields
+        // FIXED_RESET_EPOCH_MS. NOTE: in the LIVE pipeline index.ts pauses (gracefulExit 0) on the
+        // rejected event's own quota_exceeded frame, so the trailing result-carrier is consumed
+        // only by the in-process tests (which drive every message through normalize).
+        rateLimitRejected(FIXED_RESET_EPOCH_MS),
         resultUsageLimit(SESSION_LIMIT_TEXT),
       ],
     ],
@@ -361,6 +394,53 @@ const SCENARIOS: EmulatorScenario[] = [
         assistantText("Starting the task…"),
         resultError("error_during_execution", "the tool crashed mid-turn"),
       ],
+    ],
+  },
+  {
+    name: "overloaded-midturn",
+    // The 529 arrives AFTER rendered output (assistant_text) — index.ts's mid-turn branch: an
+    // out-of-band `status` + the synthetic overloadResultFrame, NO retry (a single attempt is the
+    // proof: a retry would re-query and clamp to this same attempt, duplicating frames).
+    attempts: [
+      [
+        sysInit(),
+        assistantText("Partial answer before the overload hit."),
+        resultOverload529(),
+      ],
+    ],
+  },
+  {
+    name: "auth-failure",
+    // Throw an auth-shaped error (matches index.ts's isAuth /auth|token|unauthor|401|oauth/i) →
+    // fatal `error` frame error_kind:"auth", exit 1.
+    attempts: [
+      {
+        messages: [sysInit()],
+        thenThrow: () => new Error(AUTH_ERROR_MESSAGE),
+      },
+    ],
+  },
+  {
+    name: "thrown-quota",
+    // Throw a quota-shaped error: NOT auth-shaped, and parseResetFromError's bare-epoch branch
+    // reads the embedded FIXED_RESET_EPOCH_MS → out-of-band quota_exceeded source:"thrown_error",
+    // graceful exit 0.
+    attempts: [
+      {
+        messages: [sysInit()],
+        thenThrow: () => new Error(THROWN_QUOTA_ERROR_MESSAGE),
+      },
+    ],
+  },
+  {
+    name: "stream-abort",
+    // Throw a generic transport error (neither auth-shaped nor reset-parseable) → fatal `error`
+    // frame error_kind:"sdk", exit 1.
+    attempts: [
+      {
+        messages: [sysInit(), assistantText("Working on it…")],
+        thenThrow: () => new Error(STREAM_ABORT_ERROR_MESSAGE),
+      },
     ],
   },
 ];

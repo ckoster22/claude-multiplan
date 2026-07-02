@@ -1,0 +1,7 @@
+{"seq":0,"kind":"status","label":"Overloaded (529) — retrying in 1m (retry 1/6)"}
+{"seq":1,"kind":"status","label":"Overloaded (529) — retrying in 2m (retry 2/6)"}
+{"seq":2,"kind":"status","label":"Overloaded (529) — retrying in 4m (retry 3/6)"}
+{"seq":3,"kind":"status","label":"Overloaded (529) — retrying in 8m (retry 4/6)"}
+{"seq":4,"kind":"status","label":"Overloaded (529) — retrying in 16m (retry 5/6)"}
+{"seq":5,"kind":"status","label":"Overloaded (529) — retrying in 30m (retry 6/6)"}
+{"seq":6,"kind":"error","error_kind":"sdk","message":"Anthropic API overloaded (HTTP 529); retried 6× over ~61 min, giving up.","fatal":true}
