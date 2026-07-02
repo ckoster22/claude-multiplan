@@ -4599,3 +4599,42 @@ inline styles into a bundled stylesheet.
   loads (JS bundle executes + IPC `connect-src` works), a mermaid diagram renders WITH styling and
   multi-line labels intact (`style-src` concession survives Tauri's nonce injection), a local image
   displays (`img-src data:`), and a highlighted code block renders.
+
+---
+
+## Amendment 2026-06-26 — `EMU_SCENARIO` scripted-fixture LLM emulator (SEAM A, test-only, additive, non-breaking)
+
+A new **test seam (SEAM A)** lets the `agent-driver` sidecar replay a named, fully-scripted conversation
+**without spending a token or touching the real Anthropic API** — for fast, deterministic, diffable
+integration coverage of the live-session pipeline.
+
+**What it does.** When the env var `EMU_SCENARIO` is set to a known scenario name, the sidecar swaps the
+SDK's `query()` for a fake one (`sidecar/emulator.ts` `makeEmulatorQuery`) that replays a fixed sequence of
+**raw `SDKMessage`** objects (`sidecar/emulator-scenes.ts`) — one hop *upstream* of the normalizer, so the
+real `normalize` → quota/overload/backoff/permission logic actually runs against the fixtures. The emitted
+fd-1 frames are **exactly the existing committed `agent-stream` vocabulary** (`system_init`,
+`assistant_text`, `tool_use`, `tool_result`, `subagent_started`, `permission_denied`, `result`,
+`quota_exceeded`, `status`, `mode_change`) — **no new wire kinds, no command/event-surface change**. Rust
+and the frontend are untouched and unaware of the seam.
+
+**Gating (load-bearing).** The seam is inert unless `EMU_SCENARIO` is set to a *known* name:
+- unset / empty / unknown value → `selectEmulatorScenario` returns `null` → the real SDK `query()` runs,
+  **byte-identical to before** (the `queryImpl` indirection and the backoff clamp are both identities when
+  the scenario is null);
+- when active, the sidecar logs `[emulator] ACTIVE scenario=<name>` **to stderr** (never fd 1), so a
+  token-free run is never mistaken for a real one.
+
+**Backoff compression.** Under an active emulator the 529-retry sleep is clamped to `EMU_BACKOFF_MS` (10ms)
+so the retry path runs fast yet genuinely (the loop still breaks → backs off → re-queries). The user-facing
+status *label* still shows the un-clamped real schedule (e.g. "retrying in 1m"); a ~10ms retry under a "1m"
+label is correct by design, not a discrepancy.
+
+**`SCENARIO_NAMES`** (the valid `EMU_SCENARIO` values, from `sidecar/emulator-scenes.ts`):
+`happy-text`, `tool-call`, `plan-write`, `prototype-write`, `review-cycle`, `subagent-fanout`,
+`quota-rate-limit`, `quota-result`, `overloaded-retry`, `overloaded-exhausted`, `permission-denied`,
+`error-midstream`.
+
+The emulator bytes ship in the production binary (reachable from `index.ts`), but activation is hard-gated
+on the distinctive opt-in `EMU_SCENARIO` env var, so production behavior is unchanged. The fixtures are
+derived from the shapes pinned in `sidecar/normalize.test.ts` / `quota.test.ts`; in-process falsifiable
+tests (`sidecar/emulator.test.ts`) drive every scenario through the real normalize/decider functions.

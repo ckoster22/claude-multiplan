@@ -35,6 +35,8 @@
     "session-resume.ts",
     "session-start.ts",
     "session-command.ts",
+    "emulator.ts",
+    "emulator-scenes.ts",
     "user-content.ts",
     "frames.ts",
     "cli-plans.ts",

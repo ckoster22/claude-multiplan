@@ -700,6 +700,41 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `sidecar/env-overrides.ts:32` — `export function optionOverridesFromEnv(`
 
+### hostpolicy-host-written-only
+**`convention`** — hostPolicy is updated only by the start and set-permission-mode handlers, never from SDK mode_change frames.
+
+**Prevents:** the SDK's silent self-flip widening the backstop.
+
+**Anchor:** `sidecar/index.ts:182` — `let hostPolicy: HostPolicy = "plan";`
+
+### draining-flag-precedes-drain-await
+**`runtime-guard`** — sessionDraining is set before the drain await, and currentSession checks draining/dead first.
+
+**Prevents:** a command mid-drain routing to apply on a query being closed.
+
+**Anchor:** `sidecar/index.ts:694` — `function currentSession(): Session {`
+
+### hostpolicy-unconditional-write
+**`type-level`** — hostPolicy is a required field on every decision and applied unconditionally before the action switch.
+
+**Prevents:** a late command on a dead session leaving the host-policy backstop stale.
+
+**Anchor:** `sidecar/index.ts:814` — `hostPolicy = decision.hostPolicy;`
+
+### setpermissionmode-toctou-trycatch-backstop
+**`runtime-guard`** — the await q.setPermissionMode is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
+
+**Prevents:** an unhandled rejection killing the sidecar process.
+
+**Anchor:** `sidecar/index.ts:828` — `try {`
+
+### setpermissionmode-exhaustiveness-guard
+**`type-level`** — every SessionCommandDecision.action is handled; an unhandled future variant is a compile error.
+
+**Prevents:** a new action silently falling through into the sibling case.
+
+**Anchor:** `sidecar/index.ts:847` — `const _exhaustive: never = decision.action;`
+
 ### plan-bash-write-blocklist-preserves-tests
 **`runtime-guard`** — under plan, write-shaped Bash is denied while read-only test runs stay allowed (best-effort blocklist, NOT a sandbox).
 

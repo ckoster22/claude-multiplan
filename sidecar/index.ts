@@ -1,4 +1,4 @@
-// Agent SDK sidecar — Sub-Plan 01.
+// Agent SDK sidecar.
 //
 // A single-binary process (compiled with `bun build --compile`, see
 // scripts/sidecar-build.mjs) that embeds the Claude Agent SDK and speaks
@@ -33,6 +33,7 @@ import {
   type HostPolicy,
 } from "./permissions";
 import { optionOverridesFromEnv } from "./env-overrides";
+import { selectEmulatorScenario, makeEmulatorQuery, EMU_BACKOFF_MS } from "./emulator";
 import { resolveModelEffort } from "./model-effort";
 import { cliPlanRedirectSettings } from "./cli-plans";
 import { decideStart } from "./session-start";
@@ -168,6 +169,8 @@ class MessageQueue implements AsyncIterable<SDKUserMessage> {
 // Defaults to "plan" (fail closed: no file mutations until the host says otherwise) and is
 // RE-ASSERTED from the `start` command's own permissionMode when the session begins (see the
 // decideStart wiring), so a fresh session can never inherit a stale widened policy.
+// INVARIANT[hostpolicy-host-written-only] (convention): hostPolicy is updated only by the start and set-permission-mode handlers, never from SDK mode_change frames.
+//   prevents: the SDK's silent self-flip widening the backstop.
 let hostPolicy: HostPolicy = "plan";
 
 // The session's working directory, captured from the `start` command. The permission gate's
@@ -305,6 +308,19 @@ if (envOverrides.effort !== undefined || envOverrides.model !== undefined) {
     JSON.stringify(envOverrides),
     "(AGENT_EFFORT/AGENT_MODEL)",
   );
+}
+
+// SCRIPTED-FIXTURE LLM EMULATOR (SEAM A) — read ONCE at startup. Indirection so the sole query()
+// call site below resolves to either the real SDK `query` (the default) or a fake one that replays
+// a named sequence of RAW SDKMessages (see sidecar/emulator.ts / emulator-scenes.ts). Entirely
+// gated on EMU_SCENARIO: unset/unknown → `emulatorScenario` is null → `queryImpl` stays the real
+// `query` → byte-identical to before. When active we log LOUDLY to stderr (never fd 1) so a token-
+// free emulator run can never be mistaken for a real one.
+let queryImpl: typeof query = query;
+const emulatorScenario = selectEmulatorScenario(process.env);
+if (emulatorScenario) {
+  queryImpl = makeEmulatorQuery(emulatorScenario) as unknown as typeof query;
+  logErr("[emulator]", "ACTIVE scenario=" + emulatorScenario.name);
 }
 
 function buildOptions(start: StartCmd) {
@@ -457,7 +473,7 @@ async function runSession(start: StartCmd): Promise<void> {
     }
     attempt++;
 
-    q = query({ prompt: queue, options });
+    q = queryImpl({ prompt: queue, options });
 
     // Per-ATTEMPT overload bookkeeping (reset each attempt). `emittedAnyFrame` gates the retry:
     // we only re-drive a PRE-OUTPUT overload (no assistant_text/tool_use emitted yet this attempt);
@@ -589,8 +605,14 @@ async function runSession(start: StartCmd): Promise<void> {
 
     // Abortable wait. A SIGTERM/SIGINT/`end` during the sleep aborts it (backoffAbort, wired into
     // gracefulExit.onBeforeDrain) — stop retrying and let graceful shutdown proceed.
+    //
+    // EMULATOR CLAMP: when the scripted-fixture emulator is active, compress the real 1–30min wait to
+    // EMU_BACKOFF_MS so the retry path runs fast yet GENUINELY (the loop still breaks→backs-off→re-
+    // queries). Inert when EMU_SCENARIO is unset (`emulatorScenario` null → identity). The status
+    // LABEL above intentionally still shows the un-clamped real schedule (the user-facing retry clock).
+    const delayMs = emulatorScenario ? Math.min(decision.delayMs, EMU_BACKOFF_MS) : decision.delayMs;
     try {
-      await abortableSleep(decision.delayMs, backoffAbort.signal);
+      await abortableSleep(delayMs, backoffAbort.signal);
     } catch {
       logErr("[sidecar] 529 backoff sleep aborted — shutting down, no further retries.");
       return;
@@ -647,6 +669,8 @@ const gracefulExit = makeGracefulExit({
 // decideSessionCommand. `q` is surfaced ONLY in the `live` variant, so the SDK call it gates is
 // unreachable once the session is starting/draining/dead. Draining/dead are checked FIRST: once
 // teardown has begun or the session has ended, that is the truth regardless of a stale `q`.
+// INVARIANT[draining-flag-precedes-drain-await] (runtime-guard): sessionDraining is set before the drain await, and currentSession checks draining/dead first.
+//   prevents: a command mid-drain routing to apply on a query being closed.
 function currentSession(): Session {
   if (sessionDraining) return { kind: "draining" };
   if (sessionDead) return { kind: "dead" };
@@ -765,6 +789,8 @@ async function handleCommand(line: string): Promise<void> {
       // "acceptEdits"/"prototype" → "plan".
       const session = currentSession();
       const decision = decideSessionCommand(session, cmd);
+      // INVARIANT[hostpolicy-unconditional-write] (type-level): hostPolicy is a required field on every decision and applied unconditionally before the action switch.
+      //   prevents: a late command on a dead session leaving the host-policy backstop stale.
       hostPolicy = decision.hostPolicy;
       switch (decision.action) {
         case "apply":
@@ -777,6 +803,8 @@ async function handleCommand(line: string): Promise<void> {
           // setPermissionMode must be logged, never crash the process (same guard as the `interrupt`
           // handler below).
           if (session.kind === "live") {
+            // INVARIANT[setpermissionmode-toctou-trycatch-backstop] (runtime-guard): the await q.setPermissionMode is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
+            //   prevents: an unhandled rejection killing the sidecar process.
             try {
               await session.q.setPermissionMode(sdkPermissionMode(cmd.mode));
             } catch (e) {
@@ -794,6 +822,8 @@ async function handleCommand(line: string): Promise<void> {
           // Exhaustiveness guard: if SessionCommandDecision["action"] grows a variant and a case here
           // is missed, this is a COMPILE error (never-assignment) rather than a silent fall-through
           // into `case "interrupt"` below (the sidecar tsconfig sets no noFallthroughCasesInSwitch).
+          // INVARIANT[setpermissionmode-exhaustiveness-guard] (type-level): every SessionCommandDecision.action is handled; an unhandled future variant is a compile error.
+          //   prevents: a new action silently falling through into the sibling case.
           const _exhaustive: never = decision.action;
           return _exhaustive;
         }
