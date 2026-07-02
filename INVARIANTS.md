@@ -22,11 +22,11 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Domain | type-level | runtime-guard | precedence | reducer-total | containment | sanitization | test-pinned | convention | Total |
 |---|---|---|---|---|---|---|---|---|---|
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
-| Conversation / live-session | 7 | 19 | 0 | 1 | 0 | 0 | 0 | 5 | 32 |
+| Conversation / live-session | 7 | 25 | 0 | 1 | 0 | 0 | 0 | 5 | 38 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
 | Sidecar / agent-driver | 3 | 13 | 0 | 0 | 4 | 0 | 0 | 3 | 23 |
 | Other | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | 17 | 59 | 5 | 1 | 4 | 3 | 0 | 21 | 110 |
+| **Total** | 17 | 65 | 5 | 1 | 4 | 3 | 0 | 21 | 116 |
 
 ## Reading-pane render
 
@@ -366,7 +366,34 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** an interrupted tool mislabeled 'done'/rendered pulsing
 
-**Anchor:** `src/conversation/render.ts:129` — `function statusLabel(status: ToolStatus): string {`
+**Anchor:** `src/conversation/render.ts:131` — `function statusLabel(status: ToolStatus): string {`
+
+### countdown-single-interval-per-banner-lifetime
+**`runtime-guard`** — at most one live countdown interval exists — armed once when a waiting-banner element is built (teardown-before-arm) and torn down when that element leaves the container; a reused unchanged banner keeps its original interval.
+
+**Prevents:** a leaked or stale-rearmed countdown interval ticking against a replaced / removed banner.
+
+**Anchor:** `src/conversation/render.ts:525` — `let countdownTimer: ReturnType<typeof setInterval> | null = null;`
+
+**Tests:** `render.reconcile.test.ts (d) an unchanged waiting banner across two renders arms setInterval exactly once, plus the quota-banner tests`
+
+### reconcile-interactive-always-rebuilt
+**`runtime-guard`** — question_request / permission_request nodes are rebuilt every render even when the node object is ===, never reusing the element.
+
+**Prevents:** un-submitted form state (checked radios / draft text) persisting across rerenders.
+
+**Anchor:** `src/conversation/render.ts:822` — `function isInteractiveNode(node: RenderNode | SubagentGroupNode): boolean {`
+
+**Tests:** `render.reconcile.test.ts (f) — rerendering the same model does NOT reuse the question card element`
+
+### keyed-element-reuse-by-node-identity
+**`runtime-guard`** — a node whose object identity is unchanged across derives reuses its cached DOM element; a fresh element is built only when the object changed or is missing.
+
+**Prevents:** a full-DOM rebuild every frame — interval churn, image flicker, and lost scroll / selection / focus.
+
+**Anchor:** `src/conversation/render.ts:935` — `function obtainElem(`
+
+**Tests:** `render.reconcile.test.ts identity tests (a) same-tree rerender reuses every element and (b) an append reuses all prior elements`
 
 ### tool-status-four-state
 **`type-level`** — a tool-call row's status is exactly running|done|error|interrupted.
@@ -375,19 +402,44 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `src/conversation/stream.ts:32` — `export type ToolStatus = "running" | "done" | "error" | "interrupted";`
 
+### incremental-derive-equals-fresh-replay
+**`runtime-guard`** — the incremental fast path is taken only when it provably matches a from-scratch replay; a first derive, a dirtied quota banner, a terminal frame, or an out-of-order wire seq forces a full replay instead.
+
+**Prevents:** an incrementally-fed model drifting from a fresh full replay (the storyboard oracle covers only the replay path).
+
+**Anchor:** `src/conversation/stream.ts:630` — `let fallback = this.acc === null || this.quotaDirty;`
+
+**Tests:** `stream.incremental.test.ts incremental-equals-fresh equivalence battery over adversarial sequences`
+
 ### segment-arrival-monotonic
 **`runtime-guard`** — each event gets a session-segment number in arrival order; each subsequent system_init opens the next segment.
 
 **Prevents:** seq-order scrambling across a resume (which resets the wire seq)
 
-**Anchor:** `src/conversation/stream.ts:498` — `const segmentOf = new Map<ModelEvent, number>();`
+**Anchor:** `src/conversation/stream.ts:706` — `const segmentOf = new Map<ModelEvent, number>();`
 
 ### turn-end-demotion-segment-and-seq-scoped
 **`reducer-total`** — a still-running tool is demoted to interrupted iff a turn-terminal frame is causally after it, compared (segment,seq) lexicographically.
 
 **Prevents:** a running turn-N tool flipped by an earlier turn's terminal, or a resumed-session tool flipped by the prior session's synthetic exit
 
-**Anchor:** `src/conversation/stream.ts:833` — `for (const tool of toolById.values()) {`
+**Anchor:** `src/conversation/stream.ts:1053` — `function demoteAbandonedTools(acc: DeriveAccum): void {`
+
+### derive-snapshot-isolation
+**`runtime-guard`** — the fast path edits an earlier node copy-on-write (a fresh object replaces the old), never mutating a node a prior derive() already handed out.
+
+**Prevents:** a caller-held tree mutating underneath the renderer's object-identity checks.
+
+**Anchor:** `src/conversation/stream.ts:1233` — `function liveSink(acc: DeriveAccum): DeriveSink {`
+
+**Tests:** `stream.incremental.test.ts identity test (a) — a correlating tool_result yields a NEW node while a tree held from before still shows 'running'`
+
+### replay-reconciles-node-identity
+**`runtime-guard`** — after a full replay, a content-unchanged node keeps its previous object identity (only changed/new nodes are fresh).
+
+**Prevents:** a full-replay fallback needlessly re-creating every node object and forcing the renderer to rebuild unchanged DOM
+
+**Anchor:** `src/conversation/stream.ts:1319` — `function reconcileIdentity(fresh: DeriveAccum, prev: DeriveAccum): void {`
 
 ## App shell — selection / review / gates
 

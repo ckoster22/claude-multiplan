@@ -519,6 +519,9 @@ function renderTextBubble(
 // would freeze/drift while the WebView is occluded/suspended and resume from a stale value).
 // Teardown-before-arm plus the single module slot guarantee at most one live interval ever exists, so
 // an unchanged banner reused across frames keeps its original interval and intervals never leak.
+// INVARIANT[countdown-single-interval-per-banner-lifetime] (runtime-guard): at most one live countdown interval exists — armed once when a waiting-banner element is built (teardown-before-arm) and torn down when that element leaves the container; a reused unchanged banner keeps its original interval.
+//   prevents: a leaked or stale-rearmed countdown interval ticking against a replaced / removed banner.
+//   test: render.reconcile.test.ts (d) an unchanged waiting banner across two renders arms setInterval exactly once, plus the quota-banner tests
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 let countdownVisHandler: (() => void) | null = null;
 // The banner element the live interval belongs to (null when none is armed). renderTree tears the
@@ -813,6 +816,9 @@ const reconcileState = new WeakMap<HTMLElement, ContainerState>();
 // text; a pending-permission prompt's affordances) that reusing the element would wrongly persist
 // across rerenders — so they are ALWAYS rebuilt, never reused even when the node object is ===. They
 // are O(1)-count, so rebuilding costs nothing.
+// INVARIANT[reconcile-interactive-always-rebuilt] (runtime-guard): question_request / permission_request nodes are rebuilt every render even when the node object is ===, never reusing the element.
+//   prevents: un-submitted form state (checked radios / draft text) persisting across rerenders.
+//   test: render.reconcile.test.ts (f) — rerendering the same model does NOT reuse the question card element
 function isInteractiveNode(node: RenderNode | SubagentGroupNode): boolean {
   return node.type === "question_request" || node.type === "permission_request";
 }
@@ -923,6 +929,9 @@ function buildWorkingIndicator(label: string): HTMLElement {
 
 // Obtain the element for `node` — reuse the cached one when the node object is unchanged, else build
 // fresh (a group also reconciles its header + children into a reused/rebuilt shell). Updates `cache`.
+// INVARIANT[keyed-element-reuse-by-node-identity] (runtime-guard): a node whose object identity is unchanged across derives reuses its cached DOM element; a fresh element is built only when the object changed or is missing.
+//   prevents: a full-DOM rebuild every frame — interval churn, image flicker, and lost scroll / selection / focus.
+//   test: render.reconcile.test.ts identity tests (a) same-tree rerender reuses every element and (b) an append reuses all prior elements
 function obtainElem(
   parent: HTMLElement,
   node: RenderNode | SubagentGroupNode,

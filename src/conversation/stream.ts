@@ -624,6 +624,9 @@ export class ConversationModel {
     // all force a replay. The scan tracks a running max so an out-of-order pair WITHIN this batch is
     // caught too. Deciding before touching `acc` keeps the previous accumulator intact for
     // reconciliation.
+    // INVARIANT[incremental-derive-equals-fresh-replay] (runtime-guard): the incremental fast path is taken only when it provably matches a from-scratch replay; a first derive, a dirtied quota banner, a terminal frame, or an out-of-order wire seq forces a full replay instead.
+    //   prevents: an incrementally-fed model drifting from a fresh full replay (the storyboard oracle covers only the replay path).
+    //   test: stream.incremental.test.ts incremental-equals-fresh equivalence battery over adversarial sequences
     let fallback = this.acc === null || this.quotaDirty;
     if (!fallback) {
       let running = this.maxProcessedSeq;
@@ -1224,6 +1227,9 @@ function batchSink(acc: DeriveAccum, placed: Placed[]): DeriveSink {
 
 // The fast-path sink: insert nodes into the LIVE topNodes / group children, and apply edits to earlier
 // nodes copy-on-write so a node's object identity changes IFF its content changes.
+// INVARIANT[derive-snapshot-isolation] (runtime-guard): the fast path edits an earlier node copy-on-write (a fresh object replaces the old), never mutating a node a prior derive() already handed out.
+//   prevents: a caller-held tree mutating underneath the renderer's object-identity checks.
+//   test: stream.incremental.test.ts identity test (a) — a correlating tool_result yields a NEW node while a tree held from before still shows 'running'
 function liveSink(acc: DeriveAccum): DeriveSink {
   return {
     emit: (node, parent) => {
