@@ -1,18 +1,14 @@
-// Falsifiable test for the ONE seam the picker reaches the wire through: the
-// real `defaultDeps().startSession` adapter. The orchestrator core's
-// OrchestratorDeps.startSession interface stays narrow ({cwd, permissionMode}) —
-// the model/effort resolution lives ONLY in this impure adapter, which reads
-// localStorage directly via resolveModelOptions(). The orchestrator unit tests
-// inject FAKE deps and never exercise defaultDeps, so without this test the
-// frontend→Rust wire would be uncovered (cf. the documented "green mocked tests
-// hid a cross-boundary bug" failure mode).
+// Falsifiable test for the ONE seam the per-plan execution model reaches the wire through: the
+// real `defaultDeps().startSession` adapter. The caller normally passes the active node's effective
+// `execution`; a node-less resume window passes none, and the adapter falls back to the hardcoded
+// decomposition default (Opus/high — a node-less resume is a master/acceptance context). The
+// orchestrator unit tests inject FAKE deps and never exercise defaultDeps, so without this test the
+// frontend→Rust wire would be uncovered (cf. the documented "green mocked tests hid a cross-boundary
+// bug" failure mode).
 //
-// We mock @tauri-apps/api/core's `invoke` so we can assert exactly what
-// `start_agent_session` receives, and drive a known preset through jsdom's
-// localStorage.
+// We mock @tauri-apps/api/core's `invoke` so we can assert exactly what `start_agent_session` receives.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { MODEL_PRESET_KEY } from "../model-picker";
 import { AUTO_RESUME_KEY } from "../auto-resume-setting";
 
 const invokeMock = vi.fn((..._args: unknown[]) => Promise.resolve(undefined));
@@ -24,8 +20,8 @@ import { defaultDeps } from "./orchestrator";
 
 // jsdom's bundled localStorage is a non-functional stub in this harness (it warns
 // `--localstorage-file was provided without a valid path` and lacks setItem/clear).
-// Install a tiny Map-backed Storage so the real adapter's resolveModelOptions() —
-// which reads the GLOBAL localStorage — sees our persisted preset.
+// Install a tiny Map-backed Storage so the real adapter's resolveAutoResumeBudget() —
+// which reads the GLOBAL localStorage — sees our persisted choice.
 function fakeStorage(): Storage {
   const map = new Map<string, string>();
   return {
@@ -40,56 +36,17 @@ function fakeStorage(): Storage {
   };
 }
 
-describe("defaultDeps().startSession forwards the resolved picker model/effort to Rust", () => {
+describe("defaultDeps().startSession forwards the execution model (or the fallback) to Rust", () => {
   beforeEach(() => {
     invokeMock.mockClear();
-    Object.defineProperty(globalThis, "localStorage", {
-      value: fakeStorage(),
-      configurable: true,
-      writable: true,
-    });
   });
 
-  it("forwards the persisted preset's model + effort alongside cwd/permissionMode", async () => {
-    // Persist a non-default preset so a wrong (default) value would be detectable.
-    localStorage.setItem(MODEL_PRESET_KEY, "fable-5");
-
+  it("falls back to the decomposition default (Opus 4.8 / high) when no execution is passed", async () => {
     const deps = defaultDeps();
     await deps.startSession({ cwd: "/tmp/proj", permissionMode: "plan" });
 
     expect(invokeMock).toHaveBeenCalledTimes(1);
-    // FALSIFY: drop the `...resolveModelOptions()` spread in the adapter → the args
-    // object lacks model/effort → RED.
-    expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
-      cwd: "/tmp/proj",
-      permissionMode: "plan",
-      model: "claude-fable-5",
-      effort: "low",
-    });
-  });
-
-  it("forwards the sonnet-5 preset's model + effort (falsifies the roster rename)", async () => {
-    // Persist the renamed sonnet preset: a stale "claude-sonnet-4-6" model in
-    // PRESET_OPTIONS["sonnet-5"] would surface here as the wrong wire arg.
-    localStorage.setItem(MODEL_PRESET_KEY, "sonnet-5");
-
-    const deps = defaultDeps();
-    await deps.startSession({ cwd: "/tmp/proj", permissionMode: "plan" });
-
-    expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
-      cwd: "/tmp/proj",
-      permissionMode: "plan",
-      model: "claude-sonnet-5",
-      effort: "medium",
-    });
-  });
-
-  it("falls back to the default preset (Opus 4.8 / high) when nothing is persisted", async () => {
-    // Opus's effort resolves from the global plan-reader-opus-effort key (default
-    // "high"); an empty store resolves Opus → effort "high".
-    const deps = defaultDeps();
-    await deps.startSession({ cwd: "/tmp/proj", permissionMode: "plan" });
-
+    // FALSIFY: change the adapter's fallback to any non-Opus/high model (or drop the spread) → RED.
     expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
       cwd: "/tmp/proj",
       permissionMode: "plan",
@@ -98,11 +55,7 @@ describe("defaultDeps().startSession forwards the resolved picker model/effort t
     });
   });
 
-  it("an explicit per-phase execution model WINS over the persisted global preset (E1)", async () => {
-    // Persist a global preset that MUST be ignored when the caller supplies `execution`: a wrong
-    // adapter (`...resolveModelOptions()` ignoring args.execution) would surface the opus preset here.
-    localStorage.setItem(MODEL_PRESET_KEY, "opus-4-8");
-
+  it("an explicit per-phase execution model WINS over the fallback (E1)", async () => {
     const deps = defaultDeps();
     await deps.startSession({
       cwd: "/tmp/proj",
@@ -110,8 +63,8 @@ describe("defaultDeps().startSession forwards the resolved picker model/effort t
       execution: { model: "claude-fable-5", effort: "low" },
     });
 
-    // FALSIFY: revert the adapter to `...resolveModelOptions()` (ignoring args.execution) → the wire
-    // carries the opus global preset, not fable → RED.
+    // FALSIFY: revert the adapter to ignore args.execution → the wire carries the Opus/high
+    // fallback, not fable → RED.
     expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
       cwd: "/tmp/proj",
       permissionMode: "plan",

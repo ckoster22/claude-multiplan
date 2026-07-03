@@ -456,84 +456,84 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** the "submit AND approve both in flight" state
 
-**Anchor:** `src/main.ts:154` — `type ActionInFlight = "none" | "submit" | "approve";`
+**Anchor:** `src/main.ts:156` — `type ActionInFlight = "none" | "submit" | "approve";`
 
 ### selection-single-truth
 **`type-level`** — the reading-pane target is exactly one closed-union variant — none | plan | sentinel | placeholder.
 
 **Prevents:** independent openPath/placeholder/sentinel flags drifting into a contradictory double-active state
 
-**Anchor:** `src/main.ts:241` — `type Selection =`
+**Anchor:** `src/main.ts:243` — `type Selection =`
 
 ### openpath-is-derived-never-assigned
 **`type-level`** — openPath is a pure function over `selection` (no backing field) — recomputed each call, never a stored lvalue writers can set.
 
 **Prevents:** a stored openPath desyncing from the active selection
 
-**Anchor:** `src/main.ts:253` — `function openPath(): AbsPath | null {`
+**Anchor:** `src/main.ts:255` — `function openPath(): AbsPath | null {`
 
 ### placeholder-selected-folded-into-selection
 **`type-level`** — the placeholder is "selected" iff `selection.k === "placeholder"` for the current run — read off the union, with no parallel boolean.
 
 **Prevents:** a "placeholder selected AND a real plan open" double-active state
 
-**Anchor:** `src/main.ts:324` — `function placeholderSelected(): boolean {`
+**Anchor:** `src/main.ts:326` — `function placeholderSelected(): boolean {`
 
 ### pending-surface-union
 **`convention`** — every "thing awaiting the user" is one typed PendingSurface from this single builder, which both the SUMMARY count and the Resume target consult.
 
 **Prevents:** the count and the resume button computing "what's pending" from divergent paths
 
-**Anchor:** `src/main.ts:376` — `function pendingSurfaces(): PendingSurface[] {`
+**Anchor:** `src/main.ts:378` — `function pendingSurfaces(): PendingSurface[] {`
 
 ### pending-count-equals-surfaces-length-at-the-bar-site
 **`convention`** — the SUMMARY count is pendingSurfaces().length — the same builder the Resume picker consults.
 
 **Prevents:** the count double-counting or omitting a gate surface
 
-**Anchor:** `src/main.ts:564` — `pendingCount: pendingSurfaces().length,`
+**Anchor:** `src/main.ts:566` — `pendingCount: pendingSurfaces().length,`
 
 ### approve-never-drives-the-submitting-visual-lock
 **`convention`** — only "submit" maps into the bar's visual "submitting" lock; an in-flight "approve" gates dispatch but feeds no bar change.
 
 **Prevents:** an in-flight approve spuriously flipping the bar into "Submitting…"
 
-**Anchor:** `src/main.ts:576` — `submitInFlight: actionInFlight === "submit",`
+**Anchor:** `src/main.ts:578` — `submitInFlight: actionInFlight === "submit",`
 
 ### surface-removal-unsuppresses-resume
 **`convention`** — each site that removes a pending surface re-derives both affordances via refreshAffordances().
 
 **Prevents:** an out-of-band cancel leaving the resume banner stuck hidden
 
-**Anchor:** `src/main.ts:870` — `refreshAffordances();`
+**Anchor:** `src/main.ts:872` — `refreshAffordances();`
 
 ### reading-pane-affordance-precedence
 **`precedence`** — the resume banner is (re-)derived only when computeAffordance reports no higher affordance occupies the bar.
 
 **Prevents:** the resume banner showing beneath a held review / gate
 
-**Anchor:** `src/main.ts:1392` — `function refreshAffordances(): void {`
+**Anchor:** `src/main.ts:1394` — `function refreshAffordances(): void {`
 
 ### selection-collapse-only-on-genuine-vanish
 **`runtime-guard`** — a `plan` selection collapses to none only when it was in the prior list AND is absent from the new one.
 
 **Prevents:** blanking a freshly-opened / not-yet-indexed plan that was simply never listed
 
-**Anchor:** `src/main.ts:1767` — `function resolveSelection(`
+**Anchor:** `src/main.ts:1769` — `function resolveSelection(`
 
 ### held-gate-plan-exempt-from-collapse
 **`runtime-guard`** — the held orchestrator gate's plan is returned unchanged even if its row drops from list_plans mid-hold.
 
 **Prevents:** a churning gate row collapsing the selection and vanishing the in-process Approve bar
 
-**Anchor:** `src/main.ts:1776` — `if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;`
+**Anchor:** `src/main.ts:1778` — `if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;`
 
 ### list-refresh-no-fetching-flash
 **`runtime-guard`** — only the INITIAL load (listState `initial`) transitions to `fetching`; an in-place refresh of an already-loaded list leaves the rendered list untouched while the next read is in flight.
 
 **Prevents:** a watcher tick blanking a populated sidebar to the empty `fetching` render mid-fetch.
 
-**Anchor:** `src/main.ts:1794` — `if (isInitial(listState)) {`
+**Anchor:** `src/main.ts:1796` — `if (isInitial(listState)) {`
 
 **Tests:** `list-refresh-never-renders-fetching-in-place`
 
@@ -542,84 +542,84 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a transient IPC failure collapsing the open plan (empty list → resolveSelection "vanish" → blanked pane)
 
-**Anchor:** `src/main.ts:1815` — `console.error("list_plans failed — leaving the sidebar/selection intact", e);`
+**Anchor:** `src/main.ts:1817` — `console.error("list_plans failed — leaving the sidebar/selection intact", e);`
 
 ### selection-set-synchronously-before-await-in-openPlan
 **`runtime-guard`** — openPlan assigns `selection` synchronously at the top, before any await, so openPath() reflects the new target throughout.
 
 **Prevents:** a post-await derivation reading a stale selection mid-open
 
-**Anchor:** `src/main.ts:2276` — `selection = isResumeSentinel(path)`
+**Anchor:** `src/main.ts:2330` — `selection = isResumeSentinel(path)`
 
 ### popover-draft-discarded-on-plan-switch-preserved-on-reopen
 **`runtime-guard`** — invalidatePopover compares the draft's planPath against the just-set openPath() — a genuine switch discards the draft, a same-plan reopen re-anchors it.
 
 **Prevents:** a cross-plan draft surviving a switch and re-anchoring against the wrong document
 
-**Anchor:** `src/main.ts:2434` — `invalidatePopover(readingPaneEl);`
+**Anchor:** `src/main.ts:2488` — `invalidatePopover(readingPaneEl);`
 
 ### render-generation-guard-cancels-superseded-settles
 **`runtime-guard`** — settle is handed `() => renderGuard.isCurrent(gen)`, so a superseded render's settle is cancelled the moment a newer render takes the generation.
 
 **Prevents:** a late settle from a stale render mutating the pane after a newer plan opened
 
-**Anchor:** `src/main.ts:2438` — `await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));`
+**Anchor:** `src/main.ts:2492` — `await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));`
 
 ### openGatePlanFile-shared-by-both-gate-paths
 **`convention`** — the gate observer and the Resume path both re-open a held gate's plan through this one sequence.
 
 **Prevents:** the two gate-open paths diverging
 
-**Anchor:** `src/main.ts:2633` — `async function openGatePlanFile(planPath: string): Promise<void> {`
+**Anchor:** `src/main.ts:2687` — `async function openGatePlanFile(planPath: string): Promise<void> {`
 
 ### gate-preferred-over-newer-external-review
 **`precedence`** — a held orchestrator gate is found first among the pending surfaces, so Resume re-opens it regardless of a newer external review.
 
 **Prevents:** a newer external review opening instead of the live held gate
 
-**Anchor:** `src/main.ts:2654` — `const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");`
+**Anchor:** `src/main.ts:2708` — `const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");`
 
 ### sentinel-touches-no-file-io
 **`runtime-guard`** — a synthetic resume sentinel is guarded out of every file-backed IPC (set_open_plan / mark_viewed) in this handler.
 
 **Prevents:** backend rejections / "reload failed" logs for a row with no real file
 
-**Anchor:** `src/main.ts:2672` — `const op = openPath();`
+**Anchor:** `src/main.ts:2726` — `const op = openPath();`
 
 ### open-plan-stamped-viewed-before-relist
 **`runtime-guard`** — when the open plan is the changed file, markViewed runs before refreshList / list_plans.
 
 **Prevents:** the sidebar momentarily bolding the plan the user is actively watching
 
-**Anchor:** `src/main.ts:2686` — `if (op !== null && changedPath === op && !isResumeSentinel(op)) {`
+**Anchor:** `src/main.ts:2740` — `if (op !== null && changedPath === op && !isResumeSentinel(op)) {`
 
 ### reload-target-re-read-after-relist
 **`runtime-guard`** — the reload target is re-read from openPath() AFTER refreshList, so a collapsed selection yields nothing to reload.
 
 **Prevents:** a reload firing against a path the same refresh just collapsed
 
-**Anchor:** `src/main.ts:2696` — `const opAfter = openPath();`
+**Anchor:** `src/main.ts:2750` — `const opAfter = openPath();`
 
 ### exactly-once-action-dispatch
 **`runtime-guard`** — the top-of-handler early-return bails whenever a sibling action is already dispatching, before any branch runs.
 
 **Prevents:** a fast double-click on Submit/Approve, or a cross-click, starting a second dispatch
 
-**Anchor:** `src/main.ts:3125` — `if (actionInFlight !== "none") return;`
+**Anchor:** `src/main.ts:3176` — `if (actionInFlight !== "none") return;`
 
 ### lock-set-after-guard-before-await
 **`runtime-guard`** — the lock is taken only after this branch's validation guard has passed, and before the branch's first await.
 
 **Prevents:** a guard-rejected click sticking the lock and freezing the bar
 
-**Anchor:** `src/main.ts:3138` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
+**Anchor:** `src/main.ts:3189` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
 
 ### lock-reset-on-every-exit
 **`runtime-guard`** — the finally returns actionInFlight to "none" on every exit path once a dispatched round-trip settles.
 
 **Prevents:** a failed dispatch leaving the lock stuck and permanently blocking actions
 
-**Anchor:** `src/main.ts:3166` — `actionInFlight = "none";`
+**Anchor:** `src/main.ts:3217` — `actionInFlight = "none";`
 
 ### prototype-loop-always-has-an-escape
 **`runtime-guard`** — from round >= PROTOTYPE_MAX_ROUNDS the approve affordance relabels to "Proceed as-is", guaranteeing a loop exit.

@@ -30,44 +30,6 @@
            bails on interactive targets — NOT by omitting the drag attribute. -->
       <div class="titlebar" data-tauri-drag-region>
         <div class="titlebar-controls">
-          <!-- Model & effort preset picker (Phase 2). A compact segmented control whose
-               three <button class="model-preset"> options mirror MODEL_PRESETS in
-               src/model-picker.ts (opus-4-8 / fable-5 / sonnet-5). Appended as the FIRST
-               child of .titlebar-controls so it sits LEFT of #text-dec / #theme-toggle.
-               The chosen preset is persisted to plan-reader-model-preset (initModelPicker,
-               src/model-picker.ts) and read at session start by the orchestrator; it applies
-               to the NEXT plan started. Like the other titlebar controls these are ordinary
-               interactive <button>s — window-drag exclusion is isDragTarget()'s
-               interactive-target bail in src/titlebar.ts, NOT a drag attribute or
-               pointer-events hack. -->
-          <div class="titlebar-model-picker"
-               title="Model & effort — applies to the next plan you start"
-               aria-label="Model & effort — applies to the next plan you start">
-            <button class="model-preset" type="button" data-preset="opus-4-8" aria-pressed="false"
-                    title="Opus 4.8" aria-label="Opus 4.8">Opus 4.8</button>
-            <button class="model-preset" type="button" data-preset="fable-5" aria-pressed="false"
-                    title="Fable 5 · low effort" aria-label="Fable 5, low effort">Fable 5</button>
-            <button class="model-preset" type="button" data-preset="sonnet-5" aria-pressed="false"
-                    title="Sonnet 5 · medium effort" aria-label="Sonnet 5, medium effort">Sonnet 5</button>
-          </div>
-          <!-- Opus effort selector (sibling of .titlebar-model-picker, NOT a child — the
-               picker has overflow:hidden + a fixed 28px height that would clip these five
-               buttons and their focus outlines). Revealed ONLY when Opus 4.8 is the active
-               preset; `hidden` (removed from layout) for fable-5 / sonnet-5. Each
-               <button class="effort-level"> mirrors EFFORT_LEVELS in src/model-picker.ts
-               (low / medium / high / xhigh / max). The chosen level is a single GLOBAL
-               setting persisted to plan-reader-opus-effort (initModelPicker) and read at
-               session start by the orchestrator; it applies to the NEXT Opus plan started
-               and is retained across model switches. Like the other titlebar controls these
-               are ordinary interactive <button>s — window-drag exclusion is isDragTarget()'s
-               interactive-target bail in src/titlebar.ts, NOT a drag attribute. -->
-          <div class="titlebar-effort" hidden role="group" aria-label="Opus effort level">
-            <button class="effort-level" type="button" data-effort="low"    aria-pressed="false">low</button>
-            <button class="effort-level" type="button" data-effort="medium" aria-pressed="false">medium</button>
-            <button class="effort-level" type="button" data-effort="high"   aria-pressed="false">high</button>
-            <button class="effort-level" type="button" data-effort="xhigh"  aria-pressed="false">xhigh</button>
-            <button class="effort-level" type="button" data-effort="max"    aria-pressed="false">max</button>
-          </div>
           <!-- New-plan launcher (Sub-Plan 02). Interactive control in the .titlebar-controls
                slot: window-drag exclusion is the isDragTarget() bail in src/titlebar.ts (the
                <button> is not data-tauri-drag-region). #new-plan-btn opens the composer modal.

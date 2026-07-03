@@ -38,15 +38,17 @@ import {
 import { RenderGuard } from "./render-guard";
 import { initTitlebar, initThemeToggle, initTextSize } from "./titlebar";
 import {
-  initModelPicker,
   MODEL_PRESETS,
   PRESET_OPTIONS,
+  EFFORT_LEVELS,
+  DEFAULT_EFFORT,
+  isEffortLevel,
   buildOptions,
   presetClassForModel,
   friendlyModelName,
-  resolveOpusEffort,
   type ModelPreset,
   type ModelOptions,
+  type EffortLevel,
 } from "./model-picker";
 import { initConversation, type ConversationHandle } from "./conversation";
 import { diag } from "./conversation/diag";
@@ -2096,12 +2098,13 @@ function badgeSignature(root: TreeNode): string {
 // The TRIAGE-ALIGNED override options for a picker segment. The dispatched {model, effort} must match
 // the triage default for that model, NOT the raw PRESET_OPTIONS effort — otherwise "override to the
 // already-recommended model" would silently downgrade effort (PRESET_OPTIONS' Fable is effort:"low";
-// triage's Fable is "high") and flip the node to override for no real change. Opus mirrors
-// resolveModelOptions' Opus arm (the user's global effort, default "high").
+// triage's Fable is "high") and flip the node to override for no real change. Opus defaults to
+// DEFAULT_EFFORT ("high", matching triage's decomposition/large Opus); the inline effort row lets the
+// user pick a different Opus effort once Opus is selected.
 function overrideOptionsFor(preset: ModelPreset): ModelOptions {
   switch (preset) {
     case "opus-4-8":
-      return buildOptions("claude-opus-4-8", resolveOpusEffort());
+      return buildOptions("claude-opus-4-8", DEFAULT_EFFORT);
     case "sonnet-5":
       return buildOptions("claude-sonnet-5", "medium");
     case "fable-5":
@@ -2177,6 +2180,57 @@ function renderModelBar(): void {
     row1.appendChild(recpill);
   }
   bar.appendChild(row1);
+
+  // Opus exposes an inline effort row (low…max). Non-Opus presets carry their effort on the preset,
+  // so no effort UI is shown for them. The active button is the node's current effort (DEFAULT_EFFORT
+  // when unset); choosing a different level dispatches an Opus override at that effort.
+  if (currentClass === "opus") {
+    const activeEffort: EffortLevel = isEffortLevel(current.effort)
+      ? current.effort
+      : DEFAULT_EFFORT;
+    const row2 = document.createElement("div");
+    row2.className = "row2";
+
+    const elbl = document.createElement("span");
+    elbl.className = "lbl";
+    elbl.textContent = "Effort";
+    row2.appendChild(elbl);
+
+    const eseg = document.createElement("div");
+    eseg.className = "seg";
+    for (const level of EFFORT_LEVELS) {
+      const btn = document.createElement("button");
+      btn.dataset.effort = level;
+      btn.classList.add("opus");
+      if (level === activeEffort) btn.classList.add("on");
+      btn.textContent = level;
+      eseg.appendChild(btn);
+    }
+    row2.appendChild(eseg);
+    bar.appendChild(row2);
+
+    // Fresh listener each render so it closes over THIS render's live NodePath.
+    eseg.addEventListener("click", (ev) => {
+      const btn = ev.target instanceof Element ? ev.target.closest("button[data-effort]") : null;
+      if (!(btn instanceof HTMLElement)) return;
+      const level = btn.dataset.effort;
+      if (!isEffortLevel(level)) return;
+      // Self-no-op: re-selecting the active effort would re-stamp an identical override (flipping an
+      // auto node to override for no real change), so it is inert — mirrors the model-segment guard.
+      if (level === activeEffort) return;
+      if (modelSetDispatch === "inflight") return;
+      modelSetDispatch = "inflight";
+      void (async () => {
+        try {
+          await getOrchestrator().setExecutionModel(path, buildOptions("claude-opus-4-8", level));
+        } catch (e) {
+          console.error("model picker: setExecutionModel (effort) failed", e);
+        } finally {
+          modelSetDispatch = "idle";
+        }
+      })();
+    });
+  }
 
   const rationale = document.createElement("div");
   rationale.className = "rationale";
@@ -3074,9 +3128,6 @@ window.addEventListener("DOMContentLoaded", () => {
     localStorage,
     readingPaneEl,
   );
-  // Wire the header-bar model/effort preset picker (left of the text-size steppers).
-  initModelPicker(document.querySelector(".titlebar-model-picker"));
-
   // wire the highlight/comment feature behind the render facade. main.ts only
   // hands the pane element + a LIVE openPath reader + the IO adapters to the facade — it never
   // reaches into #reading-pane for this feature. The facade fires onCommentCountChanged after a

@@ -1,8 +1,8 @@
 // Multiplan orchestration — injected dependency interface + the real-Tauri-bound factory (leaf).
 
 import { invoke } from "@tauri-apps/api/core";
-import { resolveModelOptions } from "../../model-picker";
 import type { ModelOptions } from "../../model-picker";
+import { decompositionModel } from "../plan-tree/triage";
 import { resolveAutoResumeBudget } from "../../auto-resume-setting";
 import type { AttachedImage } from "../images";
 import type { WritePolicy } from "../plan-tree";
@@ -15,8 +15,9 @@ export interface OrchestratorDeps {
   // Rust `resume_session_id` → sidecar `"resume"`) is omitted when undefined ⇒ fresh session. start()
   // never passes it; resume() passes state.sdk_session_id (undefined → fresh expired-transcript path).
   // `execution` is the per-phase EFFECTIVE model the active node opens the session with (E1). When
-  // present it wins over the global header picker; absent ⇒ the adapter falls back to
-  // resolveModelOptions() (key-omission intact — never sends effort: undefined).
+  // present it is forwarded verbatim; absent ⇒ the adapter falls back to the decomposition default
+  // (Opus/high). A node-less resume window is a master/acceptance context, which triage maps to
+  // Opus/high anyway (key-omission intact — never sends effort: undefined).
   startSession(args: {
     cwd: string;
     permissionMode: string;
@@ -125,18 +126,16 @@ export interface OrchestratorDeps {
 export function defaultDeps(): OrchestratorDeps {
   return {
     startSession: (args) =>
-      // Resolve the header-picker selection (reads localStorage) and forward model/effort to Rust.
-      // resolveModelOptions returns {model, effort?} with NO effort key when absent, so spreading it
-      // never sends `effort: undefined`. This impure resolution lives only in the adapter.
       invoke("start_agent_session", {
         cwd: args.cwd,
         permissionMode: args.permissionMode,
         // RESUME: forward `resumeSessionId` only when present (key-omission otherwise, so a
         // fresh start never sends `resumeSessionId: undefined`). Rust maps it to `resume_session_id`.
         ...(args.resumeSessionId !== undefined ? { resumeSessionId: args.resumeSessionId } : {}),
-        // Per-phase effective model wins when the caller passes it; absent ⇒ the global header
-        // picker. Both go through the key-omission builders, so a missing effort is a missing key.
-        ...(args.execution ?? resolveModelOptions()),
+        // Per-phase effective model wins when the caller passes it; absent (node-less resume) ⇒ the
+        // decomposition default (Opus/high). Both go through the key-omission builders, so a missing
+        // effort is a missing key.
+        ...(args.execution ?? decompositionModel()),
       }).then(() => undefined),
     sendMessage: (text, images) =>
       invoke(

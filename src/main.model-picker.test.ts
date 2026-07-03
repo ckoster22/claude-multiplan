@@ -278,4 +278,78 @@ describe("model picker — mounted for a live leaf node with the triaged recomme
     expect(pathKey(spy.mock.calls[0][0])).toBe("01");
     expect(spy.mock.calls[0][1]).toEqual({ model: "claude-fable-5", effort: "high" });
   });
+
+  it("a non-Opus leaf renders NO effort row (effort is preset-coupled for Fable/Sonnet)", async () => {
+    const planPath = "/p/01.md";
+    const h = createOrchestrator(makeDeps());
+    __setOrchestratorForTest(h);
+    bootDom();
+    await flush();
+
+    await driveToLeafGate(h, planPath);
+    await flush();
+
+    // The Sonnet/auto leaf must show no effort segment. FALSIFY: render the effort row
+    // unconditionally (drop the `currentClass === "opus"` guard) → this goes RED.
+    const bar = document.querySelector<HTMLElement>("#model-bar")!;
+    expect(bar.querySelector(".row2")).toBeNull();
+    expect(bar.querySelector("button[data-effort]")).toBeNull();
+  });
+
+  it("overriding to Opus reveals the effort row (current effort .on); picking a level dispatches Opus at that effort", async () => {
+    const planPath = "/p/01.md";
+    const h = createOrchestrator(makeDeps());
+    const spy = vi.spyOn(h, "setExecutionModel");
+    __setOrchestratorForTest(h);
+    bootDom();
+    await flush();
+
+    await driveToLeafGate(h, planPath);
+    await flush();
+
+    const bar = document.querySelector<HTMLElement>("#model-bar")!;
+    // Override the Sonnet leaf to Opus → the modelbar re-renders with the inline effort row.
+    bar.querySelector<HTMLElement>('.seg button[data-preset="opus-4-8"]')!.click();
+    await flush();
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][1]).toEqual({ model: "claude-opus-4-8", effort: "high" });
+
+    // The effort row is now present; the node's current effort ("high") is the `.on` button.
+    const effortRow = bar.querySelector<HTMLElement>(".row2");
+    expect(effortRow).not.toBeNull();
+    const onEffort = effortRow!.querySelector<HTMLElement>("button[data-effort].on")!;
+    expect(onEffort.dataset.effort).toBe("high");
+
+    // Picking a DIFFERENT level dispatches an Opus override AT THAT effort. FALSIFY: dispatch a fixed
+    // effort (e.g. DEFAULT_EFFORT) instead of the clicked level → the effort assertion goes RED.
+    effortRow!.querySelector<HTMLElement>('button[data-effort="max"]')!.click();
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(pathKey(spy.mock.calls[1][0])).toBe("01");
+    expect(spy.mock.calls[1][1]).toEqual({ model: "claude-opus-4-8", effort: "max" });
+  });
+
+  it("clicking the already-active Opus effort is an inert no-op (no dispatch)", async () => {
+    const planPath = "/p/01.md";
+    const h = createOrchestrator(makeDeps());
+    const spy = vi.spyOn(h, "setExecutionModel");
+    __setOrchestratorForTest(h);
+    bootDom();
+    await flush();
+
+    await driveToLeafGate(h, planPath);
+    await flush();
+
+    const bar = document.querySelector<HTMLElement>("#model-bar")!;
+    bar.querySelector<HTMLElement>('.seg button[data-preset="opus-4-8"]')!.click();
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1); // the Opus override only
+
+    // "high" is the active effort; re-clicking it must NOT dispatch. FALSIFY: drop the effort
+    // self-no-op guard in renderModelBar → this goes RED.
+    bar.querySelector<HTMLElement>('.row2 button[data-effort="high"]')!.click();
+    await flush();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
 });

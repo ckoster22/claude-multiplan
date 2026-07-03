@@ -140,55 +140,6 @@ body {
 }
 .theme-toggle:hover { border-color: var(--accent); }
 
-/* Model & effort preset picker (Phase 2). A compact segmented control in the
-   titlebar, sized to sit alongside the 28px-tall .theme-toggle controls. The
-   active preset inverts to the accent fill; adjacent buttons get a left divider. */
-.titlebar-model-picker {
-  display: inline-flex; align-items: center;
-  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-  height: 28px;
-}
-.model-preset {
-  pointer-events: auto;
-  display: inline-flex; align-items: center; justify-content: center;
-  height: 100%; padding: 6px 11px; border: 0;
-  background: var(--bg-window); color: var(--text-dim);
-  font-family: var(--ui); font-size: 11px; font-weight: 600;
-  line-height: 1; cursor: pointer;
-}
-.model-preset + .model-preset { border-left: 1px solid var(--border); }
-.model-preset:hover { border-color: var(--accent); color: var(--accent); }
-/* Visible keyboard focus indicator. Inset offset because the parent picker
-   has overflow:hidden, which would clip a positive (outset) outline. */
-.model-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.model-preset.active { background: var(--accent); color: var(--conv-on-accent); }
-
-/* Opus effort selector (sibling of .titlebar-model-picker). Same segmented
-   language as .model-preset, sized to the 28px-tall titlebar controls. Revealed
-   only when Opus is active; `hidden` removes it from layout entirely. */
-.titlebar-effort {
-  display: inline-flex; align-items: center;
-  border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
-  height: 28px;
-}
-/* Explicit override so `display` beats the UA `hidden` rule — fully removed
-   from layout (no greyed placeholder) when not Opus. */
-.titlebar-effort[hidden] { display: none; }
-.effort-level {
-  pointer-events: auto;
-  display: inline-flex; align-items: center; justify-content: center;
-  height: 100%; padding: 6px 11px; border: 0;
-  background: var(--bg-window); color: var(--text-dim);
-  font-family: var(--ui); font-size: 11px; font-weight: 600;
-  line-height: 1; cursor: pointer;
-}
-.effort-level + .effort-level { border-left: 1px solid var(--border); }
-.effort-level:hover { border-color: var(--accent); color: var(--accent); }
-/* Inset focus offset because the parent group has overflow:hidden, which would
-   clip a positive (outset) outline. */
-.effort-level:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.effort-level.active { background: var(--accent); color: var(--conv-on-accent); }
-
 /* In-DOM status readout (#hook-status) for the review-response / save-for-review actions
    (replaces window.alert, a no-op in Tauri v2 WKWebView). A transient one-line message;
    main.ts sets the text, toggles `.hidden`, and adds `.error` (red) for failures, then
@@ -454,7 +405,8 @@ body {
   padding: 11px 12px;
 }
 .modelbar.hidden { display: none; }
-.modelbar .row1 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.modelbar .row1,
+.modelbar .row2 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .modelbar .lbl {
   font-family: var(--ui); font-size: 11px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim);
