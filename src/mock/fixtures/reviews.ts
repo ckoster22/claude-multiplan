@@ -97,6 +97,7 @@ function leaf(nn: number, title: string): TreeNode {
       summaryPath: null,
       plansDirPath: null,
     },
+    execution_model: null,
   };
 }
 
@@ -114,6 +115,7 @@ function splitRoot(): TreeNode {
       summaryPath: null,
       plansDirPath: null,
     },
+    execution_model: null,
   };
 }
 

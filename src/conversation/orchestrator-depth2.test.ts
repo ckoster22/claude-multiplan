@@ -151,7 +151,7 @@ async function driveToRootGate(h: OrchestratorHandle): Promise<void> {
   await h.ingestStream(resultFrame());
   await h.ingestStream(textFrame("root recon report"));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(
     exitPlanModeReq(
@@ -166,7 +166,7 @@ async function driveToRootGate(h: OrchestratorHandle): Promise<void> {
 async function runLeaf(h: OrchestratorHandle, key: string, marker: string): Promise<void> {
   await h.ingestStream(textFrame(`${key} recon`));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(exitPlanModeReq(`leaf-${key}-tu`, `${key} plan body`));
   await h.approve(key);
@@ -193,7 +193,7 @@ async function driveToNestedGate(h: OrchestratorHandle, rec: Rec): Promise<void>
   expect(rec.sends.at(-1)).toContain("sub-plan 02");
   await h.ingestStream(textFrame("02 recon"));
   await h.ingestStream(resultFrame()); // → sizer prompt for 02
-  await h.ingestStream(textFrame("SIZER: split / 2 / 0.85"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.85}"));
   await h.ingestStream(resultFrame()); // → nested decomposition draft prompt
   await h.ingestPermission(
     exitPlanModeReq(
@@ -360,7 +360,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     await h.ingestStream(resultFrame()); // → 01 recon
     await h.ingestStream(textFrame("01 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 1 / 0.9")); // 01 itself splits
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":1,\"confidence\":0.9}")); // 01 itself splits
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("decomp-01-tu", "### Sub-Plan 01: OnlyGrand\ngrand scope\n"),
@@ -441,7 +441,7 @@ describe("PHASE 6 — refining a depth-2 SPLIT target clears the whole subtree (
     // Root recon → split into [01, 02].
     await h.ingestStream(textFrame("root recon report"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq(
@@ -454,7 +454,7 @@ describe("PHASE 6 — refining a depth-2 SPLIT target clears the whole subtree (
     // 01 itself SPLITS into a single grandchild [01.01].
     await h.ingestStream(textFrame("01 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("decomp-01-tu", "### Sub-Plan 01: OnlyGrand\ngrand scope\n"));
     await h.approve("01"); // nested decomposition approval (interrupt #2)
@@ -512,7 +512,7 @@ describe("PHASE 6 — refining a depth-2 SPLIT target clears the whole subtree (
     // grandchild marker (SUM_0201) would thread here as a phantom prior sibling.
     await h.ingestStream(textFrame("01 recon v2"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("decomp-01-v2-tu", "### Sub-Plan 01: OnlyGrandV2\ngrand scope v2\n"));
     await h.approve("01"); // re-decomposition approval
@@ -568,7 +568,7 @@ describe("PHASE 4 — mid-depth terminals", () => {
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("02.01 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("leaf-02.01-tu", "02.01 plan"));
     await h.approve("02.01");

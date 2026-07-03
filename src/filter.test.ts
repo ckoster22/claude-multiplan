@@ -22,6 +22,7 @@ function rec(
     child_count: null,
     collapsed: false,
     h1s: [],
+    execution_model: null,
     ...rest,
     absolute_path: asAbsPath(absolute_path),
     filename_stem: asStem(filename_stem),

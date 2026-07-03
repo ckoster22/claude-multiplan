@@ -17,7 +17,7 @@ function node(state: NodeState, execution_model?: ModelOptions | null): TreeNode
     redraftCount: 0,
     lastFeedback: null,
     state,
-    ...(execution_model !== undefined ? { execution_model } : {}),
+    execution_model: execution_model ?? null,
   };
 }
 

@@ -43,7 +43,7 @@ const path = (...ns: number[]): NodePath => ns.map(nnOf);
 const fileOf = (s: string) => s as PlanTreeFilePath;
 
 function node(nn: number, state: NodeState): TreeNode {
-  return { nn: nnOf(nn), title: `node ${nn}`, redraftCount: 0, lastFeedback: null, state };
+  return { nn: nnOf(nn), title: `node ${nn}`, redraftCount: 0, lastFeedback: null, state, execution_model: null };
 }
 function openNode(nn: number, phase: Extract<NodeState, { stage: "open" }>["phase"]): TreeNode {
   return node(nn, { stage: "open", phase });
@@ -666,6 +666,83 @@ describe("rehydrateState2 carries the baseline_ working-reference record", () =>
     // (rehydrateState2 spreads a fresh object). If it aliased, this mutation would leak.
     rehydrated.baseline_!.frozen_ms = 9999;
     expect(ledger.baseline_).toEqual({ frozen: true, frozen_ms: 1234 });
+  });
+});
+
+// execution_model backfill for a legacy pre-field ledger
+//
+// A ledger written BEFORE execution_model existed carries nodes with the key genuinely ABSENT (not
+// explicit null). The required `TreeNode.execution_model` type would be a lie on resume unless
+// rehydrateState2 backfills missing → null. This is the ONLY path that exercises normalizeExecutionModel's
+// `=== undefined` branch — every other fixture sets the key explicitly, so JSON round-trips preserve it.
+
+describe("rehydrateState2 backfills a MISSING execution_model to null (legacy pre-field ledger)", () => {
+  it("normalizes an absent execution_model → null on the root AND a nested split grandchild", () => {
+    // Raw ledger object (cast, not built from typed helpers) so the key is truly ABSENT on every node.
+    // Shape mirrors the coherent non-root roll-up window: root split → child 01 split → grandchild
+    // 01.01 leaf summarized, plus a pending sibling 02 keeping the root coherent. Grandchild depth pins
+    // the recursion through split children.
+    // Extracted so the pre-rehydrate "key absent" guard reads it without index-access gymnastics.
+    const legacyGrandchild = {
+      nn: nnOf(1),
+      title: "grandchild 01.01",
+      redraftCount: 0,
+      lastFeedback: null,
+      state: { stage: "leaf", phase: "summarized", planPath: null, summaryPath: "/s.md", plansDirPath: null },
+      // execution_model KEY DELIBERATELY ABSENT
+    };
+    const legacyRoot = {
+      nn: nnOf(1),
+      title: "root",
+      redraftCount: 0,
+      lastFeedback: null,
+      state: {
+        stage: "split",
+        phase: "running-children",
+        planPath: null,
+        summaryPath: null,
+        plansDirPath: null,
+        children: [
+          {
+            nn: nnOf(1),
+            title: "child 01",
+            redraftCount: 0,
+            lastFeedback: null,
+            state: {
+              stage: "split",
+              phase: "running-children",
+              planPath: null,
+              summaryPath: null,
+              plansDirPath: null,
+              children: [legacyGrandchild],
+            },
+            // execution_model KEY DELIBERATELY ABSENT
+          },
+          {
+            nn: nnOf(2),
+            title: "child 02",
+            redraftCount: 0,
+            lastFeedback: null,
+            state: { stage: "open", phase: "pending" },
+            // execution_model KEY DELIBERATELY ABSENT
+          },
+        ],
+      },
+      // execution_model KEY DELIBERATELY ABSENT
+    };
+    const ledger = { schema: 2, tree_id: "legacy", created_ms: 1, updated_ms: 2, root: legacyRoot } as unknown as RecursiveLedger;
+
+    // Guard against an unfalsifiable fixture: the key must genuinely be absent BEFORE rehydrate.
+    expect("execution_model" in (ledger.root as object)).toBe(false);
+    expect("execution_model" in (legacyGrandchild as object)).toBe(false);
+
+    const rehydrated = rehydrateState2(ledger);
+
+    // FALSIFIABLE: bypass the normalize call in rehydrateState2 → these read `undefined`, not `null` → RED.
+    expect(rehydrated.root.execution_model).toBeNull();
+    expect(nodeAtPathOrThrow(rehydrated.root, path(1)).execution_model).toBeNull(); // intermediate split child
+    expect(nodeAtPathOrThrow(rehydrated.root, path(1, 1)).execution_model).toBeNull(); // grandchild (recursion)
+    expect(nodeAtPathOrThrow(rehydrated.root, path(2)).execution_model).toBeNull(); // pending sibling
   });
 });
 

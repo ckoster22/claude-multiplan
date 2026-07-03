@@ -307,9 +307,10 @@ let orchSnapshot: PlanTreeSnapshot2 | null = null;
 // auto→override flip would not land until the next list_plans. Null when no run is active.
 let lastBadgeSig: string | null = null;
 
-// EXACTLY-ONCE guard for a model-override dispatch (mirrors the Approve button's actionInFlight):
-// a fast double-click on a segment cannot start a second setExecutionModel.
-let modelSetInFlight = false;
+// EXACTLY-ONCE guard for a model-override dispatch: a fast double-click on a segment cannot start a
+// second setExecutionModel.
+type ModelSetDispatch = "idle" | "inflight";
+let modelSetDispatch: ModelSetDispatch = "idle";
 
 // ---- Live-run placeholder sidebar row -----------------------------------------------
 // A running orchestration has no sidebar row until list_plans picks up the plan file. `runPlaceholder`
@@ -2074,7 +2075,7 @@ function patchDocSrc(): void {
   docSrcEl.appendChild(label);
 }
 
-// ---- execution-model badge + picker (Sub-Plan 03) -----------------------------------------
+// ---- execution-model badge + picker ---------------------------------------------------------
 
 // A stable digest of every node's DISPLAYED model + override source. The onSnapshot observer compares
 // this against lastBadgeSig and re-renders the sidebar only on a change, so a model override flips the
@@ -2183,7 +2184,7 @@ function renderModelBar(): void {
   bar.appendChild(rationale);
 
   // Fresh listener each render so it closes over THIS render's live NodePath (the node can move
-  // between snapshots). Mirrors the Approve button's async/try-catch/in-flight-guard idiom.
+  // between snapshots).
   seg.addEventListener("click", (ev) => {
     const btn = ev.target instanceof Element ? ev.target.closest("button[data-preset]") : null;
     if (!(btn instanceof HTMLElement)) return;
@@ -2194,15 +2195,15 @@ function renderModelBar(): void {
     // recommended", so dispatching here would irreversibly flip auto→override for no real change.
     // (An already-overridden node stays clickable — re-clicking re-asserts / can pick a new model.)
     if (!overridden && preset.split("-")[0] === currentClass) return;
-    if (modelSetInFlight) return;
-    modelSetInFlight = true;
+    if (modelSetDispatch === "inflight") return;
+    modelSetDispatch = "inflight";
     void (async () => {
       try {
         await getOrchestrator().setExecutionModel(path, overrideOptionsFor(preset as ModelPreset));
       } catch (e) {
         console.error("model picker: setExecutionModel failed", e);
       } finally {
-        modelSetInFlight = false;
+        modelSetDispatch = "idle";
       }
     })();
   });

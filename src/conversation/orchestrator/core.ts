@@ -253,7 +253,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     assertedPolicy: WritePolicy | null;
     // DERIVED MODEL cache: the last model the driver knows the live session is on (null = unknown,
     // forcing a re-assert). The model is a PURE function of the active node's (stage, phase) + override
-    // (effectiveModel); this only avoids redundant setModel. Twin of assertedPolicy.
+    // (effectiveModel); this only avoids redundant setModel.
     assertedModel: string | null;
     // TURN WATCHDOG handle (one shared slot — one turn in flight): armed alongside every resuming hold
     // AND every summary/parent-review/intent turn; a missing result drives a LOUD terminal FATAL.
@@ -716,8 +716,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         await deps.setMode(policy);
         run.assertedPolicy = policy;
       }
-      // DERIVED MODEL (the model twin of the policy seam, kept AFTER it to match the startSession
-      // open order — setMode then setModel; both are idempotent caches). The live session's model
+      // DERIVED MODEL: asserted AFTER setMode to match the startSession open order (setMode then
+      // setModel; both are idempotent caches). The live session's model
       // tracks the ACTIVE node's pipeline DOMAIN via effectiveModel (override-aware): Sonnet recon →
       // Opus sizing/decompose/draft → the leaf's scale-tiered coding model at leaf-execute. Re-asserted
       // whenever the effective model differs from the cache. When there is no active node (the
@@ -1631,7 +1631,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         diag(
           `master-write: path=writeAgentPlan tree_id=${st.tree_id} nn=${decompNn ?? "null"} flavor=${decompNn === null ? "master" : "sub"} node=${node.state.stage}/${node.state.phase}`,
         );
-        const masterPath = await deps.writeAgentPlan(plan, st.tree_id, decompNn, node.execution_model ?? null);
+        const masterPath = await deps.writeAgentPlan(plan, st.tree_id, decompNn, node.execution_model);
         diag(`master-write: wrote -> ${masterPath}`);
         // Child paths are minted as [...parentPath, parseNn(headerNn)] — the header NN is the PER-LEVEL
         // segment; the full dotted id derives from nesting. The mandate map stays keyed by full
@@ -1692,7 +1692,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         diag(
           `sub-write: path=writeAgentPlan tree_id=${st.tree_id} nn=${nnPath ?? "null"} flavor=${nnPath === null ? "master (root-single)" : "sub"} node=${node.state.stage}/${node.state.phase}`,
         );
-        const realPath = await deps.writeAgentPlan(plan, st.tree_id, nnPath, node.execution_model ?? null);
+        const realPath = await deps.writeAgentPlan(plan, st.tree_id, nnPath, node.execution_model);
         diag(`sub-write: wrote -> ${realPath}`);
         await dispatch({
           type: "NODE_DRAFTED",
@@ -2217,7 +2217,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // set-permission-mode is dropped). The first real assert is "plan" at the
       // INTENT_CLARIFIED/PROTOTYPE_APPROVED boundary, when the session is live.
       run.assertedPolicy = "prototype";
-      // MODEL TWIN of the policy prime: the START dispatch below runs the model seam with active===true
+      // PRIME the model cache before the START dispatch below runs the model seam with active===true
       // while the driver is NOT open yet, so an unprimed null vs the genesis-phase model would fire
       // setModel on a not-yet-live session (Err → fatal). Prime the cache to the genesis root's
       // effective model — the genesis root is ALWAYS open/clarifying-intent (⇒ Sonnet), so this equals
@@ -2230,6 +2230,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         redraftCount: 0,
         lastFeedback: null,
         state: { stage: "open", phase: "clarifying-intent" },
+        execution_model: null,
       }).model;
       active = true;
       activeOrchestrator = handle;
@@ -2352,7 +2353,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // redundant setMode (and a pre-send setMode can't race a not-yet-live session).
       const policy = writePolicyFor2(state.root);
       run.assertedPolicy = policy;
-      // MODEL TWIN of the policy prime: the first post-resume dispatch runs the model seam with
+      // PRIME the model cache: the first post-resume dispatch runs the model seam with
       // active===true. Resolve the resumed ACTIVE node ONCE (reused to OPEN the session at E1 below so
       // the opened model and the primed cache are byte-identical) and prime the cache to its effective
       // model. A null active path (acceptance/terminal window) leaves the cache null — the session opens

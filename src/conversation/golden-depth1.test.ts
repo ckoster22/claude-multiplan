@@ -16,8 +16,8 @@
 //     Math.random are mocked so newTreeId() mints the same stable tree_id every run; the watchdog
 //     timer seam is a fake that never fires. The traces are therefore byte-stable across runs.
 //
-// Scenario A: confident single (SIZER: single / 1 / 0.95) → one sub, gate, approve, exec, summary, done.
-// Scenario B: 2-way split (SIZER: split / 2 / 0.9) → master draft, master gate, approveMaster,
+// Scenario A: confident single (SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}) → one sub, gate, approve, exec, summary, done.
+// Scenario B: 2-way split (SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}) → master draft, master gate, approveMaster,
 //   interrupted resume result, then sub-01, the parent review turn (NONE), then sub-02 through
 //   per-node sizer + gate/approve/exec/summary, done.
 
@@ -158,7 +158,7 @@ async function driveSub(
   await h.ingestStream(textFrame(`sub ${nn} recon report`));
   await h.ingestStream(resultFrame());
   if (viaSizer) {
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.95"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}"));
     await h.ingestStream(resultFrame());
   }
   await h.ingestPermission(exitPlanModeReq(toolUseId, `# Sub-Plan 0${nn}\n\nthe sub ${nn} plan body\n`));
@@ -189,7 +189,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
   it("Scenario A — confident single: intent → recon → sizer(single 0.95) → sub-01 recon/draft/gate/approve/exec/summary → done", async () => {
     const { h, trace } = makeGolden();
 
-    await driveToSizer(h, "SIZER: single / 1 / 0.95");
+    await driveToSizer(h, "SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}");
     await driveSub(h, 1, "sub1-tu");
 
     // Terminal: natural completion ENDS the SDK session (cancelRun → endSession) BEFORE firing the
@@ -378,12 +378,14 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       user wants; an oversized single plan is painful to retroactively decompose.
       ---END-DECOMPOSITION-BIAS---
 
-      After it returns, emit exactly one line at the top level of the form:
+      After it returns, emit exactly one line at the top level — a \`SIZER:\` prefix followed by a single
+      JSON object:
 
-      SIZER: <single|split> / <num_plans> / <confidence> / <scale>
+      SIZER: {"decision":"<single|split>","num_plans":<integer>,"confidence":<0..1>,"scale":"<standard|large|huge>"}
 
-      e.g. \`SIZER: split / 3 / 0.82 / standard\`. Those are the ONLY two decisions — when uncertain,
-      choose \`split\` (the master plan gate is the human checkpoint for an uncertain decomposition).
+      e.g. \`SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}\`. Those are the
+      ONLY two decisions — when uncertain, choose \`split\` (the master plan gate is the human checkpoint
+      for an uncertain decomposition).
 
       \`scale\` ∈ {standard, large, huge} sizes a \`single\`'s coding scope (ignored for a \`split\`):
       standard = fits one focused plan; large = a big cohesive job (many files / high coupling);
@@ -514,7 +516,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
   it("Scenario B — 2-way split: … sizer(split 0.9) → master draft/gate/approveMaster → interrupted resume → sub-01 → (auto-advance) sub-02 → done", async () => {
     const { h, trace } = makeGolden();
 
-    await driveToSizer(h, "SIZER: split / 2 / 0.9");
+    await driveToSizer(h, "SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}");
 
     // The master ExitPlanMode hold (the master gate), carrying the decomposition.
     const masterPlan =
@@ -716,12 +718,14 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       user wants; an oversized single plan is painful to retroactively decompose.
       ---END-DECOMPOSITION-BIAS---
 
-      After it returns, emit exactly one line at the top level of the form:
+      After it returns, emit exactly one line at the top level — a \`SIZER:\` prefix followed by a single
+      JSON object:
 
-      SIZER: <single|split> / <num_plans> / <confidence> / <scale>
+      SIZER: {"decision":"<single|split>","num_plans":<integer>,"confidence":<0..1>,"scale":"<standard|large|huge>"}
 
-      e.g. \`SIZER: split / 3 / 0.82 / standard\`. Those are the ONLY two decisions — when uncertain,
-      choose \`split\` (the master plan gate is the human checkpoint for an uncertain decomposition).
+      e.g. \`SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}\`. Those are the
+      ONLY two decisions — when uncertain, choose \`split\` (the master plan gate is the human checkpoint
+      for an uncertain decomposition).
 
       \`scale\` ∈ {standard, large, huge} sizes a \`single\`'s coding scope (ignored for a \`split\`):
       standard = fits one focused plan; large = a big cohesive job (many files / high coupling);
@@ -874,12 +878,14 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       user wants; an oversized single plan is painful to retroactively decompose.
       ---END-DECOMPOSITION-BIAS---
 
-      After it returns, emit exactly one line at the top level of the form:
+      After it returns, emit exactly one line at the top level — a \`SIZER:\` prefix followed by a single
+      JSON object:
 
-      SIZER: <single|split> / <num_plans> / <confidence> / <scale>
+      SIZER: {"decision":"<single|split>","num_plans":<integer>,"confidence":<0..1>,"scale":"<standard|large|huge>"}
 
-      e.g. \`SIZER: split / 3 / 0.82 / standard\`. Those are the ONLY two decisions — when uncertain,
-      choose \`split\` (the master plan gate is the human checkpoint for an uncertain decomposition).
+      e.g. \`SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}\`. Those are the
+      ONLY two decisions — when uncertain, choose \`split\` (the master plan gate is the human checkpoint
+      for an uncertain decomposition).
 
       \`scale\` ∈ {standard, large, huge} sizes a \`single\`'s coding scope (ignored for a \`split\`):
       standard = fits one focused plan; large = a big cohesive job (many files / high coupling);
@@ -1092,12 +1098,14 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       user wants; an oversized single plan is painful to retroactively decompose.
       ---END-DECOMPOSITION-BIAS---
 
-      After it returns, emit exactly one line at the top level of the form:
+      After it returns, emit exactly one line at the top level — a \`SIZER:\` prefix followed by a single
+      JSON object:
 
-      SIZER: <single|split> / <num_plans> / <confidence> / <scale>
+      SIZER: {"decision":"<single|split>","num_plans":<integer>,"confidence":<0..1>,"scale":"<standard|large|huge>"}
 
-      e.g. \`SIZER: split / 3 / 0.82 / standard\`. Those are the ONLY two decisions — when uncertain,
-      choose \`split\` (the master plan gate is the human checkpoint for an uncertain decomposition).
+      e.g. \`SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}\`. Those are the
+      ONLY two decisions — when uncertain, choose \`split\` (the master plan gate is the human checkpoint
+      for an uncertain decomposition).
 
       \`scale\` ∈ {standard, large, huge} sizes a \`single\`'s coding scope (ignored for a \`split\`):
       standard = fits one focused plan; large = a big cohesive job (many files / high coupling);

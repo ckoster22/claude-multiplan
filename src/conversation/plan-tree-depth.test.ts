@@ -55,6 +55,7 @@ function blank2(): PlanTreeState2 {
       redraftCount: 0,
       lastFeedback: null,
       state: { stage: "open", phase: "clarifying-intent" },
+      execution_model: null,
     },
     pendingApproval: null,
     pendingClarify: null,
@@ -365,6 +366,7 @@ describe("PHASE 4 — roll-up window rules (one falsifiable test per new rule)",
       redraftCount: 0,
       lastFeedback: null,
       state: { stage: "leaf", phase: "summarized", planPath: null, summaryPath: null, plansDirPath: null },
+      execution_model: null,
     };
     const root: TreeNode = {
       nn: nnOf(1),
@@ -379,6 +381,7 @@ describe("PHASE 4 — roll-up window rules (one falsifiable test per new rule)",
         summaryPath: null,
         plansDirPath: null,
       },
+      execution_model: null,
     };
     // FALSIFY: re-restrict the all-summarized allowance to path.length > 0 (the old rule) → this
     // throws → RED. The acceptance window requires the allowance to cover the root too.
@@ -396,6 +399,7 @@ describe("PHASE 4 — roll-up window rules (one falsifiable test per new rule)",
       redraftCount: 0,
       lastFeedback: null,
       state: { stage: "open", phase: "pending" },
+      execution_model: null,
     };
     const root: TreeNode = {
       nn: nnOf(1),
@@ -410,6 +414,7 @@ describe("PHASE 4 — roll-up window rules (one falsifiable test per new rule)",
         summaryPath: null,
         plansDirPath: null,
       },
+      execution_model: null,
     };
     expect(() => assertCoherent2(root)).toThrow(/running-children with 0 active/);
   });

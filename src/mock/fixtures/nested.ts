@@ -193,6 +193,7 @@ export const NESTED_PLANS: PlanRecord[] = NODES.map((node, i) =>
     child_count: node.child_count,
     collapsed: false,
     h1s: [node.title],
+    execution_model: null,
   }) satisfies PlanRecord,
 );
 

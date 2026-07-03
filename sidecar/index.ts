@@ -838,24 +838,22 @@ async function handleCommand(line: string): Promise<void> {
     }
 
     case "set-model": {
-      // Sibling of set-permission-mode: a thin switch over the pure model decision
-      // (sidecar/session-command.ts), gating THIS set-model path via the same session union so `apply`
-      // (the only branch that touches `q`) is returned ONLY for a `live` session; a command arriving on
-      // a known-dead/draining session takes a drop branch. UNLIKE set-permission-mode, a model switch
-      // carries no host-policy backstop (the gate keys off write policy, not model), so nothing is
-      // rewritten here. The try/catch on the await below is the LOAD-BEARING crash fix — the union only
-      // pre-filters a session ALREADY known dead/draining, but the session can still end in the TOCTOU
-      // window between currentSession() and this await, so a reject must be logged, never crash.
+      // Unlike set-permission-mode, a model switch has no host-policy backstop to rewrite (the gate
+      // keys off write policy, not model), so a dropped command leaves no host state stale.
+      const model = cmd.model;
+      if (typeof model !== "string") {
+        logErr("[sidecar] set-model without a string model — dropped");
+        return;
+      }
       const session = currentSession();
       const decision = decideModelCommand(session);
       switch (decision.action) {
         case "apply":
-          // `apply` is returned ONLY for the `live` variant, which carries `q`; narrow to it.
           if (session.kind === "live") {
             // INVARIANT[setmodel-toctou-trycatch-backstop] (runtime-guard): the await q.setModel is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
             //   prevents: an unhandled rejection killing the sidecar process.
             try {
-              await session.q.setModel(typeof cmd.model === "string" ? cmd.model : undefined);
+              await session.q.setModel(model);
             } catch (e) {
               logErr("[sidecar] set-model failed (session may have ended):", String(e));
             }

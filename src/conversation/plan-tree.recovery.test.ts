@@ -44,7 +44,7 @@ const path = (...ns: number[]): NodePath => ns.map(nnOf);
 const fileOf = (s: string) => s as PlanTreeFilePath;
 
 function node(nn: number, state: NodeState, redraftCount = 0): TreeNode {
-  return { nn: nnOf(nn), title: `node ${nn}`, redraftCount, lastFeedback: null, state };
+  return { nn: nnOf(nn), title: `node ${nn}`, redraftCount, lastFeedback: null, state, execution_model: null };
 }
 function openNode(
   nn: number,

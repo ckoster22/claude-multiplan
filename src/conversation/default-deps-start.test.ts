@@ -139,7 +139,7 @@ describe("defaultDeps().startSession forwards the resolved picker model/effort t
   });
 });
 
-describe("defaultDeps().writeAgentPlan forwards the node's triaged execution model (Phase D)", () => {
+describe("defaultDeps().writeAgentPlan forwards the node's triaged execution model", () => {
   beforeEach(() => invokeMock.mockClear());
 
   it("forwards executionModel:{model, effort} to write_agent_plan", async () => {
@@ -160,7 +160,7 @@ describe("defaultDeps().writeAgentPlan forwards the node's triaged execution mod
 
   it("sends executionModel:null when the node carries no model (legacy fallback)", async () => {
     const deps = defaultDeps();
-    await deps.writeAgentPlan("# master\n", "tree-1", null);
+    await deps.writeAgentPlan("# master\n", "tree-1", null, null);
 
     expect(invokeMock).toHaveBeenCalledWith("write_agent_plan", {
       plan: "# master\n",

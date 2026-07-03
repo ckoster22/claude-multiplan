@@ -630,7 +630,7 @@ describe("initModelPicker", () => {
   });
 });
 
-// ---- Sub-Plan 03: badge helpers (presetClassForModel / friendlyModelName) + resolveOpusEffort ----
+// ---- badge helpers (presetClassForModel / friendlyModelName) + resolveOpusEffort ----
 
 describe("presetClassForModel (badge/segment class slug)", () => {
   it("maps each roster model id to its family slug", () => {

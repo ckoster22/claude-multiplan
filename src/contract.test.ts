@@ -419,7 +419,7 @@ describe("contract — render coverage across flavors + cwd states", () => {
     expect(standaloneSrc.textContent).toBe("");
   });
 
-  // Sub-Plan 03: the PERSISTED-row model badge (no live orchestrator snapshot in this test module, so
+  // The PERSISTED-row model badge (no live orchestrator snapshot in this test module, so
   // rowModelState reads rec.execution_model off the wire — a chip only, no auto/override affordance).
   it("renders a .mbadge for a record with execution_model, omits it for null/unknown", () => {
     const withModel: PlanRecord = {

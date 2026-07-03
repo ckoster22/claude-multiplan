@@ -35,11 +35,10 @@ export interface PlanRecord {
   // Sourced from the backend so the sidebar filter can match on headings without querying
   // the reading pane.
   h1s: string[];
-  // Which Claude model should execute this plan ({model, effort}). Additive; the wire always
-  // carries the key (present-as-null when unset), but the TS key is OPTIONAL so the many
-  // PlanRecord literals across the tests/fixtures stay valid without naming it. Read as
-  // `rec.execution_model ?? null` — never `'execution_model' in rec` (always true on the wire).
-  execution_model?: ModelOptions | null;
+  // Which Claude model should execute this plan ({model, effort}), or `null` for the global-model
+  // fallback. Required + nullable: the Rust wire always emits the key present-as-null (no
+  // skip_serializing_if), so the key is never absent — modeling it optional would be a lie.
+  execution_model: ModelOptions | null;
 }
 
 // A single persisted comment for a plan. FROZEN 6-key wire shape, mirroring the Rust

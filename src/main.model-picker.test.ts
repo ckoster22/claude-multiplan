@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Sub-Plan 03 — the reading-pane "Execution model" picker + the sidebar badge live-update, driven
+// The reading-pane "Execution model" picker + the sidebar badge live-update, driven
 // through the REAL main.ts consumer wiring. Mirrors main.orchestrator-gate.test.ts: install a real
 // createOrchestrator(fakeDeps) as the shared singleton BEFORE booting the DOM (so main.ts subscribes
 // to OUR handle), script a run to a held LEAF gate for child 01, then assert the picker the gate's

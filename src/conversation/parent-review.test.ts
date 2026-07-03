@@ -69,6 +69,7 @@ function blank2(): PlanTreeState2 {
       redraftCount: 0,
       lastFeedback: null,
       state: { stage: "open", phase: "clarifying-intent" },
+      execution_model: null,
     },
     pendingApproval: null,
     pendingClarify: null,
@@ -245,10 +246,11 @@ function leafNode(nn: number, phase: "executing" | "summarized" | "drafting"): T
     redraftCount: 0,
     lastFeedback: null,
     state: { stage: "leaf", phase, planPath: null, summaryPath: null, plansDirPath: null },
+    execution_model: null,
   };
 }
 function pendingNode(nn: number): TreeNode {
-  return { nn: nnOf(nn), title: `c${nn}`, redraftCount: 0, lastFeedback: null, state: { stage: "open", phase: "pending" } };
+  return { nn: nnOf(nn), title: `c${nn}`, redraftCount: 0, lastFeedback: null, state: { stage: "open", phase: "pending" }, execution_model: null };
 }
 function splitNode(phase: "running-children" | "reviewing", children: TreeNode[]): TreeNode {
   return {
@@ -257,6 +259,7 @@ function splitNode(phase: "running-children" | "reviewing", children: TreeNode[]
     redraftCount: 0,
     lastFeedback: null,
     state: { stage: "split", phase, children: nonEmpty(children), planPath: "/m", summaryPath: null, plansDirPath: null },
+    execution_model: null,
   };
 }
 
@@ -374,7 +377,7 @@ async function driveToRootGate(h: OrchestratorHandle, headers: string): Promise<
   await h.ingestStream(resultFrame());
   await h.ingestStream(textFrame("root recon"));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: split / 3 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":3,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(exitPlanModeReq("root-tu", headers));
 }
@@ -387,7 +390,7 @@ const THREE_WAY =
 async function runLeaf(h: OrchestratorHandle, key: string, marker: string): Promise<void> {
   await h.ingestStream(textFrame(`${key} recon`));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(exitPlanModeReq(`leaf-${key}-tu`, `${key} plan body`));
   await h.approve(key);
@@ -428,7 +431,7 @@ describe("PHASE 5 — scripted depth-1: the review turn between siblings + the s
     // …AND in 02's DRAFT prompt (both prompts — the note's full scope).
     await h.ingestStream(textFrame("02 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     const draft02 = rec.sends.at(-1)!;
     expect(draft02).toContain("Draft the implementation plan for sub-plan 02");
@@ -455,7 +458,7 @@ describe("PHASE 5 — scripted depth-1: the review turn between siblings + the s
     expect(recon03).not.toContain("Adjustment from the parent's review");
     await h.ingestStream(textFrame("03 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     const draft03 = rec.sends.at(-1)!;
     expect(draft03).toContain("sub-plan 03");
@@ -519,7 +522,7 @@ describe("PHASE 5 — scripted depth-2: the review happens at the NESTED level",
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("root recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("root-tu", "### Sub-Plan 01: First\nscope one\n\n### Sub-Plan 02: Second\nscope two\n"),
@@ -532,7 +535,7 @@ describe("PHASE 5 — scripted depth-2: the review happens at the NESTED level",
     // 02 splits into 02.01 / 02.02.
     await h.ingestStream(textFrame("02 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.85"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.85}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("decomp-02-tu", "### Sub-Plan 01: SubA\nnested scope A\n\n### Sub-Plan 02: SubB\nnested scope B\n"),
@@ -555,7 +558,7 @@ describe("PHASE 5 — scripted depth-2: the review happens at the NESTED level",
     expect(recon0202).toContain(NOTE);
     await h.ingestStream(textFrame("02.02 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     const draft0202 = rec.sends.at(-1)!;
     expect(draft0202).toContain("sub-plan 02.02");
@@ -574,7 +577,7 @@ describe("PHASE 5 — last-child skip (no review after the final sibling)", () =
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("root-tu", "### Sub-Plan 01: First\nx\n\n### Sub-Plan 02: Second\ny\n"),
@@ -630,7 +633,7 @@ describe("PHASE 5 — turn watchdog for the summary and parent-review variants",
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("01 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("leaf-01-tu", "01 plan"));
     await h.approve("01");
@@ -725,7 +728,7 @@ describe("PHASE 5 — rogue ExitPlanMode is DENIED (never silently stranded)", (
     await h.ingestStream(resultFrame()); // boundary result → 01 recon
     await h.ingestStream(textFrame("01 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("leaf-01-tu", "01 plan body"));
     await h.approve("01"); // leaf → executing; awaiting = exec; implement turn in flight
@@ -765,14 +768,14 @@ describe("PHASE 5 — rogue ExitPlanMode is DENIED (never silently stranded)", (
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("root-tu", "### Sub-Plan 01: Only\nscope\n"));
     await h.approve("");
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("01 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 1 / 0.9")); // 01 itself splits
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":1,\"confidence\":0.9}")); // 01 itself splits
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("decomp-01-tu", "### Sub-Plan 01: Grand\ngscope\n"));
     await h.approve("01");

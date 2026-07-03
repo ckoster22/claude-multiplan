@@ -20,11 +20,11 @@ import { hostPolicyForMode } from "./permissions";
 function spyQuery() {
   const q = {
     calls: [] as string[],
-    modelCalls: [] as (string | undefined)[],
+    modelCalls: [] as string[],
     setPermissionMode: async (m: string) => {
       q.calls.push(m);
     },
-    setModel: async (m?: string) => {
+    setModel: async (m: string) => {
       q.modelCalls.push(m);
     },
   };

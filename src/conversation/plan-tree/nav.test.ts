@@ -12,6 +12,7 @@ const leaf = (nn: number, title: string): TreeNode => ({
   redraftCount: 0,
   lastFeedback: null,
   state: { stage: "leaf", phase: "drafting", planPath: null, summaryPath: null, plansDirPath: null } as NodeState,
+  execution_model: null,
 });
 
 const split = (nn: number, title: string, children: TreeNode[]): TreeNode => ({
@@ -21,6 +22,7 @@ const split = (nn: number, title: string, children: TreeNode[]): TreeNode => ({
   lastFeedback: null,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   state: { stage: "split", phase: "running-children", children: children as any, planPath: null, summaryPath: null, plansDirPath: null },
+  execution_model: null,
 });
 
 const child0101 = leaf(1, "grandchild 01.01");

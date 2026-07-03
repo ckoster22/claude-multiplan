@@ -8,8 +8,8 @@
   --text-faint: #97969b;
   --accent: #c2410c;       /* Claude terracotta */
   --accent-soft: #fde8df;
-  /* Execution-model badge/picker hues (Sub-Plan 03). One hue per model family; the badge/segment
-     rules mix these with transparent for fills. Light variant darkened from the prototype so the
+  /* Execution-model badge/picker hues. One hue per model family; the badge/segment
+     rules mix these with transparent for fills. Light variant darkened so the
      chip text stays legible on a white pane. */
   --opus: #7c3aed;
   --sonnet: #0f9d78;
@@ -59,7 +59,7 @@
   --text-faint: #6e6e76;
   --accent: #ff7a45;
   --accent-soft: #3a241a;
-  /* Execution-model badge/picker hues (Sub-Plan 03), dark variant — the prototype hexes. */
+  /* Execution-model badge/picker hues, dark variant. */
   --opus: #b98bff;
   --sonnet: #5fd0a6;
   --fable: #ffb26b;
@@ -344,7 +344,7 @@ body {
 .plan-meta { font-size: 11px; color: var(--text-dim); display: flex; gap: 8px; }
 .plan-meta .when { font-weight: 500; }
 
-/* ---- execution-model badge (.mbadge) — Sub-Plan 03 ----
+/* ---- execution-model badge (.mbadge) ----
    The trailing per-row model chip in the sidebar. One hue per model family (opus/sonnet/fable);
    `.rec` is the small "auto" suffix, `.override::after` a terracotta dot marking a user override.
    Visual values sourced from .plan-tree/prototype/index.html. */
@@ -444,11 +444,10 @@ body {
 }
 .doc-src .folder { color: var(--accent); }
 
-/* ---- reading-pane execution-model picker (.modelbar) — Sub-Plan 03 ----
+/* ---- reading-pane execution-model picker (.modelbar) ----
    A segmented Opus/Sonnet/Fable control under the doc header, shown only for a plan that maps to a
-   live plan-tree node. Mirrors the titlebar model-picker's segmented idiom; the `.on` segment tints
-   to its model hue. `.recpill` shows the triage recommendation, `.overridden` replaces it once the
-   user picks. Visual values sourced from .plan-tree/prototype/index.html. */
+   live plan-tree node. The `.on` segment tints to its model hue; `.recpill` shows the triage
+   recommendation, `.overridden` replaces it once the user picks. */
 .modelbar {
   margin-top: 12px; display: flex; flex-direction: column; gap: 9px;
   background: var(--bg-window); border: 1px solid var(--border); border-radius: 10px;

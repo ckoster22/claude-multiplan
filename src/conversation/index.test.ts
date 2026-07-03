@@ -1668,7 +1668,7 @@ describe("controller — §2 live bridge forwards frames to the orchestrator onl
     fire("agent-stream", { ...RESULT, seq: 3 });
     await flush();
     // sizer turn (single) → on the next result the driver sends the sub-recon prompt.
-    fire("agent-stream", { seq: 4, kind: "assistant_text", text: "SIZER: single / 1 / 0.9", parent_tool_use_id: null });
+    fire("agent-stream", { seq: 4, kind: "assistant_text", text: "SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}", parent_tool_use_id: null });
     await flush();
 
     // Arm the throw so FRAME 1 (the sizer-completion result, which sends the sub-recon prompt) throws.

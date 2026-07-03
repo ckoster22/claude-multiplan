@@ -56,6 +56,7 @@ export function sentinelPlanRecord(): PlanRecord {
     child_count: 0,
     collapsed: false,
     h1s: [SENTINEL_TITLE],
+    execution_model: null,
   };
 }
 
@@ -68,6 +69,7 @@ function reconRoot(): TreeNode {
     redraftCount: 0,
     lastFeedback: null,
     state: { stage: "open", phase: "recon" },
+    execution_model: null,
   };
 }
 

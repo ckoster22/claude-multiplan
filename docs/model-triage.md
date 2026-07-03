@@ -1,5 +1,7 @@
 # Model triage for the multiplan pipeline
 
+> Last audited: 2026-07-03
+
 An auditable justification for the per-plan model-triage mapping used by the
 claude-multiplan app. The pipeline exposes each node's task **domain**
 structurally, so the model chosen for a node can be decided deterministically

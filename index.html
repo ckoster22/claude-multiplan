@@ -185,7 +185,7 @@
             <div class="doc-header">
               <div class="doc-filename" id="doc-filename"></div>
               <div class="doc-src" id="doc-src"></div>
-              <!-- Execution-model picker (Sub-Plan 03). Populated + toggled by main.ts (renderModelBar):
+              <!-- Execution-model picker. Populated + toggled by main.ts (renderModelBar):
                    visible only when the open plan maps to a live plan-tree node. -->
               <div class="modelbar hidden" id="model-bar"></div>
             </div>
@@ -271,7 +271,7 @@
                         title="Submit your inline comments as feedback">Submit feedback</button>
                 <button class="rb-btn" id="review-clear" type="button"
                         title="Clear all of this plan's comments (click again to confirm)">Clear comments</button>
-                <!-- Sub-Plan 03 — in-process review ONLY: approve the plan and begin execution in the
+                <!-- in-process review ONLY: approve the plan and begin execution in the
                      same Agent SDK session (single click → resolve_tool_permission(allow) +
                      set_agent_permission_mode(acceptEdits) + flip to the Conversation tab). Hidden by
                      default; refreshReviewBar() shows it solely when VIEWING an in-process review

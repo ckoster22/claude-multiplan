@@ -16,9 +16,10 @@ export interface SettablePermissionQuery {
 }
 
 // The SDK Query surface index.ts holds for a live model switch — the sibling of SettablePermissionQuery.
-// Same minimal structural shape (the real SDK query is assignable to it); the decision NEVER calls it.
+// `model` is required: a set-model command always carries a concrete model id, so an absent model is
+// unrepresentable here (the SDK's own `setModel(model?)` stays assignable to this narrower shape).
 export interface SettableModelQuery {
-  setModel(model?: string): Promise<void>;
+  setModel(model: string): Promise<void>;
 }
 
 // The sidecar session lifecycle. `q` lives ONLY in `live`, so a command handler can reach the SDK

@@ -200,6 +200,7 @@ describe("acceptanceRefineTargets / acceptanceRefineLabel (Phase 6 — refine ba
       redraftCount: 0,
       lastFeedback: null,
       state: { stage: "leaf", phase: "summarized", planPath: `/p${n}.md`, summaryPath: null, plansDirPath: null },
+      execution_model: null,
     };
   }
   // A split root resting in its acceptance window (all children summarized).
@@ -217,6 +218,7 @@ describe("acceptanceRefineTargets / acceptanceRefineLabel (Phase 6 — refine ba
         summaryPath: null,
         plansDirPath: null,
       },
+      execution_model: null,
     };
   }
 
@@ -236,6 +238,7 @@ describe("acceptanceRefineTargets / acceptanceRefineLabel (Phase 6 — refine ba
       redraftCount: 0,
       lastFeedback: null,
       state: { stage: "leaf", phase: "summarized", planPath: "/p.md", summaryPath: null, plansDirPath: null },
+      execution_model: null,
     };
     expect(acceptanceRefineTargets(leafRoot)).toEqual([]);
   });

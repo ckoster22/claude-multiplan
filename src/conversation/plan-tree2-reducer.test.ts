@@ -68,6 +68,7 @@ function blank2(): PlanTreeState2 {
       redraftCount: 0,
       lastFeedback: null,
       state: { stage: "open", phase: "clarifying-intent" },
+      execution_model: null,
     },
     pendingApproval: null,
     pendingClarify: null,
@@ -461,7 +462,7 @@ describe("gen-2 single-collapse run", () => {
   });
 });
 
-describe("gen-2 per-node execution_model stamping (Phase C)", () => {
+describe("gen-2 per-node execution_model stamping", () => {
   const SONNET = buildOptions("claude-sonnet-5", "medium");
   const OPUS = buildOptions("claude-opus-4-8", "high");
   const FABLE = buildOptions("claude-fable-5", "high");
@@ -1858,11 +1859,10 @@ describe("two-outcome sizer (escalate unrepresentable)", () => {
 });
 
 describe("parseSizerDecision", () => {
-  it("extracts split/3/0.82 from a 3-token SIZER line, defaulting scale to standard", () => {
-    // FALSIFIABLE: a scale-less (legacy) line must still parse, with scale defaulting to "standard"
-    // (Sonnet-tier, inert) so pre-scale sizer output / emulator lines keep parsing unchanged.
-    // Mutation: make the 4th token REQUIRED in the regex → null here → RED.
-    expect(parseSizerDecision("SIZER: split / 3 / 0.82")).toEqual({
+  it("parses a scale-less JSON SIZER line, defaulting scale to standard", () => {
+    // FALSIFIABLE: a payload with no `scale` key must still parse, defaulting to "standard"
+    // (Sonnet-tier, inert). Mutation: make `scale` required (reject when absent) → null here → RED.
+    expect(parseSizerDecision('SIZER: {"decision":"split","num_plans":3,"confidence":0.82}')).toEqual({
       decision: "split",
       num_plans: 3,
       confidence: 0.82,
@@ -1870,32 +1870,44 @@ describe("parseSizerDecision", () => {
     });
   });
 
-  it("parses the 4th token into scale (single / 1 / 0.9 / huge → scale huge)", () => {
-    // Mutation: drop the 4th-token capture / hardcode "standard" → scale reads "standard" → RED.
-    expect(parseSizerDecision("SIZER: single / 1 / 0.9 / huge")).toEqual({
+  it("parses the scale field (huge/large/standard)", () => {
+    // Mutation: drop the scale read / hardcode "standard" → scale reads "standard" → RED.
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":0.9,"scale":"huge"}')).toEqual({
       decision: "single",
       num_plans: 1,
       confidence: 0.9,
       scale: "huge",
     });
-    expect(parseSizerDecision("SIZER: single / 1 / 0.7 / large")?.scale).toBe("large");
-    expect(parseSizerDecision("SIZER: single / 1 / 0.7 / standard")?.scale).toBe("standard");
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":0.7,"scale":"large"}')?.scale).toBe("large");
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":0.7,"scale":"standard"}')?.scale).toBe("standard");
   });
 
-  it("defaults an unparseable / unknown scale token to standard", () => {
-    // An unknown 4th token (not standard/large/huge) is coerced to "standard", never rejected.
-    expect(parseSizerDecision("SIZER: single / 1 / 0.9 / gigantic")?.scale).toBe("standard");
+  it("defaults an unknown scale value to standard", () => {
+    // An unknown scale (not standard/large/huge) is coerced to "standard", never rejected.
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":0.9,"scale":"gigantic"}')?.scale).toBe("standard");
   });
 
-  it("returns null for a non-matching line", () => {
+  it("returns null for a non-SIZER line", () => {
     // Mutation: returning a default outcome instead of null → RED here.
     expect(parseSizerDecision("just some assistant prose")).toBeNull();
   });
 
-  it("returns null for a SIZER line with an unknown decision word (e.g. a stale `escalate`)", () => {
+  it("returns null for a malformed JSON payload (incl. the retired slash format)", () => {
+    // A `SIZER:` prefix with non-JSON after it is a no-outcome line (the driver coerces to split).
+    expect(parseSizerDecision("SIZER: split / 3 / 0.82")).toBeNull();
+    expect(parseSizerDecision('SIZER: {"decision":"split", oops}')).toBeNull();
+  });
+
+  it("returns null for an unknown decision word (e.g. a stale `escalate`)", () => {
     // The two-outcome sizer parses ONLY single/split; the driver coerces a null parse to split.
-    // (Mutation: widening the regex back to (single|split|escalate) → a parsed outcome here → RED.)
-    expect(parseSizerDecision("SIZER: escalate / 0 / 0.3")).toBeNull();
+    // Mutation: widening the decision check to include `escalate` → a parsed outcome here → RED.
+    expect(parseSizerDecision('SIZER: {"decision":"escalate","num_plans":0,"confidence":0.3}')).toBeNull();
+  });
+
+  it("returns null for an out-of-range confidence or non-integer num_plans", () => {
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":1.5}')).toBeNull();
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":-1,"confidence":0.5}')).toBeNull();
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1.5,"confidence":0.5}')).toBeNull();
   });
 });
 

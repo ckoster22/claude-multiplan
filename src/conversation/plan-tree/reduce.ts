@@ -34,8 +34,9 @@ function makeNode2(nn: Nn, title: string, inheritModel?: ModelOptions | null): T
     redraftCount: 0,
     lastFeedback: null,
     state: { stage: "open", phase: "pending" },
+    execution_model: inheritModel ?? null,
   };
-  return inheritModel ? { ...base, execution_model: inheritModel, model_source: "auto" } : base;
+  return inheritModel ? { ...base, model_source: "auto" } : base;
 }
 
 // Stamp an AUTO-triaged execution_model onto a node — but NEVER over a user "override" (re-triage

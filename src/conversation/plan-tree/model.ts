@@ -122,9 +122,10 @@ export interface TreeNode {
   readonly lastFeedback: string | null;
   readonly state: NodeState;
   // Which Claude model runs THIS node (NOT the plan-tree data model — see the leaf header).
-  // Carries the full {model, effort} so Opus's effort travels with it. Additive/optional (schema
-  // stays 2): absent ⇒ fall back to the global-model resolution. Populated by 02; null/absent here.
-  readonly execution_model?: ModelOptions | null;
+  // Carries the full {model, effort} so Opus's effort travels with it. Required + nullable: `null`
+  // is the explicit "no per-node model → global fallback" value, never a missing key (a legacy
+  // pre-field ledger is normalized to `null` at the rehydrate boundary).
+  readonly execution_model: ModelOptions | null;
   // How execution_model got here: "auto" (domain-triaged by the reducer) vs "override" (a user pick
   // via EXECUTION_MODEL_SET). Ledger-only (NOT on the PlanRecord wire — schema stays 2, no contract
   // churn); re-triage never clobbers an "override". Additive/optional: absent ⇒ treated as auto.

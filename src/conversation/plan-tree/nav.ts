@@ -40,7 +40,7 @@ export function nodeAtPath(root: TreeNode, path: NodePath): TreeNode | null {
 // here and needs the NodePath to dispatch EXECUTION_MODEL_SET.
 export function resolveNodeByNnPath(
   root: TreeNode,
-  nnPath: string | null | undefined,
+  nnPath: string | null,
 ): { node: TreeNode; path: NodePath } | null {
   try {
     const path = parsePathKey(nnPath ?? "");

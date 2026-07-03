@@ -763,7 +763,7 @@ describe("orchestrator — Phase 0 session-limit loop-stop guard", () => {
     await h.ingestStream(resultFrame()); // intent → recon
     await h.ingestStream(textFrame("root recon report"));
     await h.ingestStream(resultFrame()); // recon → sizer
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame()); // sizer → decomposition draft
 
     await h.ingestPermission({
@@ -941,7 +941,7 @@ async function advanceReconToSizer(h: OrchestratorHandle): Promise<void> {
 
 // Complete the root sizer with a CONFIDENT single → root collapses to child [01]'s recon (sub-recon).
 async function advanceSizerToChildRecon(h: OrchestratorHandle): Promise<void> {
-  await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
 }
 
@@ -1113,7 +1113,7 @@ describe("orchestrator — Phase 7 per-variant resume-context injection (live dr
     // `reviewing` and the NO-TOOLS parent-review turn is in flight.
     await advanceIntentToRecon(h);
     await advanceReconToSizer(h);
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     // The master decomposition gate holds; approve it (arms `resuming` + interrupts; the boundary
     // result fires child 01's recon).
@@ -1132,7 +1132,7 @@ describe("orchestrator — Phase 7 per-variant resume-context injection (live dr
     // Run child 01: recon → sizer(single) → draft → approve → exec → summary.
     await h.ingestStream(textFrame("01 recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission({
       seq: nextSeq(),
@@ -1213,7 +1213,7 @@ const exitPlanMode = (id: string, plan: string): ToolPermissionRequested => ({
 async function runQuotaLeaf(h: OrchestratorHandle, key: string, marker: string): Promise<void> {
   await h.ingestStream(textFrame(`${key} recon`));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(exitPlanMode(`leaf-${key}-tu`, `${key} plan body`));
   await flush();
@@ -1231,7 +1231,7 @@ async function driveToNestedReview(): Promise<{ h: OrchestratorHandle; rec: Rec;
   const { h, rec, clock, o } = await freshAtIntent();
   await advanceIntentToRecon(h);
   await advanceReconToSizer(h);
-  await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(
     exitPlanMode("root-tu", "# Root\n\n### Sub-Plan 01: First\nscope one\n\n### Sub-Plan 02: Second\nscope two\n"),
@@ -1246,7 +1246,7 @@ async function driveToNestedReview(): Promise<{ h: OrchestratorHandle; rec: Rec;
   // Child 02 SPLITS into 02.01 / 02.02.
   await h.ingestStream(textFrame("02 recon"));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: split / 2 / 0.85"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.85}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(
     exitPlanMode("decomp-02-tu", "# Nested 02\n\n### Sub-Plan 01: SubA\nnested A\n\n### Sub-Plan 02: SubB\nnested B\n"),

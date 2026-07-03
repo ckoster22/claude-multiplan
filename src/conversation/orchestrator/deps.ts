@@ -89,13 +89,13 @@ export interface OrchestratorDeps {
   // write_agent_plan({ plan, treeId, nn, executionModel }) -> the absolute path written. `nnPath` is
   // null for the root decomposition plan (flavor master), else the node's dotted PathKey string
   // ("01", "02.01", …). Rust takes Option<String> and REJECTS a bare JSON number — callers must send
-  // the string form. `executionModel` is the node's triaged {model, effort} (Phase D); absent/null ⇒
-  // no execution_model frontmatter (legacy fallback preserved).
+  // the string form. `executionModel` is the node's triaged {model, effort}, or `null` ⇒ no
+  // execution_model frontmatter (global-model fallback).
   writeAgentPlan(
     plan: string,
     treeId: string,
     nnPath: string | null,
-    executionModel?: ModelOptions | null,
+    executionModel: ModelOptions | null,
   ): Promise<string>;
   // INJECTABLE TIMER SEAM (optional — defaults to the global timers): the resume watchdog schedules
   // through these so tests fire/inspect it without sleeping. The handle type is opaque (`unknown`)
@@ -174,7 +174,7 @@ export function defaultDeps(): OrchestratorDeps {
         plan,
         treeId,
         nn: nnPath,
-        executionModel: executionModel ?? null,
+        executionModel,
       }),
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),

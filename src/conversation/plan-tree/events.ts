@@ -78,7 +78,7 @@ export type PlanTreeEvent2 =
   // re-completion (baseline_ present, acceptance_ absent) the gate RE-ARMS. Clears
   // pendingAcceptance, records NO verdict. Legal ONLY while the gate is open; else throws.
   | { type: "ACCEPTANCE_REFINED"; target: NodePath }
-  // USER MODEL OVERRIDE (03's picker dispatches this). Stamps the target node's execution_model +
+  // USER MODEL OVERRIDE (the reading-pane picker dispatches this). Stamps the target node's execution_model +
   // model_source:"override" so re-triage never clobbers it, then re-derives inherited-auto models for
   // still-`open` descendants. May address ANY node (not just the active one) — the picker can
   // pre-set a not-yet-active node's model. Emits persist.

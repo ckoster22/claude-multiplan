@@ -95,7 +95,7 @@ async function driveToRootGate(h: OrchestratorHandle): Promise<void> {
   await h.ingestStream(resultFrame());
   await h.ingestStream(textFrame("recon report"));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(
     exitPlanModeReq("root-tu", "### Sub-Plan 01: First\nx\n### Sub-Plan 02: Second\ny"),
@@ -142,7 +142,7 @@ describe("invariant: leaf_approval_never_interrupts", () => {
     // held LEAF gate.
     await h.ingestStream(textFrame("child recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("leaf-tu", "the child plan"));
     expect(h.snapshot().pendingApproval?.kind).toBe("leaf");

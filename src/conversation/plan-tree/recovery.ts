@@ -17,9 +17,26 @@ import type {
   ResumeScope,
   DecompositionArtifactExists,
 } from "./model";
+import { nonEmpty } from "./ids";
 import { activePathOf, nodeAtPath, inAcceptanceWindow } from "./nav";
 import { assertCoherent2 } from "./coherence";
 import { planName2, treeIsDone, activePhaseLabel } from "./select";
+
+// Backfill the required `execution_model` on every node of a persisted tree: a ledger written before
+// the field existed carries nodes with no `execution_model`, and the required TreeNode type demands
+// the key be present, so normalize a missing value to explicit `null` (the global-model fallback).
+function normalizeExecutionModel(node: TreeNode): TreeNode {
+  const withModel: TreeNode =
+    node.execution_model === undefined ? { ...node, execution_model: null } : node;
+  if (withModel.state.stage !== "split") return withModel;
+  return {
+    ...withModel,
+    state: {
+      ...withModel.state,
+      children: nonEmpty(withModel.state.children.map(normalizeExecutionModel)),
+    },
+  };
+}
 
 // Rehydrate the in-memory PlanTreeState2 from a persisted ledger: assert coherence, carry EVERY
 // serialized field, and null EVERY transient gate (none of pendingApproval/pendingClarify/
@@ -27,12 +44,13 @@ import { planName2, treeIsDone, activePhaseLabel } from "./select";
 // driver re-mints any gate it re-presents from on-disk artifacts.
 export function rehydrateState2(ledger: RecursiveLedger): PlanTreeState2 {
   assertCoherent2(ledger.root);
+  const root = normalizeExecutionModel(ledger.root);
   return {
     schema: 2,
     tree_id: ledger.tree_id,
     created_ms: ledger.created_ms,
     updated_ms: ledger.updated_ms,
-    root: ledger.root,
+    root,
     sdk_session_id: ledger.sdk_session_id,
     // Rehydrate the working-reference record from disk so a resumed run still knows the baseline
     // was frozen (deep-copied; absent ⇒ undefined ⇒ a sketch run, unchanged).

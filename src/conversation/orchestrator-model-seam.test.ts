@@ -111,7 +111,7 @@ describe("model seam — per-phase setModel switching (E3)", () => {
   it("2-way split drives Opus decompose → Sonnet standard-leaf exec → Opus parent review, deduped", async () => {
     const { h, models } = makeHandle();
 
-    await driveToSizer(h, "SIZER: split / 2 / 0.9");
+    await driveToSizer(h, "SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}");
     const masterPlan =
       "# Master Plan\n\npreamble\n\n### Sub-Plan 01: First\nscope one\n\n### Sub-Plan 02: Second\nscope two\n";
     await h.ingestPermission(exitPlanModeReq("master-tu", masterPlan));
@@ -119,8 +119,8 @@ describe("model seam — per-phase setModel switching (E3)", () => {
     await h.ingestStream(resultFrame()); // interrupted-resume boundary → fires sub-01 recon
 
     // scale-less sizer lines default to "standard" ⇒ a leaf coding model of Sonnet.
-    await driveSub(h, 1, "sub1-tu", "SIZER: single / 1 / 0.95", true);
-    await driveSub(h, 2, "sub2-tu", "SIZER: single / 1 / 0.95");
+    await driveSub(h, 1, "sub1-tu", "SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}", true);
+    await driveSub(h, 2, "sub2-tu", "SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}");
 
     // The genesis session opens Sonnet (clarify/recon), so the FIRST switch is Opus at root sizing.
     // Per child: recon Sonnet → own sizer Opus → standard-leaf executing Sonnet; between children the
@@ -147,7 +147,7 @@ describe("model seam — per-phase setModel switching (E3)", () => {
     // A confident single with a 4-token sizer scale of `huge` ⇒ the collapse child's coding model is
     // Fable. The single collapses to a one-child split; that child inherits the root's `single` verdict
     // so it SKIPS its own sizer, but still runs recon → drafting → executing.
-    await driveToSizer(h, "SIZER: single / 1 / 0.95 / huge");
+    await driveToSizer(h, "SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95,\"scale\":\"huge\"}");
     await h.ingestStream(textFrame("collapse-child recon report")); // child recon (Sonnet)
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub1-tu", "# Sub-Plan 01\n\nbody\n"));
@@ -166,7 +166,7 @@ describe("model seam — per-phase setModel switching (E3)", () => {
   });
 });
 
-// HANDLE SEAM (Sub-Plan 03): setExecutionModel(path, options) is the override dispatch surface the
+// HANDLE SEAM: setExecutionModel(path, options) is the override dispatch surface the
 // reading-pane picker drives. It must stamp the target node's execution_model to EXACTLY the supplied
 // options and mark model_source "override" (so re-triage never clobbers it).
 describe("handle seam — setExecutionModel stamps an override on the target node", () => {
@@ -174,7 +174,7 @@ describe("handle seam — setExecutionModel stamps an override on the target nod
     const { h } = makeHandle();
 
     // Drive to the collapse child's leaf gate so node [01] exists (single verdict → one-child split).
-    await driveToSizer(h, "SIZER: single / 1 / 0.95");
+    await driveToSizer(h, "SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}");
     await h.ingestStream(textFrame("collapse-child recon report"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub1-tu", "# Sub-Plan 01\n\nbody\n"));
