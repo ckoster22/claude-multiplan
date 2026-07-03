@@ -55,6 +55,7 @@ import { diag } from "./conversation/diag";
 import {
   isOrchestrationActive,
   getOrchestrator,
+  effectiveModel,
   pathKey,
   parsePathKey,
   type PlanTreeSnapshot2,
@@ -74,7 +75,7 @@ import {
   type TreeNode,
   type NodePath,
 } from "./conversation/plan-tree";
-import { nodeExecutionModel } from "./conversation/plan-tree/triage";
+import { nodeExecutionModel, phaseModel } from "./conversation/plan-tree/triage";
 import {
   composePreviewMarkdown,
   prototypeBarLabel,
@@ -136,6 +137,7 @@ let docHeaderEl: HTMLElement | null;
 let docFilenameEl: HTMLElement | null;
 let docSrcEl: HTMLElement | null;
 let modelBarEl: HTMLElement | null;
+let convModelChipEl: HTMLElement | null;
 let tocListEl: HTMLElement | null;
 let filterInputEl: HTMLInputElement | null;
 let filterClearEl: HTMLElement | null;
@@ -2263,6 +2265,44 @@ function renderModelBar(): void {
   });
 }
 
+// Render (or hide) the conversation-header chip that shows the model the ACTIVE session is running
+// right now. Visible ONLY while an orchestration is active with a live active node; hidden otherwise
+// (no run, or the terminal/acceptance window where activePathOf is null). The displayed {model, effort}
+// is the orchestrator's own effectiveModel(activeNode) — the SAME override-aware resolution the
+// dispatch seam asserts via setModel — so the chip can never drift from what the session actually runs.
+// The tooltip carries the phase's triage rationale ("why this model"). Rebuilt from scratch each call.
+function renderModelChip(): void {
+  const chip = convModelChipEl;
+  if (!chip) return;
+  const snap = orchSnapshot;
+  const activeP = snap && isOrchestrationActive() ? activePathOf(snap.root) : null;
+  const node = activeP ? nodeAtPath(snap!.root, activeP) : null;
+  if (!node) {
+    chip.classList.add("hidden");
+    chip.replaceChildren();
+    chip.removeAttribute("title");
+    return;
+  }
+  const opts = effectiveModel(node);
+  const cls = presetClassForModel(opts.model);
+  chip.className = `conv-model-chip${cls ? ` ${cls}` : ""}`;
+  chip.replaceChildren();
+
+  const name = document.createElement("span");
+  name.className = "cm-name";
+  name.textContent = friendlyModelName(opts.model) ?? opts.model;
+  chip.appendChild(name);
+
+  if (opts.effort) {
+    const eff = document.createElement("span");
+    eff.className = "cm-effort";
+    eff.textContent = opts.effort;
+    chip.appendChild(eff);
+  }
+
+  chip.title = phaseModel(node).rationale;
+}
+
 // ---- Tabbed left panel + table of contents (sidebar domain) ------------------------------
 //
 // The ToC is the ONE sanctioned reading-pane → sidebar data flow, mediated entirely by the
@@ -2794,6 +2834,7 @@ window.addEventListener("DOMContentLoaded", () => {
   docFilenameEl = document.querySelector("#doc-filename");
   docSrcEl = document.querySelector("#doc-src");
   modelBarEl = document.querySelector("#model-bar");
+  convModelChipEl = document.querySelector("#conversation-model-chip");
   tocListEl = document.querySelector("#toc-list");
   filterInputEl = document.querySelector("#plan-filter");
   filterClearEl = document.querySelector(".search .clear");
@@ -3030,6 +3071,9 @@ window.addEventListener("DOMContentLoaded", () => {
       // Keep the reading-pane picker in lockstep with the live snapshot (override flips the `.on`
       // segment + recommendation/override state).
       renderModelBar();
+      // The conversation-header chip tracks the ACTIVE node's live model (phase transitions +
+      // overrides) independently of which plan is open.
+      renderModelChip();
       // Re-derive both affordances on every snapshot transition (the resume banner stays suppressed
       // while the run owns the seam — detectResumable null — so this is a no-op for it until onDone).
       refreshAffordances();
@@ -3092,6 +3136,8 @@ window.addEventListener("DOMContentLoaded", () => {
       applyFilterAndRender();
       // The picker is a live-tree concept — the run ended, so hide it.
       renderModelBar();
+      // The run ended — the header chip has no active session to report; hide it.
+      renderModelChip();
       // The run ended: re-derive BOTH affordances. The open plan may now be RESUMABLE (the run was
       // suppressing detectResumable via isOrchestrationActive) — refreshAffordances re-evaluates the
       // resume banner WITHOUT reopening the plan.
@@ -3107,6 +3153,7 @@ window.addEventListener("DOMContentLoaded", () => {
       lastBadgeSig = null;
       applyFilterAndRender();
       renderModelBar();
+      renderModelChip();
       refreshAffordances();
     },
   });

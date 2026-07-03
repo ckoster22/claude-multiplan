@@ -338,6 +338,22 @@ describe("contract — #sdk-status pill lives in the sidebar (moved off the titl
   });
 });
 
+describe("contract — conversation-header live model chip selector present in index.html", () => {
+  // The live execution-model chip is queried by id from main.ts (convModelChipEl) and lives inside
+  // the conversation toolbar. Removing it from index.html would silently no-op the chip — this pin
+  // reads the real file so that turns red.
+  it("index.html contains the #conversation-model-chip inside the conv-toolbar", () => {
+    expect(INDEX_HTML).toContain('id="conversation-model-chip"');
+    // It sits within the conversation toolbar, before the session controls (Pause/Resume/Stop).
+    const toolbarIdx = INDEX_HTML.indexOf('class="conv-toolbar"');
+    const chipIdx = INDEX_HTML.indexOf('id="conversation-model-chip"');
+    const pauseIdx = INDEX_HTML.indexOf('id="conversation-pause"');
+    expect(toolbarIdx).toBeGreaterThan(-1);
+    expect(chipIdx).toBeGreaterThan(toolbarIdx);
+    expect(pauseIdx).toBeGreaterThan(chipIdx);
+  });
+});
+
 describe("contract — CommentRecord carries exactly its 6 fields (separate from PlanRecord)", () => {
   // DERIVED FROM THE TYPE, not a hand-written literal: the keymap is `satisfies
   // Record<keyof CommentRecord, true>`, so the COMPILER enforces it covers EVERY key of the

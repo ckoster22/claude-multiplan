@@ -101,7 +101,9 @@ function assertNever(x: never): never {
 // "override") pins the node's stamped execution_model; otherwise the domain-aware phaseModel for the
 // node's current (stage, phase). Both the session-open boundaries (E1) and the per-turn model seam
 // (E3) resolve through THIS single helper so the opened model and the asserted model can never drift.
-function effectiveModel(node: TreeNode): ModelOptions {
+// Exported so a live-UI surface (the conversation-header model chip) can display the SAME resolution
+// the session runs, never a parallel re-derivation.
+export function effectiveModel(node: TreeNode): ModelOptions {
   return node.model_source === "override" && node.execution_model
     ? node.execution_model
     : phaseModel(node).options;

@@ -262,6 +262,10 @@
                    #conversation-cancel is the Stop button (kept under its legacy id so existing wiring
                    compiles). -->
               <div class="conv-toolbar">
+                <!-- Live execution-model chip: the model the ACTIVE session is running right now
+                     (friendly name + effort), derived from the orchestrator's effectiveModel against
+                     the active node. Hidden entirely when no run is active. -->
+                <span class="conv-model-chip hidden" id="conversation-model-chip" aria-live="polite"></span>
                 <button class="conv-pause" id="conversation-pause" type="button"
                         title="Pause: interrupt the current turn (the session stays alive)">Pause</button>
                 <button class="conv-resume" id="conversation-resume" type="button"

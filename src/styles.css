@@ -983,6 +983,21 @@ figcaption { font-size: 11px; color: var(--text-dim); text-align: center; margin
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 0 0 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px;
 }
+/* Live execution-model chip: sits at the left of the toolbar (margin-right:auto pushes the
+   session controls to the right). One hue per model family, mirroring the sidebar `.mbadge`. */
+.conv-model-chip {
+  margin-right: auto;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  height: 26px; padding: 0 10px; border-radius: 8px; border: 1px solid transparent;
+  font-family: var(--ui); font-size: 11px; font-weight: 600;
+}
+.conv-model-chip.hidden { display: none; }
+.conv-model-chip.opus   { color: var(--opus);   border-color: color-mix(in srgb, var(--opus) 45%, transparent);   background: color-mix(in srgb, var(--opus) 14%, transparent); }
+.conv-model-chip.sonnet { color: var(--sonnet); border-color: color-mix(in srgb, var(--sonnet) 45%, transparent); background: color-mix(in srgb, var(--sonnet) 14%, transparent); }
+.conv-model-chip.fable  { color: var(--fable);  border-color: color-mix(in srgb, var(--fable) 45%, transparent);  background: color-mix(in srgb, var(--fable) 14%, transparent); }
+.conv-model-chip .cm-effort { font-weight: 500; opacity: .7; }
+.conv-model-chip .cm-effort::before { content: "· "; }
+
 /* Session controls share the base chrome; Stop gets the danger hover. */
 .conv-cancel, .conv-pause, .conv-resume {
   height: 26px; padding: 0 12px;
