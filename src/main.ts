@@ -37,7 +37,17 @@ import {
 } from "./remote-data";
 import { RenderGuard } from "./render-guard";
 import { initTitlebar, initThemeToggle, initTextSize } from "./titlebar";
-import { initModelPicker } from "./model-picker";
+import {
+  initModelPicker,
+  MODEL_PRESETS,
+  PRESET_OPTIONS,
+  buildOptions,
+  presetClassForModel,
+  friendlyModelName,
+  resolveOpusEffort,
+  type ModelPreset,
+  type ModelOptions,
+} from "./model-picker";
 import { initConversation, type ConversationHandle } from "./conversation";
 import { diag } from "./conversation/diag";
 import {
@@ -58,9 +68,11 @@ import {
   planName2,
   activePathOf,
   nodeAtPath,
+  resolveNodeByNnPath,
   type TreeNode,
   type NodePath,
 } from "./conversation/plan-tree";
+import { nodeExecutionModel } from "./conversation/plan-tree/triage";
 import {
   composePreviewMarkdown,
   prototypeBarLabel,
@@ -121,6 +133,7 @@ let readingPaneEl: HTMLElement | null;
 let docHeaderEl: HTMLElement | null;
 let docFilenameEl: HTMLElement | null;
 let docSrcEl: HTMLElement | null;
+let modelBarEl: HTMLElement | null;
 let tocListEl: HTMLElement | null;
 let filterInputEl: HTMLInputElement | null;
 let filterClearEl: HTMLElement | null;
@@ -287,6 +300,16 @@ function currentReviewId(): string | null {
 // Latest snapshot from the shared orchestrator (null until a run is active, null after it ends).
 // Holds the active node's pendingApproval gate while the user reviews.
 let orchSnapshot: PlanTreeSnapshot2 | null = null;
+
+// The last-rendered badge signature (every live node's displayed model + override source). The
+// onSnapshot observer re-renders the sidebar ONLY when this changes — the badge is off the default
+// re-render path (a normal EXECUTION_MODEL_SET snapshot mints no placeholder), so without this the
+// auto→override flip would not land until the next list_plans. Null when no run is active.
+let lastBadgeSig: string | null = null;
+
+// EXACTLY-ONCE guard for a model-override dispatch (mirrors the Approve button's actionInFlight):
+// a fast double-click on a segment cannot start a second setExecutionModel.
+let modelSetInFlight = false;
 
 // ---- Live-run placeholder sidebar row -----------------------------------------------
 // A running orchestration has no sidebar row until list_plans picks up the plan file. `runPlaceholder`
@@ -1453,8 +1476,56 @@ function showToast(msg: string): void {
 // set with orphans/duplicates already normalized. So `renderSidebar` walks top-to-bottom with
 // NO re-aggregation and NO flavor-fallback logic.
 
+// The execution-model a sidebar row displays, and whether that state is a LIVE user override.
+//   - Live node (the row is in the active tree AND its nn_path resolves in the snapshot): the node's
+//     PERSISTED per-node model (execution_model, else the derived nodeExecutionModel), with the
+//     auto/override affordance read off model_source.
+//   - Persisted / inactive row: the wire `execution_model` (chip only — the source is unknowable
+//     off-wire). Null (legacy/pre-feature) ⇒ no model ⇒ no badge.
+// `model_source` is never on the PlanRecord wire, so override state is only knowable for a live node.
+function rowModelState(rec: PlanRecord): { model: ModelOptions; overridden: boolean; live: boolean } | null {
+  if (orchSnapshot && rec.tree_id && rec.tree_id === orchSnapshot.treeId) {
+    const hit = resolveNodeByNnPath(orchSnapshot.root, rec.nn_path);
+    if (hit) {
+      return {
+        model: hit.node.execution_model ?? nodeExecutionModel(hit.node).options,
+        overridden: hit.node.model_source === "override",
+        live: true,
+      };
+    }
+  }
+  const persisted = rec.execution_model ?? null;
+  return persisted ? { model: persisted, overridden: false, live: false } : null;
+}
+
+// Append the trailing `.mbadge` model chip to a row's `.plan-row` (the last child). Omitted entirely
+// when the row has no known model (legacy row) or an unrecognized model id.
+function appendModelBadge(planRow: HTMLElement, rec: PlanRecord): void {
+  const state = rowModelState(rec);
+  if (!state) return;
+  const cls = presetClassForModel(state.model.model);
+  if (!cls) return;
+  const badge = document.createElement("span");
+  badge.className = `mbadge ${cls}`;
+  badge.textContent = friendlyModelName(state.model.model) ?? state.model.model;
+  // The auto/override affordance rides ONLY on a live node (model_source is off-wire): a live auto
+  // node gets the "auto" suffix, a live override gets the `.override` accent dot, a persisted chip
+  // gets neither.
+  if (state.live) {
+    if (state.overridden) {
+      badge.classList.add("override");
+    } else {
+      const rec_ = document.createElement("span");
+      rec_.className = "rec";
+      rec_.textContent = "auto";
+      badge.appendChild(rec_);
+    }
+  }
+  planRow.appendChild(badge);
+}
+
 // Build a flat row matching the documented per-row template:
-//   .plan[.active][.unread] data-path  >  .plan-row > .plan-title + .unread-dot
+//   .plan[.active][.unread] data-path  >  .plan-row > .plan-title + .unread-dot + .mbadge
 //                                          .plan-src (dimmed cwd; filled by 03)
 //                                          .plan-meta (.when)
 // Standalone rows and 0-child masters use this shape. A 0-child master keeps flavor=master
@@ -1481,6 +1552,7 @@ function buildFlatRow(rec: PlanRecord, ctx: SidebarCtx): HTMLElement {
 
   planRow.appendChild(title);
   planRow.appendChild(dot);
+  appendModelBadge(planRow, rec);
 
   const src = document.createElement("div");
   src.className = "plan-src";
@@ -1535,6 +1607,11 @@ function buildMaster(rec: PlanRecord, ctx: SidebarCtx): { wrapper: HTMLElement; 
   count.className = "child-count";
   count.textContent = `${n} sub-plan${n === 1 ? "" : "s"}`;
   planRow.appendChild(count);
+
+  // buildFlatRow appended the model badge before the count; keep it the LAST child so the far-right
+  // chip position is stable across flat + master rows (its margin-left:auto anchors it right).
+  const badge = planRow.querySelector(".mbadge");
+  if (badge) planRow.appendChild(badge);
 
   const children = document.createElement("div");
   children.className = "children";
@@ -1997,6 +2074,140 @@ function patchDocSrc(): void {
   docSrcEl.appendChild(label);
 }
 
+// ---- execution-model badge + picker (Sub-Plan 03) -----------------------------------------
+
+// A stable digest of every node's DISPLAYED model + override source. The onSnapshot observer compares
+// this against lastBadgeSig and re-renders the sidebar only on a change, so a model override flips the
+// badge in-session without re-rendering on every unrelated snapshot.
+function badgeSignature(root: TreeNode): string {
+  const parts: string[] = [];
+  const visit = (node: TreeNode, prefix: NodePath): void => {
+    const displayed = node.execution_model ?? nodeExecutionModel(node).options;
+    parts.push(`${pathKey(prefix)}:${displayed.model}/${displayed.effort ?? ""}:${node.model_source ?? ""}`);
+    if (node.state.stage === "split") {
+      for (const child of node.state.children) visit(child, [...prefix, child.nn]);
+    }
+  };
+  visit(root, []);
+  return parts.join("|");
+}
+
+// The TRIAGE-ALIGNED override options for a picker segment. The dispatched {model, effort} must match
+// the triage default for that model, NOT the raw PRESET_OPTIONS effort — otherwise "override to the
+// already-recommended model" would silently downgrade effort (PRESET_OPTIONS' Fable is effort:"low";
+// triage's Fable is "high") and flip the node to override for no real change. Opus mirrors
+// resolveModelOptions' Opus arm (the user's global effort, default "high").
+function overrideOptionsFor(preset: ModelPreset): ModelOptions {
+  switch (preset) {
+    case "opus-4-8":
+      return buildOptions("claude-opus-4-8", resolveOpusEffort());
+    case "sonnet-5":
+      return buildOptions("claude-sonnet-5", "medium");
+    case "fable-5":
+      return buildOptions("claude-fable-5", "high");
+  }
+}
+
+// The picker segments, in the prototype's display order (Opus / Sonnet / Fable). MODEL_PRESETS is the
+// roster but in a different order, so this fixes only the visual order — the roster stays single-source.
+const PICKER_PRESETS: readonly ModelPreset[] = ["opus-4-8", "sonnet-5", "fable-5"];
+
+// Resolve the open plan to its live plan-tree node (or null: no run, foreign tree, unresolved path).
+function openPlanLiveNode(): { node: TreeNode; path: NodePath } | null {
+  const op = openPath();
+  if (!op || !orchSnapshot) return null;
+  const rec = currentRecords().find((r) => r.absolute_path === op) ?? null;
+  if (!rec || !rec.tree_id || rec.tree_id !== orchSnapshot.treeId) return null;
+  return resolveNodeByNnPath(orchSnapshot.root, rec.nn_path);
+}
+
+// Render (or hide) the reading-pane "Execution model" picker for the open plan. Visible ONLY when the
+// open plan maps to a live node (a static/legacy plan has nothing to recommend or override). Rebuilt
+// from scratch on each call (openPlan + every onSnapshot) so the `.on` segment / recommendation /
+// override state track the live snapshot.
+function renderModelBar(): void {
+  const bar = modelBarEl;
+  if (!bar) return;
+  const hit = openPlanLiveNode();
+  if (!hit) {
+    bar.classList.add("hidden");
+    bar.replaceChildren();
+    return;
+  }
+  const { node, path } = hit;
+  const current = node.execution_model ?? nodeExecutionModel(node).options;
+  const currentClass = presetClassForModel(current.model);
+  const overridden = node.model_source === "override";
+  const triage = nodeExecutionModel(node);
+
+  bar.replaceChildren();
+  bar.classList.remove("hidden");
+
+  const row1 = document.createElement("div");
+  row1.className = "row1";
+
+  const lbl = document.createElement("span");
+  lbl.className = "lbl";
+  lbl.textContent = "Execution model";
+  row1.appendChild(lbl);
+
+  const seg = document.createElement("div");
+  seg.className = "seg";
+  for (const preset of PICKER_PRESETS) {
+    const family = preset.split("-")[0];
+    const btn = document.createElement("button");
+    btn.dataset.preset = preset;
+    btn.classList.add(family);
+    if (family === currentClass) btn.classList.add("on");
+    btn.textContent = friendlyModelName(PRESET_OPTIONS[preset].model) ?? preset;
+    seg.appendChild(btn);
+  }
+  row1.appendChild(seg);
+
+  if (overridden) {
+    const ovr = document.createElement("span");
+    ovr.className = "overridden";
+    ovr.textContent = "overridden by you";
+    row1.appendChild(ovr);
+  } else {
+    const recpill = document.createElement("span");
+    recpill.className = "recpill";
+    recpill.textContent = `Recommended: ${friendlyModelName(triage.options.model) ?? triage.options.model}`;
+    row1.appendChild(recpill);
+  }
+  bar.appendChild(row1);
+
+  const rationale = document.createElement("div");
+  rationale.className = "rationale";
+  rationale.textContent = triage.rationale;
+  bar.appendChild(rationale);
+
+  // Fresh listener each render so it closes over THIS render's live NodePath (the node can move
+  // between snapshots). Mirrors the Approve button's async/try-catch/in-flight-guard idiom.
+  seg.addEventListener("click", (ev) => {
+    const btn = ev.target instanceof Element ? ev.target.closest("button[data-preset]") : null;
+    if (!(btn instanceof HTMLElement)) return;
+    const preset = btn.dataset.preset;
+    if (!preset || !(MODEL_PRESETS as readonly string[]).includes(preset)) return;
+    // Self-no-op: clicking the already-`.on` segment of a NON-overridden (auto) node must not
+    // dispatch. The reducer always stamps model_source:"override", and there is no "reset to
+    // recommended", so dispatching here would irreversibly flip auto→override for no real change.
+    // (An already-overridden node stays clickable — re-clicking re-asserts / can pick a new model.)
+    if (!overridden && preset.split("-")[0] === currentClass) return;
+    if (modelSetInFlight) return;
+    modelSetInFlight = true;
+    void (async () => {
+      try {
+        await getOrchestrator().setExecutionModel(path, overrideOptionsFor(preset as ModelPreset));
+      } catch (e) {
+        console.error("model picker: setExecutionModel failed", e);
+      } finally {
+        modelSetInFlight = false;
+      }
+    })();
+  });
+}
+
 // ---- Tabbed left panel + table of contents (sidebar domain) ------------------------------
 //
 // The ToC is the ONE sanctioned reading-pane → sidebar data flow, mediated entirely by the
@@ -2255,6 +2466,9 @@ export async function openPlan(path: AbsPath, stem: Stem): Promise<void> {
   // content. refreshCommentCount (fired un-awaited above) re-refreshes the bar once the count lands.
   // refreshAffordances is fire-and-forget for the resume read and guards a fast A→B switch internally.
   refreshAffordances();
+
+  // Reading-pane execution-model picker: visible only when this plan maps to a live node.
+  renderModelBar();
 
   // Conversation-history reconstruction (silent populate): replay this plan's PAST conversation into
   // the CONVERSATION tab without switching tabs — the user stays on PLAN; the reconstruction is ready
@@ -2524,6 +2738,7 @@ window.addEventListener("DOMContentLoaded", () => {
   docHeaderEl = document.querySelector(".doc-header");
   docFilenameEl = document.querySelector("#doc-filename");
   docSrcEl = document.querySelector("#doc-src");
+  modelBarEl = document.querySelector("#model-bar");
   tocListEl = document.querySelector("#toc-list");
   filterInputEl = document.querySelector("#plan-filter");
   filterClearEl = document.querySelector(".search .clear");
@@ -2746,7 +2961,20 @@ window.addEventListener("DOMContentLoaded", () => {
         // the held gate's plan is the open one (the FIX-2 stand-in path).
         if (selection.k === "none") selection = { k: "placeholder", treeId: snap.treeId };
         applyFilterAndRender();
+        lastBadgeSig = badgeSignature(snap.root); // the render above already painted the fresh badges
       }
+      // BADGE LIVE-UPDATE: the sidebar badge is off the default re-render path — a normal
+      // EXECUTION_MODEL_SET snapshot mints no placeholder — so re-render the sidebar exactly when a
+      // live node's displayed model / override source changed vs the last render. Guarded by the
+      // signature so an unrelated snapshot does not re-render the whole sidebar.
+      const sig = badgeSignature(snap.root);
+      if (sig !== lastBadgeSig) {
+        lastBadgeSig = sig;
+        applyFilterAndRender();
+      }
+      // Keep the reading-pane picker in lockstep with the live snapshot (override flips the `.on`
+      // segment + recommendation/override state).
+      renderModelBar();
       // Re-derive both affordances on every snapshot transition (the resume banner stays suppressed
       // while the run owns the seam — detectResumable null — so this is a no-op for it until onDone).
       refreshAffordances();
@@ -2805,7 +3033,10 @@ window.addEventListener("DOMContentLoaded", () => {
       // If the placeholder was the active selection, fall back to the empty pane (a real plan/sentinel
       // the user opened mid-run is left untouched — selection only collapses from the placeholder).
       if (selection.k === "placeholder") selection = { k: "none" };
+      lastBadgeSig = null; // the tree is gone — the next run re-initializes the signature
       applyFilterAndRender();
+      // The picker is a live-tree concept — the run ended, so hide it.
+      renderModelBar();
       // The run ended: re-derive BOTH affordances. The open plan may now be RESUMABLE (the run was
       // suppressing detectResumable via isOrchestrationActive) — refreshAffordances re-evaluates the
       // resume banner WITHOUT reopening the plan.
@@ -2818,7 +3049,9 @@ window.addEventListener("DOMContentLoaded", () => {
       // Fatal teardown: same placeholder clear as onDone.
       runPlaceholder = null;
       if (selection.k === "placeholder") selection = { k: "none" };
+      lastBadgeSig = null;
       applyFilterAndRender();
+      renderModelBar();
       refreshAffordances();
     },
   });

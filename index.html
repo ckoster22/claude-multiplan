@@ -32,7 +32,7 @@
         <div class="titlebar-controls">
           <!-- Model & effort preset picker (Phase 2). A compact segmented control whose
                three <button class="model-preset"> options mirror MODEL_PRESETS in
-               src/model-picker.ts (opus-4-8 / fable-5 / sonnet-4-6). Appended as the FIRST
+               src/model-picker.ts (opus-4-8 / fable-5 / sonnet-5). Appended as the FIRST
                child of .titlebar-controls so it sits LEFT of #text-dec / #theme-toggle.
                The chosen preset is persisted to plan-reader-model-preset (initModelPicker,
                src/model-picker.ts) and read at session start by the orchestrator; it applies
@@ -47,13 +47,13 @@
                     title="Opus 4.8" aria-label="Opus 4.8">Opus 4.8</button>
             <button class="model-preset" type="button" data-preset="fable-5" aria-pressed="false"
                     title="Fable 5 · low effort" aria-label="Fable 5, low effort">Fable 5</button>
-            <button class="model-preset" type="button" data-preset="sonnet-4-6" aria-pressed="false"
-                    title="Sonnet 4.6 · medium effort" aria-label="Sonnet 4.6, medium effort">Sonnet 4.6</button>
+            <button class="model-preset" type="button" data-preset="sonnet-5" aria-pressed="false"
+                    title="Sonnet 5 · medium effort" aria-label="Sonnet 5, medium effort">Sonnet 5</button>
           </div>
           <!-- Opus effort selector (sibling of .titlebar-model-picker, NOT a child — the
                picker has overflow:hidden + a fixed 28px height that would clip these five
                buttons and their focus outlines). Revealed ONLY when Opus 4.8 is the active
-               preset; `hidden` (removed from layout) for fable-5 / sonnet-4-6. Each
+               preset; `hidden` (removed from layout) for fable-5 / sonnet-5. Each
                <button class="effort-level"> mirrors EFFORT_LEVELS in src/model-picker.ts
                (low / medium / high / xhigh / max). The chosen level is a single GLOBAL
                setting persisted to plan-reader-opus-effort (initModelPicker) and read at
@@ -185,6 +185,9 @@
             <div class="doc-header">
               <div class="doc-filename" id="doc-filename"></div>
               <div class="doc-src" id="doc-src"></div>
+              <!-- Execution-model picker (Sub-Plan 03). Populated + toggled by main.ts (renderModelBar):
+                   visible only when the open plan maps to a live plan-tree node. -->
+              <div class="modelbar hidden" id="model-bar"></div>
             </div>
 
             <!-- Resume banner (Phase 5). Orthogonal to the review bar: shown when the OPEN plan

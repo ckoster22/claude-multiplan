@@ -106,6 +106,7 @@ function makeOrchDeps(): OrchestratorDeps {
     startSession: vi.fn(async () => {}),
     sendMessage: vi.fn(async () => {}),
     setMode: vi.fn(async () => {}),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async () => {}),
     cancelRun: vi.fn(async () => {}),
     interrupt: vi.fn(async () => {}),
