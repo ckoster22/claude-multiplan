@@ -16,6 +16,7 @@ import type {
 } from "../plan-tree";
 import type { AgentStream, AskUserQuestionAnswers, ToolPermissionRequested } from "../types";
 import type { AttachedImage } from "../images";
+import type { ModelOptions } from "../../model-picker";
 
 
 // The structured mandate a child node carries out of its parent's decomposition. The section BODY
@@ -95,6 +96,10 @@ export interface OrchestratorHandle {
   requestChanges(pathKeyStr: string, feedback: string): Promise<void>;
   // Answer a held AskUserQuestion (resolves it with the user's selections).
   answerClarify(toolUseId: string, answers: AskUserQuestionAnswers): Promise<void>;
+  // USER MODEL OVERRIDE: set the execution model for the node at `path` (the reading-pane picker's
+  // segment click). A thin pass-through to EXECUTION_MODEL_SET — the reducer stamps model_source
+  // "override" (re-triage never clobbers it) and re-derives inherited-auto models for open descendants.
+  setExecutionModel(path: NodePath, options: ModelOptions): Promise<void>;
   // Approve the held visual prototype: composes + writes INTENT.md (prose + the embeddable-visual
   // block) via PROTOTYPE_APPROVED, then continues into recon like INTENT_CLARIFIED. Throws when no
   // prototype gate is pending.

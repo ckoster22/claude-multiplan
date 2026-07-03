@@ -6,16 +6,31 @@
 import type { SizerOutcome } from "./model";
 
 // Extract a SizerOutcome from a single assistant text line. FORMAT:
-//   SIZER: <decision> / <num_plans> / <confidence>
-// e.g. `SIZER: split / 3 / 0.82`. `decision` ∈ {single,split}; `num_plans` a non-negative integer;
-// `confidence` a float in [0,1]. Returns null for any non-matching line, INCLUDING an unknown
-// decision word (e.g. a stale `escalate`) — the driver coerces a no-outcome sizer turn to split.
+//   SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}
+// a `SIZER:` prefix followed by a JSON object. `decision` ∈ {single,split}; `num_plans` a
+// non-negative integer; `confidence` a float in [0,1]; `scale` ∈ {standard,large,huge}, defaulting to
+// "standard" when absent or unrecognized. Returns null for any line lacking the prefix, carrying
+// malformed JSON, or holding an out-of-domain field — INCLUDING an unknown decision word (e.g. a
+// stale `escalate`), which the driver coerces to a split.
 export function parseSizerDecision(line: string): SizerOutcome | null {
-  const m = /^\s*SIZER:\s*(single|split)\s*\/\s*(\d+)\s*\/\s*(\d*\.?\d+)\s*$/i.exec(line);
+  const m = /^\s*SIZER:\s*(\{.*\})\s*$/.exec(line);
   if (!m) return null;
-  const decision = m[1].toLowerCase() as SizerOutcome["decision"];
-  const num_plans = Number.parseInt(m[2], 10);
-  const confidence = Number.parseFloat(m[3]);
-  if (Number.isNaN(num_plans) || Number.isNaN(confidence)) return null;
-  return { decision, confidence, num_plans };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(m[1]);
+  } catch {
+    return null;
+  }
+  if (typeof raw !== "object" || raw === null) return null;
+  const o = raw as Record<string, unknown>;
+  if (o.decision !== "single" && o.decision !== "split") return null;
+  const num_plans = o.num_plans;
+  if (typeof num_plans !== "number" || !Number.isInteger(num_plans) || num_plans < 0) return null;
+  const confidence = o.confidence;
+  if (typeof confidence !== "number" || Number.isNaN(confidence) || confidence < 0 || confidence > 1) {
+    return null;
+  }
+  const scale: SizerOutcome["scale"] =
+    o.scale === "large" || o.scale === "huge" ? o.scale : "standard";
+  return { decision: o.decision, confidence, num_plans, scale };
 }

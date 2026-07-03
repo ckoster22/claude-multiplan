@@ -43,7 +43,7 @@ const path = (...ns: number[]): NodePath => ns.map(nnOf);
 const fileOf = (s: string) => s as PlanTreeFilePath;
 
 function node(nn: number, state: NodeState): TreeNode {
-  return { nn: nnOf(nn), title: `node ${nn}`, redraftCount: 0, lastFeedback: null, state };
+  return { nn: nnOf(nn), title: `node ${nn}`, redraftCount: 0, lastFeedback: null, state, execution_model: null };
 }
 function openNode(nn: number, phase: Extract<NodeState, { stage: "open" }>["phase"]): TreeNode {
   return node(nn, { stage: "open", phase });

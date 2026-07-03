@@ -16,6 +16,31 @@ The app reads (read-only) from two directories under `~/.claude/`:
 - `plans/` — the plan files, watched live for changes.
 - `projects/` — used only to resolve each plan's originating working directory.
 
+## Feature tour
+
+Every shot below is the real frontend captured from the token-free demo harness (`npm run mock`) — same app code as production, fixture data instead of a live agent.
+
+![Reading pane rendering a plan's mermaid diagram, with the newest-first sidebar](docs/screenshots/main-reading-pane.png)
+*Reading pane: full-fidelity markdown (here a rendered, pan/zoom mermaid diagram) beside the newest-first sidebar with per-plan working directories and unread dots.*
+
+![A plan with syntax-highlighted TypeScript, Rust, and shell code blocks](docs/screenshots/code-highlighting.png)
+*Syntax-highlighted code blocks across languages, rendered in place.*
+
+![The sidebar showing a nested master plan expanded over its numbered sub-plans, with the master open](docs/screenshots/plan-tree.png)
+*Nested master ▸ sub-plan trees: a master row expands over its indented children, with the selected plan open in the reading pane.*
+
+![The New plan composer modal with request, working directory, and auto-resume fields](docs/screenshots/composer.png)
+*New-plan composer: describe a request, pick a working directory, and start a live agent session.*
+
+![A live agent session showing a subagent group and the message composer](docs/screenshots/conversation-subagent.png)
+*Live agent session: the conversation pane streams tool calls and subagent fan-out, with a composer to reply mid-run.*
+
+![A working HTML game prototype (Chompy Asteroids) with a live canvas, HUD, and control panels](docs/screenshots/review-prototype.png)
+*A working HTML prototype the agent built during intent confirmation — the review gate holds the run until you approve it (prototypes open in your browser).*
+
+![The conversation paused on a usage-limit banner counting down to quota refresh](docs/screenshots/quota-banner.png)
+*Quota-aware: when usage limits are hit mid-turn, the session parks on a countdown and auto-resumes when quota refreshes.*
+
 ## Plan trees
 
 The nested sidebar activates when plan files contain YAML frontmatter:

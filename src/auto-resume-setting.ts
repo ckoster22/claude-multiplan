@@ -58,7 +58,8 @@ export function readStoredAutoResume(
 // Resolve the persisted option to its per-run budget. Falls back to DEFAULT_AUTO_RESUME when the
 // stored value is absent, unreadable, or not a known option. Never throws — reads go through
 // readStoredAutoResume. The orchestrator's defaultDeps adapter calls this at the START boundary and
-// threads {budget} into a QUOTA_BUDGET_SET dispatch (the resolveModelOptions precedent).
+// threads {budget} into a QUOTA_BUDGET_SET dispatch, keeping the impure localStorage read in the
+// adapter rather than the reducer.
 export function resolveAutoResumeBudget(
   storage: Pick<Storage, "getItem"> | null | undefined = localStorage,
 ): AutoResumeBudget {

@@ -37,6 +37,7 @@ import type {
   PlanTreeFilePath,
   PrototypeGate,
 } from "./plan-tree";
+import { buildOptions } from "../model-picker";
 
 // Branded mints for fixtures. parseNn is the REAL production boundary; PlanTreeFilePath has NO
 // production mint outside the driver's write wrapper, so tests cast explicitly — the cast is the
@@ -45,8 +46,13 @@ const nnOf = (n: number) => parseNn(n);
 const p = (...ns: number[]): NodePath => ns.map(nnOf);
 const fileOf = (s: string) => s as PlanTreeFilePath;
 
-function sizer(decision: SizerOutcome["decision"], num_plans: number, confidence = 0.8): SizerOutcome {
-  return { decision, confidence, num_plans };
+function sizer(
+  decision: SizerOutcome["decision"],
+  num_plans: number,
+  confidence = 0.8,
+  scale: SizerOutcome["scale"] = "standard",
+): SizerOutcome {
+  return { decision, confidence, num_plans, scale };
 }
 
 // A minimal pre-START placeholder (only consumed by START, which ignores it).
@@ -62,6 +68,7 @@ function blank2(): PlanTreeState2 {
       redraftCount: 0,
       lastFeedback: null,
       state: { stage: "open", phase: "clarifying-intent" },
+      execution_model: null,
     },
     pendingApproval: null,
     pendingClarify: null,
@@ -452,6 +459,133 @@ describe("gen-2 single-collapse run", () => {
 
     expect(treeIsDone(out.state.root)).toBe(true);
     expect(leafState(child(out.state, 1)).phase).toBe("summarized");
+  });
+});
+
+describe("gen-2 per-node execution_model stamping", () => {
+  const SONNET = buildOptions("claude-sonnet-5", "medium");
+  const OPUS = buildOptions("claude-opus-4-8", "high");
+  const FABLE = buildOptions("claude-fable-5", "high");
+
+  it("initial2 root carries the Opus decomposition model (auto) — the root IS the decomposition node", () => {
+    // Mutation: drop the execution_model/model_source seed in initial2 → undefined here → RED.
+    const s = genesis2();
+    expect(s.root.execution_model).toEqual(OPUS);
+    expect(s.root.model_source).toBe("auto");
+  });
+
+  it("a non-root confident single stamps the leaf's scale-tiered coding model (standard→Sonnet, large→Opus, huge→Fable), model_source auto", () => {
+    const cases: Array<[SizerOutcome["scale"], typeof SONNET]> = [
+      ["standard", SONNET],
+      ["large", OPUS],
+      ["huge", FABLE],
+    ];
+    for (const [scale, expected] of cases) {
+      let s = splitToFirstChild(1); // root split (planPath set) — child 01 runs its OWN sizer
+      s = reduce2(s, { type: "NODE_RECON_DONE", path: p(1) }).state;
+      s = reduce2(s, { type: "SIZER_DONE", path: p(1), outcome: sizer("single", 1, 0.9, scale) }).state;
+      // FALSIFIABLE: invert any codingModelForScale row → the wrong model here → RED.
+      expect(leafState(child(s, 1)).phase).toBe("drafting");
+      expect(child(s, 1).execution_model).toEqual(expected);
+      expect(child(s, 1).model_source).toBe("auto");
+    }
+  });
+
+  it("a split path (SIZER_DONE split → CHILDREN_PARSED → DECOMPOSITION_APPROVED) stamps the split node Opus/high (auto)", () => {
+    const s = splitToFirstChild(2);
+    expect(s.root.state.stage).toBe("split");
+    expect(s.root.execution_model).toEqual(OPUS);
+    expect(s.root.model_source).toBe("auto");
+
+    // FALSIFIABLE (isolates the DECOMPOSITION_APPROVED stamp from initial2's pre-seed): hand a node
+    // whose provisional auto model is NON-Opus into the approval, and assert the stamp overwrites it.
+    let base = genesis2();
+    base = reduce2(base, { type: "NODE_RECON_DONE", path: [] }).state;
+    base = reduce2(base, { type: "SIZER_DONE", path: [], outcome: sizer("split", 2) }).state;
+    base = reduce2(base, {
+      type: "DECOMPOSITION_DRAFTED",
+      path: [],
+      planPath: "/pt/master.md",
+      plansDirPath: "/plans/master.md",
+      toolUseId: "m1",
+    }).state;
+    base = reduce2(base, {
+      type: "CHILDREN_PARSED",
+      path: [],
+      children: [
+        { nn: nnOf(1), title: "A" },
+        { nn: nnOf(2), title: "B" },
+      ],
+    }).state;
+    // Patch the root's provisional auto model to Sonnet (white-box: execution_model is additive and
+    // coherence-neutral). Removing the stampAuto(decompositionModel()) at DECOMPOSITION_APPROVED
+    // leaves it Sonnet here → RED.
+    const patched: PlanTreeState2 = {
+      ...base,
+      root: { ...base.root, execution_model: SONNET, model_source: "auto" },
+    };
+    const out = reduce2(patched, { type: "DECOMPOSITION_APPROVED", path: [] });
+    expect(out.state.root.execution_model).toEqual(OPUS);
+    expect(out.state.root.model_source).toBe("auto");
+  });
+
+  it("root single-collapse: root sizes single/huge → the collapse child carries Fable (the ROOT's scale), preserved through its recon→leaf hop", () => {
+    let s = genesis2();
+    s = reduce2(s, { type: "NODE_RECON_DONE", path: [] }).state;
+    s = reduce2(s, { type: "SIZER_DONE", path: [], outcome: sizer("single", 1, 0.9, "huge") }).state;
+    // The collapse child inherited the root's `single` verdict AND its scale → Fable coding model.
+    // FALSIFIABLE: drop the codingModelForScale(root scale) stamp at the collapse → undefined → RED.
+    expect(child(s, 1).state).toEqual({ stage: "open", phase: "recon" });
+    expect(child(s, 1).execution_model).toEqual(FABLE);
+    expect(child(s, 1).model_source).toBe("auto");
+    // The root collapse NODE is the decomposition split → Opus.
+    expect(s.root.execution_model).toEqual(OPUS);
+
+    // NODE_RECON_DONE on the collapse child forces leaf/drafting; the stamped Fable model must be
+    // PRESERVED (the root-collapse branch spreads it forward, never restamps).
+    s = reduce2(s, { type: "NODE_RECON_DONE", path: p(1) }).state;
+    // FALSIFIABLE: if the root-collapse branch overwrote/dropped execution_model → not Fable → RED.
+    expect(leafState(child(s, 1)).phase).toBe("drafting");
+    expect(child(s, 1).execution_model).toEqual(FABLE);
+    expect(child(s, 1).model_source).toBe("auto");
+  });
+
+  it("EXECUTION_MODEL_SET flips a node to override and re-triages OPEN descendants to inherit the new value (auto)", () => {
+    let s = splitToFirstChild(3); // root split, child 01 open/recon, 02/03 open/pending
+    s = reduce2(s, { type: "EXECUTION_MODEL_SET", path: [], options: SONNET }).state;
+    // The target flips to override.
+    expect(s.root.execution_model).toEqual(SONNET);
+    expect(s.root.model_source).toBe("override");
+    // Every still-open descendant inherits the new value provisionally (auto). FALSIFIABLE: drop the
+    // retriageOpenDescendants call → the children keep the Opus they inherited at CHILDREN_PARSED → RED.
+    for (const n of [1, 2, 3]) {
+      expect(child(s, n).execution_model).toEqual(SONNET);
+      expect(child(s, n).model_source).toBe("auto");
+    }
+  });
+
+  it("EXECUTION_MODEL_SET throws for a path that walks off the tree", () => {
+    const s = splitToFirstChild(2);
+    // Mutation: drop the nodeAtPath existence guard → replaceAt throws a less specific error, or a
+    // future no-op swallows it → this expectation still passes only if SOME throw happens.
+    expect(() => reduce2(s, { type: "EXECUTION_MODEL_SET", path: p(9), options: SONNET })).toThrow();
+  });
+
+  it("an override is NEVER clobbered by a later auto stamp: override child 02 to Fable, then it sizes single/standard — stays Fable/override", () => {
+    let s = splitToFirstChild(2);
+    // Override child 02 while it is still pending (the picker may pre-set a not-yet-active node).
+    s = reduce2(s, { type: "EXECUTION_MODEL_SET", path: p(2), options: FABLE }).state;
+    expect(child(s, 2).model_source).toBe("override");
+    // Drive child 01 to completion, review, then child 02 through recon → sizer(single, standard).
+    s = cycleChild(s, 1).state;
+    s = reduce2(s, { type: "PARENT_REVIEW_DONE", path: [], note: null }).state;
+    s = reduce2(s, { type: "NODE_RECON_DONE", path: p(2) }).state;
+    s = reduce2(s, { type: "SIZER_DONE", path: p(2), outcome: sizer("single", 1, 0.9, "standard") }).state;
+    // The sizer would auto-stamp Sonnet, but the override wins. FALSIFIABLE: invert stampAuto's
+    // `model_source === "override"` guard → child 02 becomes Sonnet/auto here → RED.
+    expect(leafState(child(s, 2)).phase).toBe("drafting");
+    expect(child(s, 2).execution_model).toEqual(FABLE);
+    expect(child(s, 2).model_source).toBe("override");
   });
 });
 
@@ -1439,7 +1573,18 @@ describe("gen-2 projections / persisted shape", () => {
       "updated_ms",
     ]);
     expect(ledger.schema).toBe(2);
-    expect(Object.keys(ledger.root).sort()).toEqual(["lastFeedback", "nn", "redraftCount", "state", "title"]);
+    // The root now carries the additive Phase-C triage fields (execution_model + model_source) — the
+    // root IS the decomposition node, stamped Opus/auto at initial2. Still schema 2 (both are additive
+    // /optional, ledger-only; model_source stays OFF the PlanRecord wire).
+    expect(Object.keys(ledger.root).sort()).toEqual([
+      "execution_model",
+      "lastFeedback",
+      "model_source",
+      "nn",
+      "redraftCount",
+      "state",
+      "title",
+    ]);
 
     const snap = toSnapshot2(s);
     expect(snap.pendingApproval).toEqual(s.pendingApproval);
@@ -1714,23 +1859,55 @@ describe("two-outcome sizer (escalate unrepresentable)", () => {
 });
 
 describe("parseSizerDecision", () => {
-  it("extracts split/3/0.82 from a SIZER line", () => {
-    expect(parseSizerDecision("SIZER: split / 3 / 0.82")).toEqual({
+  it("parses a scale-less JSON SIZER line, defaulting scale to standard", () => {
+    // FALSIFIABLE: a payload with no `scale` key must still parse, defaulting to "standard"
+    // (Sonnet-tier, inert). Mutation: make `scale` required (reject when absent) → null here → RED.
+    expect(parseSizerDecision('SIZER: {"decision":"split","num_plans":3,"confidence":0.82}')).toEqual({
       decision: "split",
       num_plans: 3,
       confidence: 0.82,
+      scale: "standard",
     });
   });
 
-  it("returns null for a non-matching line", () => {
+  it("parses the scale field (huge/large/standard)", () => {
+    // Mutation: drop the scale read / hardcode "standard" → scale reads "standard" → RED.
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":0.9,"scale":"huge"}')).toEqual({
+      decision: "single",
+      num_plans: 1,
+      confidence: 0.9,
+      scale: "huge",
+    });
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":0.7,"scale":"large"}')?.scale).toBe("large");
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":0.7,"scale":"standard"}')?.scale).toBe("standard");
+  });
+
+  it("defaults an unknown scale value to standard", () => {
+    // An unknown scale (not standard/large/huge) is coerced to "standard", never rejected.
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":0.9,"scale":"gigantic"}')?.scale).toBe("standard");
+  });
+
+  it("returns null for a non-SIZER line", () => {
     // Mutation: returning a default outcome instead of null → RED here.
     expect(parseSizerDecision("just some assistant prose")).toBeNull();
   });
 
-  it("returns null for a SIZER line with an unknown decision word (e.g. a stale `escalate`)", () => {
+  it("returns null for a malformed JSON payload (incl. the retired slash format)", () => {
+    // A `SIZER:` prefix with non-JSON after it is a no-outcome line (the driver coerces to split).
+    expect(parseSizerDecision("SIZER: split / 3 / 0.82")).toBeNull();
+    expect(parseSizerDecision('SIZER: {"decision":"split", oops}')).toBeNull();
+  });
+
+  it("returns null for an unknown decision word (e.g. a stale `escalate`)", () => {
     // The two-outcome sizer parses ONLY single/split; the driver coerces a null parse to split.
-    // (Mutation: widening the regex back to (single|split|escalate) → a parsed outcome here → RED.)
-    expect(parseSizerDecision("SIZER: escalate / 0 / 0.3")).toBeNull();
+    // Mutation: widening the decision check to include `escalate` → a parsed outcome here → RED.
+    expect(parseSizerDecision('SIZER: {"decision":"escalate","num_plans":0,"confidence":0.3}')).toBeNull();
+  });
+
+  it("returns null for an out-of-range confidence or non-integer num_plans", () => {
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1,"confidence":1.5}')).toBeNull();
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":-1,"confidence":0.5}')).toBeNull();
+    expect(parseSizerDecision('SIZER: {"decision":"single","num_plans":1.5,"confidence":0.5}')).toBeNull();
   });
 });
 

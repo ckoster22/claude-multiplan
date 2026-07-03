@@ -39,9 +39,18 @@ use agent::AgentDriver;
 /// this are rejected BEFORE we read their bytes, so a huge file can never blow up memory.
 const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024; // 25 MiB
 
+/// Which Claude model (and, for Opus, effort) should execute a plan. Also a `write_agent_plan`
+/// command parameter type, so `Deserialize` is mandatory (tauri deserializes command args).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+struct ModelOptions {
+    model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
+}
+
 /// One row in the sidebar. The wire shape is a stable contract — the
 /// `planrecord_wire_contract_is_frozen` test locks the exact key set and value types, and the
-/// frontend's `contract.test.ts` pins the same 12 keys from the consuming side; keep field
+/// frontend's `contract.test.ts` pins the same 13 keys from the consuming side; keep field
 /// names/order in sync with both. `cwd` and `unread` are populated by the resolver / read-state.
 #[derive(Serialize, Clone)]
 struct PlanRecord {
@@ -70,6 +79,9 @@ struct PlanRecord {
     /// document order. Used by the frontend sidebar filter to match on headings. `[]` when
     /// none. snake_case JSON key `h1s` (no rename).
     h1s: Vec<String>,
+    /// Which model should execute this plan (`{model, effort}`), or `null` to fall back to the
+    /// app's global model resolution. Serialized present-as-`null` (no `skip_serializing_if`).
+    execution_model: Option<ModelOptions>,
 }
 
 /// Closed set of plan flavors. `#[serde(rename_all = "lowercase")]` makes the JSON emit
@@ -98,6 +110,7 @@ struct RawMarker {
     tree_id: String,
     flavor: RawFlavor,
     nn: Option<Vec<u32>>,
+    execution_model: Option<ModelOptions>,
 }
 
 /// One per-file row fed into `arrange_plans`: the raw stat/cwd/unread facts plus the parsed
@@ -840,13 +853,17 @@ fn format_nn_path(segments: &[u32]) -> String {
 /// Parse a frontmatter YAML block into a `RawMarker` with a minimal line-based `key: value`
 /// scan — deliberately NO `serde_yaml` (the marker is a fixed, skill-generated 2-3 key
 /// block, so a full YAML parser is unwarranted dependency surface). Recognizes only the
-/// keys `tree_id`, `flavor`, `nn`. Returns `None` when `tree_id` is missing or `flavor` is
-/// absent/unrecognized. `nn` parses via `parse_nn_segments` (dotted ⇒ multi-segment vec;
-/// legacy plain `nn: 2` ⇒ the single-segment `vec![2]`).
+/// keys `tree_id`, `flavor`, `nn`, `execution_model`, `execution_effort`. Returns `None` when
+/// `tree_id` is missing or `flavor` is absent/unrecognized. `nn` parses via `parse_nn_segments`
+/// (dotted ⇒ multi-segment vec; legacy plain `nn: 2` ⇒ the single-segment `vec![2]`).
+/// `execution_model` yields `Some(ModelOptions{..})` only when the `execution_model` line is
+/// present; `execution_effort` is optional (⇒ `None`).
 fn parse_marker(yaml_block: &str) -> Option<RawMarker> {
     let mut tree_id: Option<String> = None;
     let mut flavor: Option<RawFlavor> = None;
     let mut nn: Option<Vec<u32>> = None;
+    let mut execution_model_id: Option<String> = None;
+    let mut execution_effort: Option<String> = None;
 
     for line in yaml_block.lines() {
         let line = line.trim();
@@ -876,14 +893,30 @@ fn parse_marker(yaml_block: &str) -> Option<RawMarker> {
             "nn" => {
                 nn = parse_nn_segments(value);
             }
+            "execution_model" => {
+                if !value.is_empty() {
+                    execution_model_id = Some(value.to_string());
+                }
+            }
+            "execution_effort" => {
+                if !value.is_empty() {
+                    execution_effort = Some(value.to_string());
+                }
+            }
             _ => {}
         }
     }
+
+    let execution_model = execution_model_id.map(|model| ModelOptions {
+        model,
+        effort: execution_effort,
+    });
 
     Some(RawMarker {
         tree_id: tree_id?,
         flavor: flavor?,
         nn,
+        execution_model,
     })
 }
 
@@ -1024,6 +1057,10 @@ fn arrange_plans(rows: Vec<RawRow>, collapse_state: &HashMap<String, bool>) -> V
             child_count,
             collapsed,
             h1s: rows[i].h1s.clone(),
+            execution_model: rows[i]
+                .marker
+                .as_ref()
+                .and_then(|m| m.execution_model.clone()),
         }
     };
 
@@ -1741,6 +1778,7 @@ fn synthesize_resume_rows(
             // The title rides `h1s` (the sidebar filter / display reads it the same as a real
             // master's H1) — a synthetic row has no file body to scan.
             h1s: vec![title],
+            execution_model: None,
         });
     }
     out
@@ -2864,6 +2902,7 @@ fn write_agent_plan_in(
     plan: &str,
     tree_id: Option<String>,
     nn: Option<String>,
+    execution_model: Option<ModelOptions>,
 ) -> Result<String, String> {
     // Validate BEFORE deciding anything: a malformed dotted id must fail loudly, never be
     // silently coerced (a typo'd id would otherwise mint an unparseable frontmatter marker).
@@ -2916,14 +2955,23 @@ fn write_agent_plan_in(
         RawFlavor::Sub => "sub",
     };
 
-    // Frontmatter: exactly the keys `parse_marker` reads (`tree_id`, `flavor`, and `nn` only for
-    // subs). A leading-`---` block on line 1 is what `split_frontmatter` strips on read.
+    // Frontmatter: exactly the keys `parse_marker` reads (`tree_id`, `flavor`, `nn` only for
+    // subs, and `execution_model`/`execution_effort` only when a model is carried). A leading-`---`
+    // block on line 1 is what `split_frontmatter` strips on read. The model id is emitted VERBATIM
+    // and unquoted — `parse_marker` splits on the first `:` and trims quotes, and current model ids
+    // contain no `:` or spaces, so the flat line round-trips cleanly.
     let mut frontmatter = String::new();
     frontmatter.push_str("---\n");
     frontmatter.push_str(&format!("tree_id: {resolved_tree_id}\n"));
     frontmatter.push_str(&format!("flavor: {flavor_str}\n"));
     if let Some(n) = &resolved_nn {
         frontmatter.push_str(&format!("nn: {n}\n"));
+    }
+    if let Some(m) = &execution_model {
+        frontmatter.push_str(&format!("execution_model: {}\n", m.model));
+        if let Some(effort) = &m.effort {
+            frontmatter.push_str(&format!("execution_effort: {effort}\n"));
+        }
     }
     frontmatter.push_str("---\n\n");
 
@@ -2953,8 +3001,9 @@ fn write_agent_plan(
     plan: String,
     tree_id: Option<String>,
     nn: Option<String>,
+    execution_model: Option<ModelOptions>,
 ) -> Result<String, String> {
-    write_agent_plan_in(plans_dir(), &plan, tree_id, nn)
+    write_agent_plan_in(plans_dir(), &plan, tree_id, nn, execution_model)
 }
 
 /// Best-effort: bring the main window to the foreground (show + unminimize + focus). Each
@@ -3717,11 +3766,12 @@ pub fn run() {
             install_hook,
             uninstall_hook,
             hook_status,
-            // Agent SDK driver — the eight commands.
+            // Agent SDK driver — the nine commands.
             agent::start_agent_session,
             agent::send_agent_message,
             agent::resolve_tool_permission,
             agent::set_agent_permission_mode,
+            agent::set_agent_model,
             agent::cancel_agent_run,
             agent::end_agent_session,
             agent::agent_auth_status,
@@ -3760,6 +3810,7 @@ mod tests {
             child_count: None,
             collapsed: false,
             h1s: Vec::new(),
+            execution_model: None,
         }
     }
 
@@ -3784,6 +3835,7 @@ mod tests {
             "child_count",
             "collapsed",
             "h1s",
+            "execution_model",
         ]
         .into_iter()
         .collect();
@@ -3803,6 +3855,10 @@ mod tests {
             child_count: Some(2),
             collapsed: true,
             h1s: vec!["Plan: master title".to_string()],
+            execution_model: Some(ModelOptions {
+                model: "claude-opus-4-8".to_string(),
+                effort: Some("high".to_string()),
+            }),
         };
         let sub = PlanRecord {
             absolute_path: "/tmp/01-sub.md".to_string(),
@@ -3817,6 +3873,7 @@ mod tests {
             child_count: None,
             collapsed: false,
             h1s: Vec::new(),
+            execution_model: None,
         };
         let standalone = record_with_mtime("standalone", 3); // Flavor::Standalone, all options None
 
@@ -3868,23 +3925,31 @@ mod tests {
         // The sub's nn_path is a JSON string when populated (the full canonical dotted id).
         assert!(sub_value["nn_path"].is_string(), "nn_path must be a JSON string when populated");
 
-        // Contract: tree_id / nn / nn_path / child_count are always-present keys; when the Rust
-        // value is `None` they must serialize as JSON `null`, never be omitted.
+        // Contract: tree_id / nn / nn_path / child_count / execution_model are always-present keys;
+        // when the Rust value is `None` they must serialize as JSON `null`, never be omitted.
         let standalone_value = serde_json::to_value(&standalone).unwrap();
-        for key in ["tree_id", "nn", "nn_path", "child_count"] {
+        for key in ["tree_id", "nn", "nn_path", "child_count", "execution_model"] {
             assert_eq!(
                 standalone_value.get(key),
                 Some(&serde_json::Value::Null),
                 "{key} must be present as JSON null when None, not omitted"
             );
         }
+
+        // A populated `execution_model` serializes to a nested `{model, effort}` object.
+        assert_eq!(
+            master_value.get("execution_model"),
+            Some(&serde_json::json!({"model": "claude-opus-4-8", "effort": "high"})),
+            "execution_model must serialize to a nested {{model, effort}} object when populated"
+        );
     }
 
-    /// Serde pin: the EXACT byte shape of a flat (single-segment) sub `PlanRecord` —
-    /// `nn_path` is the ONE additive field; `nn` keeps its legacy first-segment integer meaning
-    /// byte-identically. The old shape is re-derived by deleting the nn_path
-    /// key/value from the pinned bytes and compared too, proving NOTHING ELSE moved. Falsifiable:
-    /// any field reorder, rename, or value-type drift breaks the byte equality.
+    /// Serde pin: the EXACT byte shape of a flat (single-segment) sub `PlanRecord`. There are now
+    /// TWO additive fields relative to the pre-Phase-2 shape — `nn_path` and the trailing
+    /// `execution_model` — while `nn` keeps its legacy first-segment integer meaning byte-
+    /// identically. The old shape is re-derived by deleting BOTH additive key/values from the
+    /// pinned bytes and compared too, proving NOTHING ELSE moved. Falsifiable: any field reorder,
+    /// rename, or value-type drift breaks the byte equality.
     #[test]
     fn planrecord_flat_wire_shape_byte_pin() {
         let sub = PlanRecord {
@@ -3900,17 +3965,18 @@ mod tests {
             child_count: None,
             collapsed: false,
             h1s: Vec::new(),
+            execution_model: None,
         };
         let json = serde_json::to_string(&sub).unwrap();
-        let pinned_new = r#"{"absolute_path":"/tmp/01-sub.md","filename_stem":"01-sub","mtime_ms":2,"cwd":null,"unread":false,"flavor":"sub","tree_id":"tree-1","nn":1,"nn_path":"01","child_count":null,"collapsed":false,"h1s":[]}"#;
+        let pinned_new = r#"{"absolute_path":"/tmp/01-sub.md","filename_stem":"01-sub","mtime_ms":2,"cwd":null,"unread":false,"flavor":"sub","tree_id":"tree-1","nn":1,"nn_path":"01","child_count":null,"collapsed":false,"h1s":[],"execution_model":null}"#;
         assert_eq!(json, pinned_new, "flat sub PlanRecord JSON must match the pinned Phase-2 bytes");
-        // Deleting the single additive key reproduces the old bytes EXACTLY — `nn` is
+        // Deleting BOTH additive keys reproduces the old bytes EXACTLY — `nn` is
         // still the bare integer 1 and every other byte is unchanged.
         let pinned_old = r#"{"absolute_path":"/tmp/01-sub.md","filename_stem":"01-sub","mtime_ms":2,"cwd":null,"unread":false,"flavor":"sub","tree_id":"tree-1","nn":1,"child_count":null,"collapsed":false,"h1s":[]}"#;
         assert_eq!(
-            json.replace(r#","nn_path":"01""#, ""),
+            json.replace(r#","nn_path":"01""#, "").replace(r#","execution_model":null"#, ""),
             pinned_old,
-            "removing the additive nn_path key must yield the pre-change shape byte-identically"
+            "removing the additive nn_path + execution_model keys must yield the pre-change shape byte-identically"
         );
     }
 
@@ -3932,6 +3998,7 @@ mod tests {
             tree_id: tree_id.to_string(),
             flavor: RawFlavor::Master,
             nn: None,
+            execution_model: None,
         }
     }
 
@@ -3940,6 +4007,7 @@ mod tests {
             tree_id: tree_id.to_string(),
             flavor: RawFlavor::Sub,
             nn: Some(vec![nn]),
+            execution_model: None,
         }
     }
 
@@ -3949,6 +4017,7 @@ mod tests {
             tree_id: tree_id.to_string(),
             flavor: RawFlavor::Sub,
             nn: Some(segments.to_vec()),
+            execution_model: None,
         }
     }
 
@@ -4020,6 +4089,7 @@ mod tests {
                 child_count: None,
                 collapsed: false,
                 h1s: Vec::new(),
+                execution_model: None,
             });
         }
 
@@ -5132,7 +5202,7 @@ mod tests {
         let base = unique_dir("wap_seed");
         let body = "# My Plan\n\nDo the thing.\n";
 
-        let path_str = write_agent_plan_in(Some(base.clone()), body, None, None)
+        let path_str = write_agent_plan_in(Some(base.clone()), body, None, None, None)
             .expect("seed write succeeds");
         let path = PathBuf::from(&path_str);
 
@@ -5178,7 +5248,7 @@ mod tests {
         let base = unique_dir("wap_replan");
 
         // Seed (master) then a re-plan (sub, nn=2) sharing the seed's tree_id.
-        let seed_path = write_agent_plan_in(Some(base.clone()), "# v1\n", None, None)
+        let seed_path = write_agent_plan_in(Some(base.clone()), "# v1\n", None, None, None)
             .expect("seed write");
         let seed_contents = std::fs::read_to_string(&seed_path).expect("read seed");
         let (seed_yaml, _) = split_frontmatter(&seed_contents);
@@ -5191,6 +5261,7 @@ mod tests {
             "# v2\n",
             Some(tree_id.clone()),
             Some("02".to_string()),
+            None,
         )
         .expect("re-plan write");
         let replan_contents = std::fs::read_to_string(&replan_path).expect("read re-plan");
@@ -5209,6 +5280,7 @@ mod tests {
                 tree_id: tree_id.clone(),
                 flavor: RawFlavor::Master,
                 nn: None,
+                execution_model: None,
             }),
         );
         let sub_row = raw_row(
@@ -5218,6 +5290,7 @@ mod tests {
                 tree_id: tree_id.clone(),
                 flavor: RawFlavor::Sub,
                 nn: Some(vec![2]),
+                execution_model: None,
             }),
         );
         let out = arrange_plans(vec![master_row, sub_row], &HashMap::new());
@@ -5245,7 +5318,7 @@ mod tests {
 
         // The orchestrator's MASTER write: tree_id Some, nn None.
         let master_path =
-            write_agent_plan_in(Some(base.clone()), "# Master Plan\n", Some(tree_id.clone()), None)
+            write_agent_plan_in(Some(base.clone()), "# Master Plan\n", Some(tree_id.clone()), None, None)
                 .expect("master write succeeds");
         let master_contents = std::fs::read_to_string(&master_path).expect("read master");
         let (master_yaml, _) = split_frontmatter(&master_contents);
@@ -5268,6 +5341,7 @@ mod tests {
             "# Sub 01\n",
             Some(tree_id.clone()),
             Some("01".to_string()),
+            None,
         )
         .expect("sub write succeeds");
         let sub_contents = std::fs::read_to_string(&sub_path).expect("read sub");
@@ -5282,12 +5356,12 @@ mod tests {
         let master_row = raw_row(
             "master",
             100,
-            Some(RawMarker { tree_id: tree_id.clone(), flavor: RawFlavor::Master, nn: None }),
+            Some(RawMarker { tree_id: tree_id.clone(), flavor: RawFlavor::Master, nn: None, execution_model: None }),
         );
         let sub_row = raw_row(
             "sub01",
             200,
-            Some(RawMarker { tree_id: tree_id.clone(), flavor: RawFlavor::Sub, nn: Some(vec![1]) }),
+            Some(RawMarker { tree_id: tree_id.clone(), flavor: RawFlavor::Sub, nn: Some(vec![1]), execution_model: None }),
         );
         let out = arrange_plans(vec![master_row, sub_row], &HashMap::new());
         let master = out.iter().find(|r| r.filename_stem == "master").expect("master present");
@@ -5305,6 +5379,7 @@ mod tests {
             "# Sub 01.01\n",
             Some(tree_id.clone()),
             Some("01.01".to_string()),
+            None,
         )
         .expect("dotted sub write succeeds");
         let dotted_contents = std::fs::read_to_string(&dotted_path).expect("read dotted sub");
@@ -5317,12 +5392,12 @@ mod tests {
         let master_row2 = raw_row(
             "master",
             100,
-            Some(RawMarker { tree_id: tree_id.clone(), flavor: RawFlavor::Master, nn: None }),
+            Some(RawMarker { tree_id: tree_id.clone(), flavor: RawFlavor::Master, nn: None, execution_model: None }),
         );
         let sub_row2 = raw_row(
             "sub01",
             200,
-            Some(RawMarker { tree_id: tree_id.clone(), flavor: RawFlavor::Sub, nn: Some(vec![1]) }),
+            Some(RawMarker { tree_id: tree_id.clone(), flavor: RawFlavor::Sub, nn: Some(vec![1]), execution_model: None }),
         );
         let dotted_row = raw_row(
             "sub01-01",
@@ -5331,6 +5406,7 @@ mod tests {
                 tree_id: tree_id.clone(),
                 flavor: RawFlavor::Sub,
                 nn: Some(vec![1, 1]),
+                execution_model: None,
             }),
         );
         let out = arrange_plans(vec![dotted_row, master_row2, sub_row2], &HashMap::new());
@@ -5361,6 +5437,7 @@ mod tests {
             "# Nested\n",
             Some("tree-x".to_string()),
             Some("02.01".to_string()),
+            None,
         )
         .expect("dotted write succeeds");
         let contents = std::fs::read_to_string(&path).expect("read dotted plan");
@@ -5392,7 +5469,7 @@ mod tests {
     fn write_agent_plan_rejects_malformed_dotted_nn() {
         let base = unique_dir("wap_badnn");
         // Seed so the dir exists and stray writes are detectable.
-        write_agent_plan_in(Some(base.clone()), "# seed\n", None, None).expect("seed");
+        write_agent_plan_in(Some(base.clone()), "# seed\n", None, None, None).expect("seed");
         let before = std::fs::read_dir(&base).expect("list").count();
 
         for bad in ["2", "002", "02.", "02..01", ".02", "02.1", "00", "02.00", "", "2.1", "02-01"] {
@@ -5401,6 +5478,7 @@ mod tests {
                 "# evil\n",
                 Some("tree-x".to_string()),
                 Some(bad.to_string()),
+                None,
             );
             assert!(res.is_err(), "malformed nn {bad:?} must be rejected, got {res:?}");
         }
@@ -5609,6 +5687,110 @@ mod tests {
         assert_eq!(parse_marker("tree_id: t\nflavor: wizard\n"), None);
         // Absent flavor entirely ⇒ also None.
         assert_eq!(parse_marker("tree_id: t\n"), None);
+    }
+
+    /// `execution_model` (+ optional `execution_effort`) frontmatter parses into the marker's
+    /// `Some(ModelOptions{..})`; the effort line is optional (absent ⇒ `None`) and its absence
+    /// entirely ⇒ `execution_model: None`. Falsifiable: drop the two key arms in `parse_marker`
+    /// and every non-None assert here goes RED.
+    #[test]
+    fn parse_marker_reads_execution_model() {
+        let m = parse_marker(
+            "tree_id: t\nflavor: sub\nnn: 1\nexecution_model: claude-opus-4-8\nexecution_effort: high\n",
+        )
+        .expect("model+effort parses");
+        assert_eq!(
+            m.execution_model,
+            Some(ModelOptions {
+                model: "claude-opus-4-8".to_string(),
+                effort: Some("high".to_string()),
+            }),
+            "execution_model + execution_effort must parse into the full ModelOptions"
+        );
+
+        // execution_model alone (no effort line) ⇒ Some with effort None.
+        let m = parse_marker("tree_id: t\nflavor: sub\nnn: 1\nexecution_model: claude-sonnet-5\n")
+            .expect("model-only parses");
+        assert_eq!(
+            m.execution_model,
+            Some(ModelOptions {
+                model: "claude-sonnet-5".to_string(),
+                effort: None,
+            }),
+            "execution_model with no execution_effort must parse to effort None"
+        );
+
+        // Neither key present ⇒ None (the legacy/pre-feature frontmatter).
+        let m = parse_marker("tree_id: t\nflavor: master\n").expect("no-model parses");
+        assert_eq!(m.execution_model, None, "absent execution_model ⇒ None");
+    }
+
+    /// Write→read round-trip: `write_agent_plan_in` emits the model id VERBATIM and unquoted, and
+    /// `parse_marker` reads it back into the same `ModelOptions`. Falsifiable: quoting the emitted
+    /// id (`execution_model: "claude-opus-4-8"`) survives parse_marker's quote-trim, but dropping
+    /// the writer's frontmatter lines makes the read-back None ⇒ RED.
+    #[test]
+    fn write_agent_plan_in_round_trips_execution_model() {
+        let base = unique_dir("wap_model");
+        let path = write_agent_plan_in(
+            Some(base.clone()),
+            "# Plan\n",
+            Some("tree-m".to_string()),
+            Some("01".to_string()),
+            Some(ModelOptions {
+                model: "claude-opus-4-8".to_string(),
+                effort: Some("high".to_string()),
+            }),
+        )
+        .expect("model write succeeds");
+        let contents = std::fs::read_to_string(&path).expect("read written plan");
+        assert!(
+            contents.contains("\nexecution_model: claude-opus-4-8\n"),
+            "model id must be written verbatim + unquoted, got:\n{contents}"
+        );
+        assert!(
+            contents.contains("\nexecution_effort: high\n"),
+            "effort must be written when present, got:\n{contents}"
+        );
+        let (yaml, _) = split_frontmatter(&contents);
+        let marker = parse_marker(yaml.expect("frontmatter")).expect("parses");
+        assert_eq!(
+            marker.execution_model,
+            Some(ModelOptions {
+                model: "claude-opus-4-8".to_string(),
+                effort: Some("high".to_string()),
+            }),
+            "the written model must round-trip back through parse_marker"
+        );
+
+        // Effort omitted ⇒ no execution_effort line; reads back as effort None.
+        let path2 = write_agent_plan_in(
+            Some(base.clone()),
+            "# Plan2\n",
+            Some("tree-m".to_string()),
+            Some("02".to_string()),
+            Some(ModelOptions {
+                model: "claude-sonnet-5".to_string(),
+                effort: None,
+            }),
+        )
+        .expect("model-only write succeeds");
+        let contents2 = std::fs::read_to_string(&path2).expect("read plan2");
+        assert!(
+            !contents2.contains("execution_effort:"),
+            "no execution_effort line when effort is None, got:\n{contents2}"
+        );
+        let (yaml2, _) = split_frontmatter(&contents2);
+        let marker2 = parse_marker(yaml2.expect("frontmatter2")).expect("parses2");
+        assert_eq!(
+            marker2.execution_model,
+            Some(ModelOptions {
+                model: "claude-sonnet-5".to_string(),
+                effort: None,
+            }),
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     fn by_stem(records: &[PlanRecord], stem: &str) -> PlanRecord {
@@ -7112,6 +7294,7 @@ mod tests {
                 child_count: Some(1),
                 collapsed: false,
                 h1s: vec![],
+                execution_model: None,
             },
             PlanRecord {
                 absolute_path: "/p/01-sub.md".into(),
@@ -7126,6 +7309,7 @@ mod tests {
                 child_count: None,
                 collapsed: false,
                 h1s: vec![],
+                execution_model: None,
             },
             PlanRecord {
                 absolute_path: "/p/standalone.md".into(),
@@ -7140,6 +7324,7 @@ mod tests {
                 child_count: None,
                 collapsed: false,
                 h1s: vec![],
+                execution_model: None,
             },
         ];
         // A synthetic master with recency 200 — should land BETWEEN the standalone (300) and the
@@ -7157,6 +7342,7 @@ mod tests {
             child_count: Some(0),
             collapsed: false,
             h1s: vec!["S".into()],
+            execution_model: None,
         }];
         let out = merge_synthetic_rows(real, synthetic);
         let order: Vec<&str> = out.iter().map(|r| r.absolute_path.as_str()).collect();

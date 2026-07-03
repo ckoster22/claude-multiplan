@@ -1,0 +1,277 @@
+<!doctype html>
+<!--
+  Source for docs/screenshots/review-prototype.png (a README feature-tour shot). This is a
+  documentation asset, not an app fixture — nothing in the app or mock imports it; it is rendered
+  standalone (headless Chrome, file://) purely to produce the screenshot.
+
+  It stands in for the kind of self-contained HTML visual prototype an agent writes to
+  <cwd>/.plan-tree/prototype/index.html during a prototype-review round — here the "Chompy Asteroids"
+  game the nested plan-tree fixture references. No external assets; everything is inline so it renders
+  from file:// or any static host.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chompy Asteroids — prototype</title>
+  <style>
+    :root {
+      --bg: #0b0d12;
+      --panel: #141821;
+      --panel-2: #1b2029;
+      --edge: #262c38;
+      --ink: #e7ebf2;
+      --muted: #8b93a3;
+      --accent: #ff6a3d;
+      --accent-2: #b8a5ff;
+      --good: #4ecb8b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--edge);
+      background: linear-gradient(180deg, #161b24, #10141b);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .2px; }
+    .logo {
+      width: 24px; height: 24px; border-radius: 7px;
+      background: radial-gradient(circle at 30% 30%, var(--accent), #b23c1c);
+      box-shadow: 0 0 14px rgba(255,106,61,.5);
+    }
+    .brand small { color: var(--muted); font-weight: 500; font-size: 12px; }
+    header .spacer { flex: 1; }
+    .pill {
+      font-size: 12px; color: var(--muted);
+      border: 1px solid var(--edge); border-radius: 999px; padding: 4px 10px;
+    }
+    .btn {
+      font: inherit; font-weight: 600; color: #10141b;
+      background: var(--accent); border: none; border-radius: 8px;
+      padding: 8px 14px; cursor: pointer;
+    }
+    .btn.ghost { color: var(--ink); background: transparent; border: 1px solid var(--edge); }
+
+    main { flex: 1; display: grid; grid-template-columns: 220px 1fr 260px; min-height: 0; }
+
+    nav { border-right: 1px solid var(--edge); padding: 16px 12px; background: var(--panel); }
+    nav h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+    nav a {
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px; border-radius: 8px; color: var(--ink);
+      text-decoration: none; font-weight: 500;
+    }
+    nav a .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--edge); }
+    nav a.active { background: var(--panel-2); }
+    nav a.active .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+    nav a:not(.active):hover { background: var(--panel-2); }
+
+    .stage { position: relative; padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    .arena {
+      position: relative; flex: 1; border-radius: 14px; overflow: hidden;
+      border: 1px solid var(--edge);
+      background:
+        radial-gradient(1200px 500px at 70% -10%, rgba(184,165,255,.10), transparent),
+        radial-gradient(900px 500px at 10% 120%, rgba(255,106,61,.10), transparent),
+        #05070b;
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+    .hud {
+      position: absolute; top: 14px; left: 14px; right: 14px;
+      display: flex; align-items: center; gap: 18px; pointer-events: none;
+      font-variant-numeric: tabular-nums;
+    }
+    .hud .stat { display: flex; flex-direction: column; }
+    .hud .stat b { font-size: 20px; }
+    .hud .stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+    .hud .spacer { flex: 1; }
+    .lives { display: flex; gap: 6px; }
+    .lives i { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px rgba(255,106,61,.6); display: inline-block; }
+    .lives i.spent { background: var(--edge); box-shadow: none; }
+
+    aside { border-left: 1px solid var(--edge); padding: 16px; background: var(--panel); display: flex; flex-direction: column; gap: 14px; }
+    .card { background: var(--panel-2); border: 1px solid var(--edge); border-radius: 12px; padding: 14px; }
+    .card h4 { margin: 0 0 10px; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+    .kpi { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+    .kpi b { font-size: 18px; }
+    .kpi span { color: var(--muted); font-size: 12px; }
+    .bars { display: flex; align-items: flex-end; gap: 6px; height: 64px; margin-top: 6px; }
+    .bars i { flex: 1; border-radius: 4px 4px 0 0; background: linear-gradient(180deg, var(--accent-2), #6b5bbf); display: inline-block; }
+    .toggle { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid var(--edge); }
+    .toggle:first-of-type { border-top: none; }
+    .switch { width: 38px; height: 22px; border-radius: 999px; background: var(--edge); position: relative; }
+    .switch.on { background: var(--good); }
+    .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .15s; }
+    .switch.on::after { left: 18px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo"></div>
+      <div>Chompy Asteroids <small>· prototype build</small></div>
+    </div>
+    <div class="spacer"></div>
+    <span class="pill">v0.3 · canvas engine</span>
+    <button class="btn ghost">Reset</button>
+    <button class="btn">▶ Play</button>
+  </header>
+
+  <main>
+    <nav>
+      <h3>Scene</h3>
+      <a class="active"><span class="dot"></span> Sandbox</a>
+      <a><span class="dot"></span> Physics tuning</a>
+      <a><span class="dot"></span> Spawn table</a>
+      <a><span class="dot"></span> Gravity field</a>
+      <h3 style="margin-top:18px">Debug</h3>
+      <a><span class="dot"></span> Collisions</a>
+      <a><span class="dot"></span> Frame graph</a>
+    </nav>
+
+    <section class="stage">
+      <div class="arena">
+        <canvas id="game"></canvas>
+        <div class="hud">
+          <div class="stat"><b>18,240</b><span>Score</span></div>
+          <div class="stat"><b>×3.4</b><span>Mass</span></div>
+          <div class="spacer"></div>
+          <div class="lives" aria-label="lives"><i></i><i></i><i class="spent"></i></div>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h4>Session</h4>
+        <div class="kpi"><b>32</b><span>bodies alive</span></div>
+        <div class="kpi"><b>60 fps</b><span>step budget 4.1 ms</span></div>
+        <div class="bars">
+          <i style="height:40%"></i><i style="height:62%"></i><i style="height:48%"></i>
+          <i style="height:80%"></i><i style="height:70%"></i><i style="height:95%"></i>
+          <i style="height:66%"></i><i style="height:84%"></i>
+        </div>
+      </div>
+      <div class="card">
+        <h4>Physics</h4>
+        <div class="toggle"><span>Exponential gravity</span><div class="switch on"></div></div>
+        <div class="toggle"><span>Soft-body squash</span><div class="switch on"></div></div>
+        <div class="toggle"><span>Anti-freeze suite</span><div class="switch"></div></div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    // Minimal canvas render so the arena shows a real rendered game frame (ship + gravitating asteroids),
+    // not a static image. Kept tiny and dependency-free; enough to read as a working prototype.
+    const cv = document.getElementById("game");
+    const ctx = cv.getContext("2d");
+    function size() {
+      const r = cv.getBoundingClientRect();
+      cv.width = r.width * devicePixelRatio;
+      cv.height = r.height * devicePixelRatio;
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+      return { w: r.width, h: r.height };
+    }
+    let { w, h } = size();
+    window.addEventListener("resize", () => ({ w, h } = size()));
+
+    const rand = (a, b) => a + Math.random() * (b - a);
+    function asteroid(x, y, radius) {
+      const verts = [];
+      const n = 9 + ((radius / 8) | 0);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        const rr = radius * rand(0.78, 1.12);
+        verts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+      }
+      return { x, y, radius, verts, spin: rand(-0.4, 0.4), vx: rand(-0.2, 0.2), vy: rand(-0.2, 0.2), rot: 0 };
+    }
+
+    const rocks = [
+      asteroid(w * 0.30, h * 0.42, 62),
+      asteroid(w * 0.62, h * 0.30, 40),
+      asteroid(w * 0.74, h * 0.62, 30),
+      asteroid(w * 0.46, h * 0.70, 22),
+      asteroid(w * 0.18, h * 0.72, 16),
+      asteroid(w * 0.84, h * 0.24, 14),
+    ];
+    const player = { x: w * 0.5, y: h * 0.52, angle: -0.5 };
+
+    function drawStars() {
+      ctx.save();
+      for (let i = 0; i < 90; i++) {
+        const x = (i * 137.5) % w, y = (i * 89.3) % h;
+        ctx.globalAlpha = 0.15 + ((i % 5) / 12);
+        ctx.fillStyle = "#9fb0d0";
+        ctx.fillRect(x, y, 1.4, 1.4);
+      }
+      ctx.restore();
+    }
+    function drawRock(a) {
+      ctx.save();
+      ctx.translate(a.x, a.y);
+      ctx.rotate(a.rot);
+      ctx.beginPath();
+      a.verts.forEach(([vx, vy], i) => (i ? ctx.lineTo(vx, vy) : ctx.moveTo(vx, vy)));
+      ctx.closePath();
+      const g = ctx.createRadialGradient(-a.radius * 0.3, -a.radius * 0.3, a.radius * 0.2, 0, 0, a.radius);
+      g.addColorStop(0, "#3a4256");
+      g.addColorStop(1, "#1a1f2b");
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(184,165,255,.35)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+    function drawShip(p) {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.angle);
+      ctx.beginPath();
+      ctx.moveTo(16, 0); ctx.lineTo(-12, -10); ctx.lineTo(-6, 0); ctx.lineTo(-12, 10);
+      ctx.closePath();
+      ctx.fillStyle = "#ff6a3d";
+      ctx.shadowColor = "rgba(255,106,61,.7)";
+      ctx.shadowBlur = 16;
+      ctx.fill();
+      // thruster
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      ctx.moveTo(-6, 0); ctx.lineTo(-22, -4); ctx.lineTo(-18, 0); ctx.lineTo(-22, 4);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(184,165,255,.9)";
+      ctx.fill();
+      ctx.restore();
+    }
+    function frame() {
+      ctx.clearRect(0, 0, w, h);
+      drawStars();
+      // faint gravity-well ring under the biggest rock
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,106,61,.10)";
+      ctx.lineWidth = 1;
+      for (let r = 90; r < 260; r += 34) {
+        ctx.beginPath(); ctx.arc(rocks[0].x, rocks[0].y, r, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.restore();
+      for (const a of rocks) { a.rot += a.spin * 0.01; drawRock(a); }
+      drawShip(player);
+      requestAnimationFrame(frame);
+    }
+    frame();
+  </script>
+</body>
+</html>

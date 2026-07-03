@@ -8,6 +8,7 @@
 export {
   isOrchestrationActive,
   isOrchestratorResuming,
+  effectiveModel,
   createOrchestrator,
   __ingestSeenForTest,
   __runTransientSizesForTest,

@@ -16,8 +16,8 @@
 //     Math.random are mocked so newTreeId() mints the same stable tree_id every run; the watchdog
 //     timer seam is a fake that never fires. The traces are therefore byte-stable across runs.
 //
-// Scenario A: confident single (SIZER: single / 1 / 0.95) → one sub, gate, approve, exec, summary, done.
-// Scenario B: 2-way split (SIZER: split / 2 / 0.9) → master draft, master gate, approveMaster,
+// Scenario A: confident single (SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}) → one sub, gate, approve, exec, summary, done.
+// Scenario B: 2-way split (SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}) → master draft, master gate, approveMaster,
 //   interrupted resume result, then sub-01, the parent review turn (NONE), then sub-02 through
 //   per-node sizer + gate/approve/exec/summary, done.
 
@@ -28,9 +28,10 @@ import type { AssistantText, ResultMsg, ToolPermissionRequested } from "./types"
 
 
 type TraceEntry =
-  | { kind: "startSession"; cwd: string; permissionMode: string }
+  | { kind: "startSession"; cwd: string; permissionMode: string; execution: string | null }
   | { kind: "sendMessage"; text: string }
   | { kind: "setMode"; mode: string }
+  | { kind: "setModel"; model: string }
   | { kind: "resolvePermission"; id: string; allow: boolean }
   | { kind: "interrupt" }
   | { kind: "cancelRun" }
@@ -62,9 +63,15 @@ function makeGolden(): { h: OrchestratorHandle; trace: TraceEntry[] } {
   const trace: TraceEntry[] = [];
   const deps: OrchestratorDeps = {
     startSession: async (args) =>
-      void trace.push({ kind: "startSession", cwd: args.cwd, permissionMode: args.permissionMode }),
+      void trace.push({
+        kind: "startSession",
+        cwd: args.cwd,
+        permissionMode: args.permissionMode,
+        execution: args.execution?.model ?? null,
+      }),
     sendMessage: async (text) => void trace.push({ kind: "sendMessage", text }),
     setMode: async (mode) => void trace.push({ kind: "setMode", mode }),
+    setModel: async (model) => void trace.push({ kind: "setModel", model }),
     resolvePermission: async (args) =>
       void trace.push({ kind: "resolvePermission", id: args.id, allow: args.allow }),
     cancelRun: async () => void trace.push({ kind: "cancelRun" }),
@@ -151,7 +158,7 @@ async function driveSub(
   await h.ingestStream(textFrame(`sub ${nn} recon report`));
   await h.ingestStream(resultFrame());
   if (viaSizer) {
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.95"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}"));
     await h.ingestStream(resultFrame());
   }
   await h.ingestPermission(exitPlanModeReq(toolUseId, `# Sub-Plan 0${nn}\n\nthe sub ${nn} plan body\n`));
@@ -182,7 +189,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
   it("Scenario A — confident single: intent → recon → sizer(single 0.95) → sub-01 recon/draft/gate/approve/exec/summary → done", async () => {
     const { h, trace } = makeGolden();
 
-    await driveToSizer(h, "SIZER: single / 1 / 0.95");
+    await driveToSizer(h, "SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}");
     await driveSub(h, 1, "sub1-tu");
 
     // Terminal: natural completion ENDS the SDK session (cancelRun → endSession) BEFORE firing the
@@ -195,12 +202,13 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "resetPlanTreeDir",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"clarifying-intent"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"clarifying-intent"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
         {
           "cwd": "/golden",
+          "execution": "claude-sonnet-5",
           "kind": "startSession",
           "permissionMode": "prototype",
         },
@@ -296,7 +304,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "name": "INTENT.md",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -329,9 +337,13 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "name": "recon.md",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"sizing"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"sizing"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-opus-4-8",
         },
         {
           "kind": "sendMessage",
@@ -366,19 +378,29 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       user wants; an oversized single plan is painful to retroactively decompose.
       ---END-DECOMPOSITION-BIAS---
 
-      After it returns, emit exactly one line at the top level of the form:
+      After it returns, emit exactly one line at the top level — a \`SIZER:\` prefix followed by a single
+      JSON object:
 
-      SIZER: <single|split> / <num_plans> / <confidence>
+      SIZER: {"decision":"<single|split>","num_plans":<integer>,"confidence":<0..1>,"scale":"<standard|large|huge>"}
 
-      e.g. \`SIZER: split / 3 / 0.82\`. Those are the ONLY two decisions — when uncertain, choose
-      \`split\` (the master plan gate is the human checkpoint for an uncertain decomposition).
+      e.g. \`SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}\`. Those are the
+      ONLY two decisions — when uncertain, choose \`split\` (the master plan gate is the human checkpoint
+      for an uncertain decomposition).
+
+      \`scale\` ∈ {standard, large, huge} sizes a \`single\`'s coding scope (ignored for a \`split\`):
+      standard = fits one focused plan; large = a big cohesive job (many files / high coupling);
+      huge = a frontier / long-horizon migration or implementation.
 
       Emit nothing else after the SIZER line.",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"}}],"planPath":null,"summaryPath":null,"plansDirPath":null}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-sonnet-5",
         },
         {
           "kind": "sendMessage",
@@ -396,9 +418,13 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       Return its report verbatim as your final message — do not call any other tool.",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"drafting","planPath":null,"summaryPath":null,"plansDirPath":null}}],"planPath":null,"summaryPath":null,"plansDirPath":null}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"drafting","planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-opus-4-8",
         },
         {
           "kind": "sendMessage",
@@ -415,7 +441,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "treeId": "tree-mbxstdz4-1f9add37",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"awaiting-approval","planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}],"planPath":null,"summaryPath":null,"plansDirPath":null}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"awaiting-approval","planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -429,7 +455,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "resolvePermission",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}],"planPath":null,"summaryPath":null,"plansDirPath":null}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -438,7 +464,11 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "mode": "acceptEdits",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}],"planPath":null,"summaryPath":null,"plansDirPath":null}}}",
+          "kind": "setModel",
+          "model": "claude-sonnet-5",
+        },
+        {
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -475,7 +505,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "observer",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"summarized","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/master.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/master.md"}}],"planPath":null,"summaryPath":null,"plansDirPath":null}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"summarized","children":[{"nn":1,"title":"Plan","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/master.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -486,7 +516,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
   it("Scenario B — 2-way split: … sizer(split 0.9) → master draft/gate/approveMaster → interrupted resume → sub-01 → (auto-advance) sub-02 → done", async () => {
     const { h, trace } = makeGolden();
 
-    await driveToSizer(h, "SIZER: split / 2 / 0.9");
+    await driveToSizer(h, "SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}");
 
     // The master ExitPlanMode hold (the master gate), carrying the decomposition.
     const masterPlan =
@@ -512,12 +542,13 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "resetPlanTreeDir",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"clarifying-intent"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"clarifying-intent"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
         {
           "cwd": "/golden",
+          "execution": "claude-sonnet-5",
           "kind": "startSession",
           "permissionMode": "prototype",
         },
@@ -613,7 +644,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "name": "INTENT.md",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -646,9 +677,13 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "name": "recon.md",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"sizing"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"sizing"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-opus-4-8",
         },
         {
           "kind": "sendMessage",
@@ -683,17 +718,23 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       user wants; an oversized single plan is painful to retroactively decompose.
       ---END-DECOMPOSITION-BIAS---
 
-      After it returns, emit exactly one line at the top level of the form:
+      After it returns, emit exactly one line at the top level — a \`SIZER:\` prefix followed by a single
+      JSON object:
 
-      SIZER: <single|split> / <num_plans> / <confidence>
+      SIZER: {"decision":"<single|split>","num_plans":<integer>,"confidence":<0..1>,"scale":"<standard|large|huge>"}
 
-      e.g. \`SIZER: split / 3 / 0.82\`. Those are the ONLY two decisions — when uncertain, choose
-      \`split\` (the master plan gate is the human checkpoint for an uncertain decomposition).
+      e.g. \`SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}\`. Those are the
+      ONLY two decisions — when uncertain, choose \`split\` (the master plan gate is the human checkpoint
+      for an uncertain decomposition).
+
+      \`scale\` ∈ {standard, large, huge} sizes a \`single\`'s coding scope (ignored for a \`split\`):
+      standard = fits one focused plan; large = a big cohesive job (many files / high coupling);
+      huge = a frontier / long-horizon migration or implementation.
 
       Emit nothing else after the SIZER line.",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"decomposing"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"decomposing"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -724,7 +765,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "treeId": "tree-mbxstdz4-1f9add37",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"decomposing"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"decomposing"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -743,7 +784,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "name": "master.md",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"awaiting-decomposition-approval"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"awaiting-decomposition-approval"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -757,13 +798,17 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "resolvePermission",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
         {
           "kind": "setMode",
           "mode": "plan",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-sonnet-5",
         },
         {
           "kind": "interrupt",
@@ -792,9 +837,13 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       Return its report verbatim as your final message — do not call any other tool.",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"sizing"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"sizing"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-opus-4-8",
         },
         {
           "kind": "sendMessage",
@@ -829,17 +878,23 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       user wants; an oversized single plan is painful to retroactively decompose.
       ---END-DECOMPOSITION-BIAS---
 
-      After it returns, emit exactly one line at the top level of the form:
+      After it returns, emit exactly one line at the top level — a \`SIZER:\` prefix followed by a single
+      JSON object:
 
-      SIZER: <single|split> / <num_plans> / <confidence>
+      SIZER: {"decision":"<single|split>","num_plans":<integer>,"confidence":<0..1>,"scale":"<standard|large|huge>"}
 
-      e.g. \`SIZER: split / 3 / 0.82\`. Those are the ONLY two decisions — when uncertain, choose
-      \`split\` (the master plan gate is the human checkpoint for an uncertain decomposition).
+      e.g. \`SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}\`. Those are the
+      ONLY two decisions — when uncertain, choose \`split\` (the master plan gate is the human checkpoint
+      for an uncertain decomposition).
+
+      \`scale\` ∈ {standard, large, huge} sizes a \`single\`'s coding scope (ignored for a \`split\`):
+      standard = fits one focused plan; large = a big cohesive job (many files / high coupling);
+      huge = a frontier / long-horizon migration or implementation.
 
       Emit nothing else after the SIZER line.",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"drafting","planPath":null,"summaryPath":null,"plansDirPath":null}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"drafting","planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -866,7 +921,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "treeId": "tree-mbxstdz4-1f9add37",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"awaiting-approval","planPath":"/abs/plans/1.md","summaryPath":null,"plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"awaiting-approval","planPath":"/abs/plans/1.md","summaryPath":null,"plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -880,7 +935,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "resolvePermission",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/1.md","summaryPath":null,"plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/1.md","summaryPath":null,"plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -889,7 +944,11 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "mode": "acceptEdits",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/1.md","summaryPath":null,"plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "kind": "setModel",
+          "model": "claude-sonnet-5",
+        },
+        {
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/1.md","summaryPath":null,"plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -916,13 +975,17 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "observer",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"reviewing","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"reviewing","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"pending"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
         {
           "kind": "setMode",
           "mode": "plan",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-opus-4-8",
         },
         {
           "kind": "sendMessage",
@@ -954,9 +1017,13 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       NONE",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"recon"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-sonnet-5",
         },
         {
           "kind": "sendMessage",
@@ -990,9 +1057,13 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       ",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"sizing"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"open","phase":"sizing"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
+        },
+        {
+          "kind": "setModel",
+          "model": "claude-opus-4-8",
         },
         {
           "kind": "sendMessage",
@@ -1027,17 +1098,23 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
       user wants; an oversized single plan is painful to retroactively decompose.
       ---END-DECOMPOSITION-BIAS---
 
-      After it returns, emit exactly one line at the top level of the form:
+      After it returns, emit exactly one line at the top level — a \`SIZER:\` prefix followed by a single
+      JSON object:
 
-      SIZER: <single|split> / <num_plans> / <confidence>
+      SIZER: {"decision":"<single|split>","num_plans":<integer>,"confidence":<0..1>,"scale":"<standard|large|huge>"}
 
-      e.g. \`SIZER: split / 3 / 0.82\`. Those are the ONLY two decisions — when uncertain, choose
-      \`split\` (the master plan gate is the human checkpoint for an uncertain decomposition).
+      e.g. \`SIZER: {"decision":"split","num_plans":3,"confidence":0.82,"scale":"standard"}\`. Those are the
+      ONLY two decisions — when uncertain, choose \`split\` (the master plan gate is the human checkpoint
+      for an uncertain decomposition).
+
+      \`scale\` ∈ {standard, large, huge} sizes a \`single\`'s coding scope (ignored for a \`split\`):
+      standard = fits one focused plan; large = a big cohesive job (many files / high coupling);
+      huge = a frontier / long-horizon migration or implementation.
 
       Emit nothing else after the SIZER line.",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"drafting","planPath":null,"summaryPath":null,"plansDirPath":null}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"drafting","planPath":null,"summaryPath":null,"plansDirPath":null},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -1072,7 +1149,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "treeId": "tree-mbxstdz4-1f9add37",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"awaiting-approval","planPath":"/abs/plans/2.md","summaryPath":null,"plansDirPath":"/abs/plans/2.md"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"awaiting-approval","planPath":"/abs/plans/2.md","summaryPath":null,"plansDirPath":"/abs/plans/2.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -1086,7 +1163,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "resolvePermission",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/2.md","summaryPath":null,"plansDirPath":"/abs/plans/2.md"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/2.md","summaryPath":null,"plansDirPath":"/abs/plans/2.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -1095,7 +1172,11 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "mode": "acceptEdits",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/2.md","summaryPath":null,"plansDirPath":"/abs/plans/2.md"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "kind": "setModel",
+          "model": "claude-sonnet-5",
+        },
+        {
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"running-children","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"executing","planPath":"/abs/plans/2.md","summaryPath":null,"plansDirPath":"/abs/plans/2.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },
@@ -1132,7 +1213,7 @@ describe("golden depth-1 equivalence oracle (pre-refactor wire traces)", () => {
           "kind": "observer",
         },
         {
-          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"summarized","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"}},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/2.md","summaryPath":"/abs/.plan-tree/02-summary.md","plansDirPath":"/abs/plans/2.md"}}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"}}}",
+          "contents": "{"schema":2,"tree_id":"tree-mbxstdz4-1f9add37","created_ms":1750000000000,"updated_ms":1750000000000,"root":{"nn":1,"title":"build a widget","redraftCount":0,"lastFeedback":null,"state":{"stage":"split","phase":"summarized","children":[{"nn":1,"title":"First","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/1.md","summaryPath":"/abs/.plan-tree/01-summary.md","plansDirPath":"/abs/plans/1.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"},{"nn":2,"title":"Second","redraftCount":0,"lastFeedback":null,"state":{"stage":"leaf","phase":"summarized","planPath":"/abs/plans/2.md","summaryPath":"/abs/.plan-tree/02-summary.md","plansDirPath":"/abs/plans/2.md"},"execution_model":{"model":"claude-sonnet-5","effort":"medium"},"model_source":"auto"}],"planPath":"/abs/plans/master.md","summaryPath":null,"plansDirPath":"/abs/plans/master.md"},"execution_model":{"model":"claude-opus-4-8","effort":"high"},"model_source":"auto"}}",
           "kind": "writePlanTreeFile",
           "name": "state.json",
         },

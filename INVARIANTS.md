@@ -22,12 +22,12 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Domain | type-level | runtime-guard | precedence | reducer-total | containment | sanitization | test-pinned | convention | Total |
 |---|---|---|---|---|---|---|---|---|---|
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
-| Conversation / live-session | 7 | 25 | 0 | 1 | 0 | 0 | 0 | 5 | 38 |
+| Conversation / live-session | 7 | 26 | 0 | 1 | 0 | 0 | 0 | 5 | 39 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
-| Sidecar / agent-driver | 4 | 16 | 0 | 0 | 4 | 0 | 0 | 4 | 28 |
+| Sidecar / agent-driver | 5 | 17 | 0 | 0 | 4 | 0 | 0 | 5 | 31 |
 | Rust backend (`src-tauri/`) | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | 3 |
 | Other | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | 18 | 70 | 5 | 1 | 4 | 3 | 1 | 22 | 124 |
+| **Total** | 19 | 72 | 5 | 1 | 4 | 3 | 1 | 23 | 128 |
 
 ## Reading-pane render
 
@@ -262,98 +262,105 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a boundary result consumed by the wrong step; two steps armed at once
 
-**Anchor:** `src/conversation/orchestrator/core.ts:145` — `type Awaiting =`
+**Anchor:** `src/conversation/orchestrator/core.ts:157` — `type Awaiting =`
 
 ### runstate-all-or-nothing-reset
 **`type-level`** — every per-run transient lives in this one bundle; freshRunState's `: RunState` return forces every field initialized, and start()/resume() replace it wholesale, so all transients reset together.
 
 **Prevents:** run A's context (stale summary/mandate/held-permission) bleeding into run B
 
-**Anchor:** `src/conversation/orchestrator/core.ts:197` — `interface RunState {`
+**Anchor:** `src/conversation/orchestrator/core.ts:209` — `interface RunState {`
 
 ### at-most-one-adjust-note
 **`type-level`** — at most one parent-review adjustment note is pending (single nullable field), scoped to its issuing parent's children via parentKey.
 
 **Prevents:** a second pending note coexisting / leaking into another level's prompts
 
-**Anchor:** `src/conversation/orchestrator/core.ts:238` — `adjustNote: { parentKey: PathKey; note: string } | null;`
+**Anchor:** `src/conversation/orchestrator/core.ts:250` — `adjustNote: { parentKey: PathKey; note: string } | null;`
 
 ### at-most-one-pending-gate
 **`runtime-guard`** — a re-presented disk gate carries a synthetic `resumed:` id (the live resolver died with the prior process); this short-circuit drops its resolvePermission rather than calling the dead sidecar resolver.
 
 **Prevents:** resolving a dead synthetic id against the sidecar
 
-**Anchor:** `src/conversation/orchestrator/core.ts:497` — `if (eff.id.startsWith("resumed:")) {`
+**Anchor:** `src/conversation/orchestrator/core.ts:514` — `if (eff.id.startsWith("resumed:")) {`
 
 ### asserted-policy-is-a-pure-ledger-cache
 **`runtime-guard`** — session permission mode is a pure function of the ledger (writePolicyFor2); run.assertedPolicy is only a cache, re-asserted when it differs (null after an ExitPlanMode allow makes the live mode unknown).
 
 **Prevents:** the session running in a stale write policy after an out-of-band plan-mode exit
 
-**Anchor:** `src/conversation/orchestrator/core.ts:696` — `if (active) {`
+**Anchor:** `src/conversation/orchestrator/core.ts:713` — `if (active) {`
+
+### asserted-model-is-a-pure-ledger-cache
+**`runtime-guard`** — the live session model is a pure function of the active node's (stage, phase) + override (effectiveModel); run.assertedModel is only a cache, re-asserted when it differs.
+
+**Prevents:** a phase running on the wrong (stale) model after the active node advanced
+
+**Anchor:** `src/conversation/orchestrator/core.ts:727` — `const ap = activePathOf(next.root);`
 
 ### one-turn-watchdog-slot
 **`runtime-guard`** — exactly one turn is in flight, so one shared watchdog handle (run.turnWatchdog); every arm site clears the prior first (clearTurnWatchdog).
 
 **Prevents:** two live watchdog timers firing competing FATALs
 
-**Anchor:** `src/conversation/orchestrator/core.ts:760` — `const clearTurnWatchdog = (): void => {`
+**Anchor:** `src/conversation/orchestrator/core.ts:794` — `const clearTurnWatchdog = (): void => {`
 
 ### watchdog-rearmed-per-tag-on-resume
 **`runtime-guard`** — on quota resume the watchdog is re-armed per awaited tag (summary→path, parent-review→parentPath, intent→[]).
 
 **Prevents:** a silently-stuck resumed turn hanging the run with no terminal
 
-**Anchor:** `src/conversation/orchestrator/core.ts:1001` — `const rearmed = pause.awaitingVariant;`
+**Anchor:** `src/conversation/orchestrator/core.ts:1035` — `const rearmed = pause.awaitingVariant;`
 
 ### sizer-two-outcome
 **`runtime-guard`** — the sizer decision is exactly single|split; an unparseable decision is coerced to split (loud) and the trailing assertNever(sizer.decision) guards totality.
 
 **Prevents:** an ambiguous/garbled sizer output advancing into an undefined branch
 
-**Anchor:** `src/conversation/orchestrator/core.ts:1280` — `case "sizer": {`
+**Anchor:** `src/conversation/orchestrator/core.ts:1321` — `case "sizer": {`
 
 ### ingest-queue-serialized-and-poison-proof
 **`runtime-guard`** — frames process one-at-a-time through this promise chain; a throw drives a loud FATAL but the `.catch` leaves the tail resolved so later frames still run.
 
 **Prevents:** a single throwing frame stalling the run silently / poisoning the chain
 
-**Anchor:** `src/conversation/orchestrator/core.ts:2124` — `const enqueueIngest = (work: () => Promise<void>): Promise<void> => {`
+**Anchor:** `src/conversation/orchestrator/core.ts:2165` — `const enqueueIngest = (work: () => Promise<void>): Promise<void> => {`
 
 ### start-is-idempotent
 **`runtime-guard`** — a second start() while active is a no-op returning false.
 
 **Prevents:** a dead start closing the composer modal / running the onStarted chain
 
-**Anchor:** `src/conversation/orchestrator/core.ts:2166` — `if (active) return false;`
+**Anchor:** `src/conversation/orchestrator/core.ts:2207` — `if (active) return false;`
 
 ### arm-before-send
 **`convention`** — the next awaiting variant is armed before deps.sendMessage, because the turn's result can reach ingest before the send resolves.
 
 **Prevents:** a result landing while awaiting is idle and being swallowed (the run halting at the opening phase)
 
-**Anchor:** `src/conversation/orchestrator/core.ts:2219` — `run.awaiting = { tag: "intent", buffer: "" };`
+**Anchor:** `src/conversation/orchestrator/core.ts:2282` — `run.awaiting = { tag: "intent", buffer: "" };`
 
 ### prototype-round-driver-owned-monotonic
 **`runtime-guard`** — prototypeRound counts completed refine requests, incremented ONLY here, reset ONLY via freshRunState; the gate mints round+1.
 
 **Prevents:** a clarifier-supplied round count gaming the loop-escape threshold
 
-**Anchor:** `src/conversation/orchestrator/core.ts:2578` — `run.prototypeRound++;`
+**Anchor:** `src/conversation/orchestrator/core.ts:2653` — `run.prototypeRound++;`
 
 ### quota-paused-single-probe
 **`runtime-guard`** — 'are we quota-paused?' has one answer — quotaPause!==null || quotaPausePending; both agent-exit listeners read it.
 
 **Prevents:** a same-tick agent-exit classified as end-of-run instead of a pause
 
-**Anchor:** `src/conversation/orchestrator/core.ts:2719` — `quotaPaused: () => run.quotaPause !== null || run.quotaPausePending,`
+**Anchor:** `src/conversation/orchestrator/core.ts:2794` — `quotaPaused: () => run.quotaPause !== null || run.quotaPausePending,`
 
 ### node-state-stage-phase-coupling
 **`type-level`** — a node's state is a tagged union on stage (open|leaf|split), each stage permitting only its own phases and co-locating only its own fields (children only on split, artifact paths only on leaf/split).
 
 **Prevents:** impossible stage/phase combos and reading a field that doesn't exist for the current stage
 
-**Anchor:** `src/conversation/plan-tree/model.ts:85` — `export type NodeState =`
+**Anchor:** `src/conversation/plan-tree/model.ts:92` — `export type NodeState =`
 
 ### write-policy-is-derived-not-stored
 **`convention`** — write policy is one of plan|acceptEdits|prototype, computed purely from the tree by this projection and never persisted as a mutable ledger flag (RunState.assertedPolicy is only a re-derivable cache).
@@ -383,7 +390,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** un-submitted form state (checked radios / draft text) persisting across rerenders.
 
-**Anchor:** `src/conversation/render.ts:822` — `function isInteractiveNode(node: RenderNode | SubagentGroupNode): boolean {`
+**Anchor:** `src/conversation/render.ts:826` — `function isInteractiveNode(node: RenderNode | SubagentGroupNode): boolean {`
 
 **Tests:** `render.reconcile.test.ts (f) — rerendering the same model does NOT reuse the question card element`
 
@@ -392,7 +399,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a full-DOM rebuild every frame — interval churn, image flicker, and lost scroll / selection / focus.
 
-**Anchor:** `src/conversation/render.ts:935` — `function obtainElem(`
+**Anchor:** `src/conversation/render.ts:939` — `function obtainElem(`
 
 **Tests:** `render.reconcile.test.ts identity tests (a) same-tree rerender reuses every element and (b) an append reuses all prior elements`
 
@@ -449,84 +456,84 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** the "submit AND approve both in flight" state
 
-**Anchor:** `src/main.ts:141` — `type ActionInFlight = "none" | "submit" | "approve";`
+**Anchor:** `src/main.ts:156` — `type ActionInFlight = "none" | "submit" | "approve";`
 
 ### selection-single-truth
 **`type-level`** — the reading-pane target is exactly one closed-union variant — none | plan | sentinel | placeholder.
 
 **Prevents:** independent openPath/placeholder/sentinel flags drifting into a contradictory double-active state
 
-**Anchor:** `src/main.ts:228` — `type Selection =`
+**Anchor:** `src/main.ts:243` — `type Selection =`
 
 ### openpath-is-derived-never-assigned
 **`type-level`** — openPath is a pure function over `selection` (no backing field) — recomputed each call, never a stored lvalue writers can set.
 
 **Prevents:** a stored openPath desyncing from the active selection
 
-**Anchor:** `src/main.ts:240` — `function openPath(): AbsPath | null {`
+**Anchor:** `src/main.ts:255` — `function openPath(): AbsPath | null {`
 
 ### placeholder-selected-folded-into-selection
 **`type-level`** — the placeholder is "selected" iff `selection.k === "placeholder"` for the current run — read off the union, with no parallel boolean.
 
 **Prevents:** a "placeholder selected AND a real plan open" double-active state
 
-**Anchor:** `src/main.ts:300` — `function placeholderSelected(): boolean {`
+**Anchor:** `src/main.ts:326` — `function placeholderSelected(): boolean {`
 
 ### pending-surface-union
 **`convention`** — every "thing awaiting the user" is one typed PendingSurface from this single builder, which both the SUMMARY count and the Resume target consult.
 
 **Prevents:** the count and the resume button computing "what's pending" from divergent paths
 
-**Anchor:** `src/main.ts:352` — `function pendingSurfaces(): PendingSurface[] {`
+**Anchor:** `src/main.ts:378` — `function pendingSurfaces(): PendingSurface[] {`
 
 ### pending-count-equals-surfaces-length-at-the-bar-site
 **`convention`** — the SUMMARY count is pendingSurfaces().length — the same builder the Resume picker consults.
 
 **Prevents:** the count double-counting or omitting a gate surface
 
-**Anchor:** `src/main.ts:540` — `pendingCount: pendingSurfaces().length,`
+**Anchor:** `src/main.ts:566` — `pendingCount: pendingSurfaces().length,`
 
 ### approve-never-drives-the-submitting-visual-lock
 **`convention`** — only "submit" maps into the bar's visual "submitting" lock; an in-flight "approve" gates dispatch but feeds no bar change.
 
 **Prevents:** an in-flight approve spuriously flipping the bar into "Submitting…"
 
-**Anchor:** `src/main.ts:552` — `submitInFlight: actionInFlight === "submit",`
+**Anchor:** `src/main.ts:578` — `submitInFlight: actionInFlight === "submit",`
 
 ### surface-removal-unsuppresses-resume
 **`convention`** — each site that removes a pending surface re-derives both affordances via refreshAffordances().
 
 **Prevents:** an out-of-band cancel leaving the resume banner stuck hidden
 
-**Anchor:** `src/main.ts:846` — `refreshAffordances();`
+**Anchor:** `src/main.ts:872` — `refreshAffordances();`
 
 ### reading-pane-affordance-precedence
 **`precedence`** — the resume banner is (re-)derived only when computeAffordance reports no higher affordance occupies the bar.
 
 **Prevents:** the resume banner showing beneath a held review / gate
 
-**Anchor:** `src/main.ts:1368` — `function refreshAffordances(): void {`
+**Anchor:** `src/main.ts:1394` — `function refreshAffordances(): void {`
 
 ### selection-collapse-only-on-genuine-vanish
 **`runtime-guard`** — a `plan` selection collapses to none only when it was in the prior list AND is absent from the new one.
 
 **Prevents:** blanking a freshly-opened / not-yet-indexed plan that was simply never listed
 
-**Anchor:** `src/main.ts:1689` — `function resolveSelection(`
+**Anchor:** `src/main.ts:1769` — `function resolveSelection(`
 
 ### held-gate-plan-exempt-from-collapse
 **`runtime-guard`** — the held orchestrator gate's plan is returned unchanged even if its row drops from list_plans mid-hold.
 
 **Prevents:** a churning gate row collapsing the selection and vanishing the in-process Approve bar
 
-**Anchor:** `src/main.ts:1698` — `if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;`
+**Anchor:** `src/main.ts:1778` — `if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;`
 
 ### list-refresh-no-fetching-flash
 **`runtime-guard`** — only the INITIAL load (listState `initial`) transitions to `fetching`; an in-place refresh of an already-loaded list leaves the rendered list untouched while the next read is in flight.
 
 **Prevents:** a watcher tick blanking a populated sidebar to the empty `fetching` render mid-fetch.
 
-**Anchor:** `src/main.ts:1716` — `if (isInitial(listState)) {`
+**Anchor:** `src/main.ts:1796` — `if (isInitial(listState)) {`
 
 **Tests:** `list-refresh-never-renders-fetching-in-place`
 
@@ -535,84 +542,84 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a transient IPC failure collapsing the open plan (empty list → resolveSelection "vanish" → blanked pane)
 
-**Anchor:** `src/main.ts:1737` — `console.error("list_plans failed — leaving the sidebar/selection intact", e);`
+**Anchor:** `src/main.ts:1817` — `console.error("list_plans failed — leaving the sidebar/selection intact", e);`
 
 ### selection-set-synchronously-before-await-in-openPlan
 **`runtime-guard`** — openPlan assigns `selection` synchronously at the top, before any await, so openPath() reflects the new target throughout.
 
 **Prevents:** a post-await derivation reading a stale selection mid-open
 
-**Anchor:** `src/main.ts:2064` — `selection = isResumeSentinel(path)`
+**Anchor:** `src/main.ts:2330` — `selection = isResumeSentinel(path)`
 
 ### popover-draft-discarded-on-plan-switch-preserved-on-reopen
 **`runtime-guard`** — invalidatePopover compares the draft's planPath against the just-set openPath() — a genuine switch discards the draft, a same-plan reopen re-anchors it.
 
 **Prevents:** a cross-plan draft surviving a switch and re-anchoring against the wrong document
 
-**Anchor:** `src/main.ts:2222` — `invalidatePopover(readingPaneEl);`
+**Anchor:** `src/main.ts:2488` — `invalidatePopover(readingPaneEl);`
 
 ### render-generation-guard-cancels-superseded-settles
 **`runtime-guard`** — settle is handed `() => renderGuard.isCurrent(gen)`, so a superseded render's settle is cancelled the moment a newer render takes the generation.
 
 **Prevents:** a late settle from a stale render mutating the pane after a newer plan opened
 
-**Anchor:** `src/main.ts:2226` — `await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));`
+**Anchor:** `src/main.ts:2492` — `await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));`
 
 ### openGatePlanFile-shared-by-both-gate-paths
 **`convention`** — the gate observer and the Resume path both re-open a held gate's plan through this one sequence.
 
 **Prevents:** the two gate-open paths diverging
 
-**Anchor:** `src/main.ts:2418` — `async function openGatePlanFile(planPath: string): Promise<void> {`
+**Anchor:** `src/main.ts:2687` — `async function openGatePlanFile(planPath: string): Promise<void> {`
 
 ### gate-preferred-over-newer-external-review
 **`precedence`** — a held orchestrator gate is found first among the pending surfaces, so Resume re-opens it regardless of a newer external review.
 
 **Prevents:** a newer external review opening instead of the live held gate
 
-**Anchor:** `src/main.ts:2439` — `const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");`
+**Anchor:** `src/main.ts:2708` — `const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");`
 
 ### sentinel-touches-no-file-io
 **`runtime-guard`** — a synthetic resume sentinel is guarded out of every file-backed IPC (set_open_plan / mark_viewed) in this handler.
 
 **Prevents:** backend rejections / "reload failed" logs for a row with no real file
 
-**Anchor:** `src/main.ts:2457` — `const op = openPath();`
+**Anchor:** `src/main.ts:2726` — `const op = openPath();`
 
 ### open-plan-stamped-viewed-before-relist
 **`runtime-guard`** — when the open plan is the changed file, markViewed runs before refreshList / list_plans.
 
 **Prevents:** the sidebar momentarily bolding the plan the user is actively watching
 
-**Anchor:** `src/main.ts:2471` — `if (op !== null && changedPath === op && !isResumeSentinel(op)) {`
+**Anchor:** `src/main.ts:2740` — `if (op !== null && changedPath === op && !isResumeSentinel(op)) {`
 
 ### reload-target-re-read-after-relist
 **`runtime-guard`** — the reload target is re-read from openPath() AFTER refreshList, so a collapsed selection yields nothing to reload.
 
 **Prevents:** a reload firing against a path the same refresh just collapsed
 
-**Anchor:** `src/main.ts:2481` — `const opAfter = openPath();`
+**Anchor:** `src/main.ts:2750` — `const opAfter = openPath();`
 
 ### exactly-once-action-dispatch
 **`runtime-guard`** — the top-of-handler early-return bails whenever a sibling action is already dispatching, before any branch runs.
 
 **Prevents:** a fast double-click on Submit/Approve, or a cross-click, starting a second dispatch
 
-**Anchor:** `src/main.ts:2891` — `if (actionInFlight !== "none") return;`
+**Anchor:** `src/main.ts:3176` — `if (actionInFlight !== "none") return;`
 
 ### lock-set-after-guard-before-await
 **`runtime-guard`** — the lock is taken only after this branch's validation guard has passed, and before the branch's first await.
 
 **Prevents:** a guard-rejected click sticking the lock and freezing the bar
 
-**Anchor:** `src/main.ts:2904` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
+**Anchor:** `src/main.ts:3189` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
 
 ### lock-reset-on-every-exit
 **`runtime-guard`** — the finally returns actionInFlight to "none" on every exit path once a dispatched round-trip settles.
 
 **Prevents:** a failed dispatch leaving the lock stuck and permanently blocking actions
 
-**Anchor:** `src/main.ts:2932` — `actionInFlight = "none";`
+**Anchor:** `src/main.ts:3217` — `actionInFlight = "none";`
 
 ### prototype-loop-always-has-an-escape
 **`runtime-guard`** — from round >= PROTOTYPE_MAX_ROUNDS the approve affordance relabels to "Proceed as-is", guaranteeing a loop exit.
@@ -712,28 +719,42 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a command mid-drain routing to apply on a query being closed.
 
-**Anchor:** `sidecar/index.ts:680` — `function currentSession(): Session {`
+**Anchor:** `sidecar/index.ts:681` — `function currentSession(): Session {`
 
 ### hostpolicy-unconditional-write
 **`runtime-guard`** — hostPolicy is a required field on every decision and applied unconditionally before the action switch.
 
 **Prevents:** a late command on a dead session leaving the host-policy backstop stale.
 
-**Anchor:** `sidecar/index.ts:800` — `hostPolicy = decision.hostPolicy;`
+**Anchor:** `sidecar/index.ts:801` — `hostPolicy = decision.hostPolicy;`
 
 ### setpermissionmode-toctou-trycatch-backstop
 **`runtime-guard`** — the await q.setPermissionMode is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
 
 **Prevents:** an unhandled rejection killing the sidecar process.
 
-**Anchor:** `sidecar/index.ts:814` — `try {`
+**Anchor:** `sidecar/index.ts:815` — `try {`
 
 ### setpermissionmode-exhaustiveness-guard
 **`type-level`** — every SessionCommandDecision.action is handled; an unhandled future variant is a compile error.
 
 **Prevents:** a new action silently falling through into the sibling case.
 
-**Anchor:** `sidecar/index.ts:833` — `const _exhaustive: never = decision.action;`
+**Anchor:** `sidecar/index.ts:834` — `const _exhaustive: never = decision.action;`
+
+### setmodel-toctou-trycatch-backstop
+**`runtime-guard`** — the await q.setModel is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
+
+**Prevents:** an unhandled rejection killing the sidecar process.
+
+**Anchor:** `sidecar/index.ts:855` — `try {`
+
+### setmodel-exhaustiveness-guard
+**`type-level`** — every ModelCommandDecision.action is handled; an unhandled future variant is a compile error.
+
+**Prevents:** a new action silently falling through into the sibling case.
+
+**Anchor:** `sidecar/index.ts:871` — `const _exhaustive: never = decision.action;`
 
 ### plan-bash-write-blocklist-preserves-tests
 **`runtime-guard`** — under plan, write-shaped Bash is denied while read-only test runs stay allowed (best-effort blocklist, NOT a sandbox).
@@ -855,18 +876,25 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 **Anchor:** `sidecar/quota.ts:199` — `export function parseClockTimeInTz(text: unknown, nowMs: number = Date.now()): number | null {`
 
 ### setpermissionmode-gated-to-live
-**`type-level`** — `q` exists only on the live Session variant, so setPermissionMode is unreachable on idle/dead/draining at compile time.
+**`type-level`** — `q` exists only on the live Session variant, so setPermissionMode/setModel are unreachable on idle/dead/draining at compile time.
 
-**Prevents:** a setPermissionMode dereferencing `q` on a statically non-live session.
+**Prevents:** a setPermissionMode/setModel dereferencing `q` on a statically non-live session.
 
-**Anchor:** `sidecar/session-command.ts:28` — `export type Session =`
+**Anchor:** `sidecar/session-command.ts:35` — `export type Session =`
 
 ### decidesessioncommand-purity
 **`convention`** — decideSessionCommand never calls q.setPermissionMode; index.ts owns the sole SDK call site.
 
 **Prevents:** a hidden SDK side-effect double-firing the mode flip.
 
-**Anchor:** `sidecar/session-command.ts:53` — `export function decideSessionCommand(`
+**Anchor:** `sidecar/session-command.ts:60` — `export function decideSessionCommand(`
+
+### decidemodelcommand-purity
+**`convention`** — decideModelCommand never calls q.setModel; index.ts owns the sole SDK call site.
+
+**Prevents:** a hidden SDK side-effect double-firing the model switch.
+
+**Anchor:** `sidecar/session-command.ts:90` — `export function decideModelCommand(session: Session): ModelCommandDecision {`
 
 ### one-session-per-process
 **`type-level`** — a second start in the same process is a fatal protocol rejection that exits non-zero.
@@ -889,7 +917,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a plan you just opened flashing back to unread because an edit landed at the same millisecond (mtime == now) or the file carries a future mtime (mtime > now).
 
-**Anchor:** `src-tauri/src/lib.rs:2451` — `fn viewed_stamp(now_ms: i64, mtime_ms: Option<i64>) -> i64 {`
+**Anchor:** `src-tauri/src/lib.rs:2489` — `fn viewed_stamp(now_ms: i64, mtime_ms: Option<i64>) -> i64 {`
 
 **Tests:** `viewed_stamp_outlasts_simultaneous_and_future_edits`
 
@@ -898,7 +926,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
 
-**Anchor:** `src-tauri/src/lib.rs:3154` — `Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {`
+**Anchor:** `src-tauri/src/lib.rs:3203` — `Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {`
 
 **Tests:** `read_settings_value_refuses_unparseable_and_defaults_absent`
 
@@ -907,7 +935,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a config edit from silently re-opening inline/eval script execution (an XSS foothold) or plugin/object embedding in the shipped WebView.
 
-**Anchor:** `src-tauri/src/lib.rs:7183` — `#[test]`
+**Anchor:** `src-tauri/src/lib.rs:7369` — `#[test]`
 
 **Tests:** `csp_production_script_src_forbids_inline_and_eval`
 

@@ -92,6 +92,7 @@ function makeDeps(): { deps: OrchestratorDeps; rec: Recorded } {
     setMode: vi.fn(async (mode) => {
       rec.setMode.push(mode);
     }),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async (args) => {
       rec.resolvePermission.push({ id: args.id, allow: args.allow, message: args.message });
     }),
@@ -204,7 +205,7 @@ async function driveToSubDraftedGate(h: OrchestratorHandle, planPath: string): P
   const dispatch = (e: PlanTreeEvent2) => h.dispatch(e);
   await dispatch({ type: "INTENT_CLARIFIED", intent: "i" });
   await dispatch({ type: "NODE_RECON_DONE", path: [] });
-  await dispatch({ type: "SIZER_DONE", path: [], outcome: { decision: "single", confidence: 0.95, num_plans: 1 } });
+  await dispatch({ type: "SIZER_DONE", path: [], outcome: { decision: "single", confidence: 0.95, num_plans: 1, scale: "standard" } });
   await dispatch({ type: "NODE_RECON_DONE", path: [parseNn(1)] });
   await dispatch({
     type: "NODE_DRAFTED",
@@ -226,7 +227,7 @@ async function driveToMasterGate(h: OrchestratorHandle): Promise<void> {
   const dispatch = (e: PlanTreeEvent2) => h.dispatch(e);
   await dispatch({ type: "INTENT_CLARIFIED", intent: "i" });
   await dispatch({ type: "NODE_RECON_DONE", path: [] });
-  await dispatch({ type: "SIZER_DONE", path: [], outcome: { decision: "split", confidence: 0.82, num_plans: 1 } });
+  await dispatch({ type: "SIZER_DONE", path: [], outcome: { decision: "split", confidence: 0.82, num_plans: 1, scale: "standard" } });
   // The live interactive-tool path: the master ExitPlanMode hold while decomposing.
   await h.ingestPermission({
     seq: 1,

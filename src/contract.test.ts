@@ -1,7 +1,7 @@
 // Wire contract-conformance test (TS side).
 //
 // HONEST SCOPE: this test locks the SHAPE the frontend EXPECTS of a `list_plans` response —
-// the exact twelve snake_case keys per record — and gives render coverage across all three
+// the exact thirteen snake_case keys per record — and gives render coverage across all three
 // flavors + the cwd null/real-path branches. The fixture is a written statement of the shape the
 // frontend depends on, not a copy of a runtime dump, so it asserts intent, not an observation of
 // the backend.
@@ -57,7 +57,7 @@ import { TEXT_SIZE_KEY, TEXT_SIZE_LADDER } from "./titlebar";
 import { asAbsPath, asStem, type PlanRecord, type SidebarCtx, type CommentRecord } from "./types";
 import fixture from "./__fixtures__/list_plans.sample.json";
 
-// The twelve snake_case keys the frontend expects on every PlanRecord, sorted. Written out
+// The thirteen snake_case keys the frontend expects on every PlanRecord, sorted. Written out
 // literally so an added/dropped fixture key is caught by the deep-equal below. `nn_path` is the
 // Phase-2 additive field: the full canonical dotted id ("02.01"); `nn` stays = first segment.
 const EXPECTED_KEYS = [
@@ -65,6 +65,7 @@ const EXPECTED_KEYS = [
   "child_count",
   "collapsed",
   "cwd",
+  "execution_model",
   "filename_stem",
   "flavor",
   "h1s",
@@ -145,14 +146,14 @@ describe("contract — fixture sanity (authored against the PlanRecord wire shap
 });
 
 describe("contract — PlanRecord key set is locked", () => {
-  it("EVERY fixture record has exactly the twelve expected snake_case keys (no more, no fewer)", () => {
+  it("EVERY fixture record has exactly the thirteen expected snake_case keys (no more, no fewer)", () => {
     for (const raw of fixture) {
       expect(Object.keys(raw).sort()).toEqual(EXPECTED_KEYS);
     }
   });
 
-  it("the expected key set is exactly twelve keys", () => {
-    expect(EXPECTED_KEYS).toHaveLength(12);
+  it("the expected key set is exactly thirteen keys", () => {
+    expect(EXPECTED_KEYS).toHaveLength(13);
   });
 });
 
@@ -337,13 +338,29 @@ describe("contract — #sdk-status pill lives in the sidebar (moved off the titl
   });
 });
 
+describe("contract — conversation-header live model chip selector present in index.html", () => {
+  // The live execution-model chip is queried by id from main.ts (convModelChipEl) and lives inside
+  // the conversation toolbar. Removing it from index.html would silently no-op the chip — this pin
+  // reads the real file so that turns red.
+  it("index.html contains the #conversation-model-chip inside the conv-toolbar", () => {
+    expect(INDEX_HTML).toContain('id="conversation-model-chip"');
+    // It sits within the conversation toolbar, before the session controls (Pause/Resume/Stop).
+    const toolbarIdx = INDEX_HTML.indexOf('class="conv-toolbar"');
+    const chipIdx = INDEX_HTML.indexOf('id="conversation-model-chip"');
+    const pauseIdx = INDEX_HTML.indexOf('id="conversation-pause"');
+    expect(toolbarIdx).toBeGreaterThan(-1);
+    expect(chipIdx).toBeGreaterThan(toolbarIdx);
+    expect(pauseIdx).toBeGreaterThan(chipIdx);
+  });
+});
+
 describe("contract — CommentRecord carries exactly its 6 fields (separate from PlanRecord)", () => {
   // DERIVED FROM THE TYPE, not a hand-written literal: the keymap is `satisfies
   // Record<keyof CommentRecord, true>`, so the COMPILER enforces it covers EVERY key of the
   // interface. Adding a 6th interface field → tsc fails (the keymap is missing that key);
   // renaming a field → tsc fails (the keymap names a key that no longer exists). Either way the
   // freeze is falsifiable via the type, not just runtime. PlanRecord is UNAFFECTED — comments do
-  // not ride on it (EXPECTED_KEYS stays eleven, untouched). The authoritative Rust→JSON freeze is
+  // not ride on it (EXPECTED_KEYS stays thirteen, untouched). The authoritative Rust→JSON freeze is
   // the cargo test `comment_record_wire_contract_is_frozen`.
   const COMMENT_KEY_MAP = {
     quote: true,
@@ -416,5 +433,58 @@ describe("contract — render coverage across flavors + cwd states", () => {
     )!;
     expect(standaloneSrc).toBeTruthy();
     expect(standaloneSrc.textContent).toBe("");
+  });
+
+  // The PERSISTED-row model badge (no live orchestrator snapshot in this test module, so
+  // rowModelState reads rec.execution_model off the wire — a chip only, no auto/override affordance).
+  it("renders a .mbadge for a record with execution_model, omits it for null/unknown", () => {
+    const withModel: PlanRecord = {
+      absolute_path: asAbsPath("/Users/u/.claude/plans/badge-sonnet.md"),
+      filename_stem: asStem("badge-sonnet"),
+      mtime_ms: 5,
+      cwd: null,
+      unread: false,
+      flavor: "standalone",
+      tree_id: null,
+      nn: null,
+      nn_path: null,
+      child_count: null,
+      collapsed: false,
+      h1s: [],
+      execution_model: { model: "claude-sonnet-5" },
+    };
+    const noModel: PlanRecord = {
+      ...withModel,
+      absolute_path: asAbsPath("/Users/u/.claude/plans/badge-none.md"),
+      filename_stem: asStem("badge-none"),
+      execution_model: null,
+    };
+    const unknownModel: PlanRecord = {
+      ...withModel,
+      absolute_path: asAbsPath("/Users/u/.claude/plans/badge-unknown.md"),
+      filename_stem: asStem("badge-unknown"),
+      execution_model: { model: "gpt-4o" },
+    };
+
+    renderSidebar(listEl, [withModel, noModel, unknownModel], makeCtx());
+
+    // present branch: a Sonnet chip on the plan-row.
+    const badge = listEl.querySelector<HTMLElement>(
+      '.plan[data-path="/Users/u/.claude/plans/badge-sonnet.md"] .plan-row .mbadge',
+    );
+    expect(badge).toBeTruthy();
+    expect(badge!.classList.contains("sonnet")).toBe(true);
+    expect(badge!.textContent).toBe("Sonnet 5");
+    // persisted row: NO auto/override affordance (source is off-wire).
+    expect(badge!.querySelector(".rec")).toBeNull();
+    expect(badge!.classList.contains("override")).toBe(false);
+
+    // FALSIFY: render the badge unconditionally → these absence assertions go RED.
+    expect(
+      listEl.querySelector('.plan[data-path="/Users/u/.claude/plans/badge-none.md"] .mbadge'),
+    ).toBeNull();
+    expect(
+      listEl.querySelector('.plan[data-path="/Users/u/.claude/plans/badge-unknown.md"] .mbadge'),
+    ).toBeNull();
   });
 });

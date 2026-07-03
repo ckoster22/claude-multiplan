@@ -30,44 +30,6 @@
            bails on interactive targets — NOT by omitting the drag attribute. -->
       <div class="titlebar" data-tauri-drag-region>
         <div class="titlebar-controls">
-          <!-- Model & effort preset picker (Phase 2). A compact segmented control whose
-               three <button class="model-preset"> options mirror MODEL_PRESETS in
-               src/model-picker.ts (opus-4-8 / fable-5 / sonnet-4-6). Appended as the FIRST
-               child of .titlebar-controls so it sits LEFT of #text-dec / #theme-toggle.
-               The chosen preset is persisted to plan-reader-model-preset (initModelPicker,
-               src/model-picker.ts) and read at session start by the orchestrator; it applies
-               to the NEXT plan started. Like the other titlebar controls these are ordinary
-               interactive <button>s — window-drag exclusion is isDragTarget()'s
-               interactive-target bail in src/titlebar.ts, NOT a drag attribute or
-               pointer-events hack. -->
-          <div class="titlebar-model-picker"
-               title="Model & effort — applies to the next plan you start"
-               aria-label="Model & effort — applies to the next plan you start">
-            <button class="model-preset" type="button" data-preset="opus-4-8" aria-pressed="false"
-                    title="Opus 4.8" aria-label="Opus 4.8">Opus 4.8</button>
-            <button class="model-preset" type="button" data-preset="fable-5" aria-pressed="false"
-                    title="Fable 5 · low effort" aria-label="Fable 5, low effort">Fable 5</button>
-            <button class="model-preset" type="button" data-preset="sonnet-4-6" aria-pressed="false"
-                    title="Sonnet 4.6 · medium effort" aria-label="Sonnet 4.6, medium effort">Sonnet 4.6</button>
-          </div>
-          <!-- Opus effort selector (sibling of .titlebar-model-picker, NOT a child — the
-               picker has overflow:hidden + a fixed 28px height that would clip these five
-               buttons and their focus outlines). Revealed ONLY when Opus 4.8 is the active
-               preset; `hidden` (removed from layout) for fable-5 / sonnet-4-6. Each
-               <button class="effort-level"> mirrors EFFORT_LEVELS in src/model-picker.ts
-               (low / medium / high / xhigh / max). The chosen level is a single GLOBAL
-               setting persisted to plan-reader-opus-effort (initModelPicker) and read at
-               session start by the orchestrator; it applies to the NEXT Opus plan started
-               and is retained across model switches. Like the other titlebar controls these
-               are ordinary interactive <button>s — window-drag exclusion is isDragTarget()'s
-               interactive-target bail in src/titlebar.ts, NOT a drag attribute. -->
-          <div class="titlebar-effort" hidden role="group" aria-label="Opus effort level">
-            <button class="effort-level" type="button" data-effort="low"    aria-pressed="false">low</button>
-            <button class="effort-level" type="button" data-effort="medium" aria-pressed="false">medium</button>
-            <button class="effort-level" type="button" data-effort="high"   aria-pressed="false">high</button>
-            <button class="effort-level" type="button" data-effort="xhigh"  aria-pressed="false">xhigh</button>
-            <button class="effort-level" type="button" data-effort="max"    aria-pressed="false">max</button>
-          </div>
           <!-- New-plan launcher (Sub-Plan 02). Interactive control in the .titlebar-controls
                slot: window-drag exclusion is the isDragTarget() bail in src/titlebar.ts (the
                <button> is not data-tauri-drag-region). #new-plan-btn opens the composer modal.
@@ -185,6 +147,9 @@
             <div class="doc-header">
               <div class="doc-filename" id="doc-filename"></div>
               <div class="doc-src" id="doc-src"></div>
+              <!-- Execution-model picker. Populated + toggled by main.ts (renderModelBar):
+                   visible only when the open plan maps to a live plan-tree node. -->
+              <div class="modelbar hidden" id="model-bar"></div>
             </div>
 
             <!-- Resume banner (Phase 5). Orthogonal to the review bar: shown when the OPEN plan
@@ -268,7 +233,7 @@
                         title="Submit your inline comments as feedback">Submit feedback</button>
                 <button class="rb-btn" id="review-clear" type="button"
                         title="Clear all of this plan's comments (click again to confirm)">Clear comments</button>
-                <!-- Sub-Plan 03 — in-process review ONLY: approve the plan and begin execution in the
+                <!-- in-process review ONLY: approve the plan and begin execution in the
                      same Agent SDK session (single click → resolve_tool_permission(allow) +
                      set_agent_permission_mode(acceptEdits) + flip to the Conversation tab). Hidden by
                      default; refreshReviewBar() shows it solely when VIEWING an in-process review
@@ -297,6 +262,10 @@
                    #conversation-cancel is the Stop button (kept under its legacy id so existing wiring
                    compiles). -->
               <div class="conv-toolbar">
+                <!-- Live execution-model chip: the model the ACTIVE session is running right now
+                     (friendly name + effort), derived from the orchestrator's effectiveModel against
+                     the active node. Hidden entirely when no run is active. -->
+                <span class="conv-model-chip hidden" id="conversation-model-chip" aria-live="polite"></span>
                 <button class="conv-pause" id="conversation-pause" type="button"
                         title="Pause: interrupt the current turn (the session stays alive)">Pause</button>
                 <button class="conv-resume" id="conversation-resume" type="button"

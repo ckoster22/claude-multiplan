@@ -15,6 +15,13 @@ export interface SettablePermissionQuery {
   setPermissionMode(mode: string): Promise<void>;
 }
 
+// The SDK Query surface index.ts holds for a live model switch — the sibling of SettablePermissionQuery.
+// `model` is required: a set-model command always carries a concrete model id, so an absent model is
+// unrepresentable here (the SDK's own `setModel(model?)` stays assignable to this narrower shape).
+export interface SettableModelQuery {
+  setModel(model: string): Promise<void>;
+}
+
 // The sidecar session lifecycle. `q` lives ONLY in `live`, so a command handler can reach the SDK
 // query exclusively when it is safe to call:
 //   idle     — no `start` accepted yet.
@@ -23,12 +30,12 @@ export interface SettablePermissionQuery {
 //   live     — a usable SDK query is in flight; `q` is reachable.
 //   draining — graceful shutdown began; the query is being interrupted/closed (drain race window).
 //   dead     — the session ended (turn(s) done + iterator end); `q` is a stale/closed handle.
-// INVARIANT[setpermissionmode-gated-to-live] (type-level): `q` exists only on the live Session variant, so setPermissionMode is unreachable on idle/dead/draining at compile time.
-//   prevents: a setPermissionMode dereferencing `q` on a statically non-live session.
+// INVARIANT[setpermissionmode-gated-to-live] (type-level): `q` exists only on the live Session variant, so setPermissionMode/setModel are unreachable on idle/dead/draining at compile time.
+//   prevents: a setPermissionMode/setModel dereferencing `q` on a statically non-live session.
 export type Session =
   | { kind: "idle" }
   | { kind: "starting" }
-  | { kind: "live"; q: SettablePermissionQuery }
+  | { kind: "live"; q: SettablePermissionQuery & SettableModelQuery }
   | { kind: "draining" }
   | { kind: "dead" };
 
@@ -66,5 +73,29 @@ export function decideSessionCommand(
     case "draining":
     case "dead":
       return { action: "drop-ended", hostPolicy };
+  }
+}
+
+// What index.ts must do with a `set-model` command — the sibling of SessionCommandDecision, MINUS the
+// hostPolicy field: a model switch does not touch the gate's write-policy backstop (that is keyed off
+// write policy, not model), so there is nothing to rewrite unconditionally on the drop paths.
+export interface ModelCommandDecision {
+  action: "apply" | "drop-no-session" | "drop-ended";
+}
+
+// Decide how index.ts handles a `set-model` command against the current session. Pure: the caller owns
+// the q.setModel SDK call (only on `apply`). Mirrors decideSessionCommand's live-gating exactly.
+// INVARIANT[decidemodelcommand-purity] (convention): decideModelCommand never calls q.setModel; index.ts owns the sole SDK call site.
+//   prevents: a hidden SDK side-effect double-firing the model switch.
+export function decideModelCommand(session: Session): ModelCommandDecision {
+  switch (session.kind) {
+    case "idle":
+    case "starting":
+      return { action: "drop-no-session" };
+    case "live":
+      return { action: "apply" };
+    case "draining":
+    case "dead":
+      return { action: "drop-ended" };
   }
 }

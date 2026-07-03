@@ -13,7 +13,8 @@
     "collapsed": false,
     "h1s": [
       "Plan: Alpha master"
-    ]
+    ],
+    "execution_model": { "model": "claude-opus-4-8", "effort": "high" }
   },
   {
     "absolute_path": "/Users/u/.claude/plans/alpha-sub01.md",
@@ -29,7 +30,8 @@
     "collapsed": false,
     "h1s": [
       "Sub-Plan 01 — Foundations"
-    ]
+    ],
+    "execution_model": null
   },
   {
     "absolute_path": "/Users/u/.claude/plans/alpha-sub02.md",
@@ -43,7 +45,8 @@
     "nn_path": "02",
     "child_count": null,
     "collapsed": false,
-    "h1s": []
+    "h1s": [],
+    "execution_model": null
   },
   {
     "absolute_path": "/Users/u/.claude/plans/standalone-solo.md",
@@ -59,6 +62,7 @@
     "collapsed": false,
     "h1s": [
       "Standalone solo plan"
-    ]
+    ],
+    "execution_model": null
   }
 ]

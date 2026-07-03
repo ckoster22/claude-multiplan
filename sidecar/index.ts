@@ -37,7 +37,7 @@ import { selectEmulatorScenario, makeEmulatorQuery, EMU_BACKOFF_MS } from "./emu
 import { resolveModelEffort } from "./model-effort";
 import { cliPlanRedirectSettings } from "./cli-plans";
 import { decideStart } from "./session-start";
-import { decideSessionCommand, type Session } from "./session-command";
+import { decideSessionCommand, decideModelCommand, type Session } from "./session-command";
 import { decideResume, resumeOption, RESUME_FALLBACK_REASON } from "./session-resume";
 import { parseResetFromError } from "./quota";
 import { createNormalizer, isOverloadedMessage, overloadResultFrame, type SeqCounter } from "./normalize";
@@ -632,6 +632,7 @@ async function runSession(start: StartCmd): Promise<void> {
 //   { type: "user", text }
 //   { type: "resolve-tool-permission", id, allow, message?, updatedInput? }
 //   { type: "set-permission-mode", mode }
+//   { type: "set-model", model }
 //   { type: "interrupt" }
 //   { type: "end" }
 
@@ -829,6 +830,43 @@ async function handleCommand(line: string): Promise<void> {
           // is missed, this is a COMPILE error (never-assignment) rather than a silent fall-through
           // into `case "interrupt"` below (the sidecar tsconfig sets no noFallthroughCasesInSwitch).
           // INVARIANT[setpermissionmode-exhaustiveness-guard] (type-level): every SessionCommandDecision.action is handled; an unhandled future variant is a compile error.
+          //   prevents: a new action silently falling through into the sibling case.
+          const _exhaustive: never = decision.action;
+          return _exhaustive;
+        }
+      }
+    }
+
+    case "set-model": {
+      // Unlike set-permission-mode, a model switch has no host-policy backstop to rewrite (the gate
+      // keys off write policy, not model), so a dropped command leaves no host state stale.
+      const model = cmd.model;
+      if (typeof model !== "string") {
+        logErr("[sidecar] set-model without a string model — dropped");
+        return;
+      }
+      const session = currentSession();
+      const decision = decideModelCommand(session);
+      switch (decision.action) {
+        case "apply":
+          if (session.kind === "live") {
+            // INVARIANT[setmodel-toctou-trycatch-backstop] (runtime-guard): the await q.setModel is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
+            //   prevents: an unhandled rejection killing the sidecar process.
+            try {
+              await session.q.setModel(model);
+            } catch (e) {
+              logErr("[sidecar] set-model failed (session may have ended):", String(e));
+            }
+          }
+          return;
+        case "drop-no-session":
+          logErr("[sidecar] set-model before start — dropped");
+          return;
+        case "drop-ended":
+          logErr("[sidecar] set-model after session ended — dropped");
+          return;
+        default: {
+          // INVARIANT[setmodel-exhaustiveness-guard] (type-level): every ModelCommandDecision.action is handled; an unhandled future variant is a compile error.
           //   prevents: a new action silently falling through into the sibling case.
           const _exhaustive: never = decision.action;
           return _exhaustive;

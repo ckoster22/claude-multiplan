@@ -2,10 +2,13 @@
 //
 // The frozen serializable ledger (state.json schema 2) types, the in-memory transient-gate overlay,
 // the read-only snapshot, the derived write-policy union, and the resume/recovery decision types.
-// PURE declarations — every name here is load-bearing. Depends only on `ids` (and the external
-// AskUserQuestion shapes); no logic lives in this leaf.
+// PURE declarations — every name here is load-bearing. Depends only on `ids`, the external
+// AskUserQuestion shapes, and the `ModelOptions` LLM-selection type (type-only, erased — no
+// runtime/DOM coupling; `model-picker` imports nothing from plan-tree, so no cycle); no logic
+// lives in this leaf.
 
 import type { AskUserQuestionItem } from "../types";
+import type { ModelOptions } from "../../model-picker";
 import type { Nn, NodePath, PlanTreeFilePath, NonEmptyArray } from "./ids";
 
 // The sizer's verdict on how to decompose the request. EXACTLY two outcomes: "split" or a
@@ -15,6 +18,10 @@ export interface SizerOutcome {
   decision: "single" | "split";
   confidence: number;
   num_plans: number;
+  // The coding-scope tier for a `single` verdict (drives the leaf's scale-tiered coding model at
+  // sizing: standard→Sonnet, large→Opus, huge→Fable). Only consulted for a single (a split is always
+  // decomposition → Opus). Absent/unparseable sizer lines default to "standard" (parseSizerDecision).
+  scale: "standard" | "large" | "huge";
 }
 
 // The held-AskUserQuestion clarify gate (transient, not serialized).
@@ -114,6 +121,15 @@ export interface TreeNode {
   readonly redraftCount: number;
   readonly lastFeedback: string | null;
   readonly state: NodeState;
+  // Which Claude model runs THIS node (NOT the plan-tree data model — see the leaf header).
+  // Carries the full {model, effort} so Opus's effort travels with it. Required + nullable: `null`
+  // is the explicit "no per-node model → global fallback" value, never a missing key (a legacy
+  // pre-field ledger is normalized to `null` at the rehydrate boundary).
+  readonly execution_model: ModelOptions | null;
+  // How execution_model got here: "auto" (domain-triaged by the reducer) vs "override" (a user pick
+  // via EXECUTION_MODEL_SET). Ledger-only (NOT on the PlanRecord wire — schema stays 2, no contract
+  // churn); re-triage never clobbers an "override". Additive/optional: absent ⇒ treated as auto.
+  readonly model_source?: "auto" | "override";
 }
 
 // The recursive JSON-serializable ledger, 1:1 with `.plan-tree/state.json` schema 2. `pointer` is

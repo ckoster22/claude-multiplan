@@ -210,6 +210,7 @@ function makeDeps(): { deps: OrchestratorDeps; rec: Recorded } {
       rec.calls.push(`setMode:${mode}`);
       rec.setMode.push(mode);
     }),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async (args) => {
       rec.calls.push(`resolvePermission:${args.id}:${args.allow}:${args.message ?? ""}`);
       rec.resolvePermission.push({
@@ -1493,7 +1494,7 @@ describe("orchestrator — confirmed intent is threaded into downstream planning
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 3 / 0.82"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":3,\"confidence\":0.82}"));
     await h.ingestStream(resultFrame());
 
     // The master-draft prompt sent on the split path threads the confirmed intent. FALSIFY: drop the
@@ -1532,7 +1533,7 @@ async function dispatchSplitPrologue(h: OrchestratorHandle, titles: string[]): P
   await dispatch({
     type: "SIZER_DONE",
     path: [],
-    outcome: { decision: "split", confidence: 0.9, num_plans: titles.length },
+    outcome: { decision: "split", confidence: 0.9, num_plans: titles.length, scale: "standard" },
   });
   await dispatch({
     type: "DECOMPOSITION_DRAFTED",
@@ -1570,7 +1571,7 @@ describe("orchestrator — full split-of-3 run", () => {
       await dispatch({
         type: "SIZER_DONE",
         path: [nn],
-        outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
+        outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" },
       });
       // The draft lands through the REAL interactive path (the DRIVER is the single
       // authoritative plan writer — Effect2 has no writeAgentPlan kind, so a raw NODE_DRAFTED
@@ -1671,7 +1672,7 @@ describe("orchestrator — full split-of-3 run", () => {
       await dispatch({
         type: "SIZER_DONE",
         path: [nn],
-        outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
+        outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" },
       });
       expectedPersists++;
       await dispatch({
@@ -1733,7 +1734,7 @@ describe("orchestrator — forced acceptance gate (baseline present)", () => {
     // Root recon → confident single → COLLAPSE to one child "01" (which skips the per-node sizer).
     await h.ingestStream(textFrame("root recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     // Child 01: recon → draft → approve → exec → summary.
     await h.ingestStream(textFrame("child recon"));
@@ -1917,7 +1918,7 @@ describe("orchestrator — forced acceptance gate (baseline present)", () => {
     await h.approvePrototype();
     await h.ingestStream(textFrame("root recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("child recon"));
     await h.ingestStream(resultFrame());
@@ -1949,7 +1950,7 @@ describe("orchestrator — requestChanges mid-run", () => {
     await dispatch({
       type: "SIZER_DONE",
       path: [nnOf(1)],
-      outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
+      outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" },
     });
     await dispatch({
       type: "NODE_DRAFTED",
@@ -2005,7 +2006,7 @@ describe("orchestrator — cancel purges a held approval", () => {
     await dispatch({
       type: "SIZER_DONE",
       path: [nnOf(1)],
-      outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
+      outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" },
     });
     await dispatch({
       type: "NODE_DRAFTED",
@@ -2050,7 +2051,14 @@ describe("orchestrator — bootstrap + idempotent no-op", () => {
 
     // Opened the SDK session in the derived GENESIS policy ("prototype": the root opens in
     // clarifying-intent — start() carries the mode so no pre-start setMode is needed).
-    expect(rec.startSession).toEqual([{ cwd: "/work", permissionMode: "prototype" }]);
+    // The genesis node (root at clarifying-intent) opens on its phase-effective model: Sonnet/high.
+    expect(rec.startSession).toEqual([
+      {
+        cwd: "/work",
+        permissionMode: "prototype",
+        execution: { model: "claude-sonnet-5", effort: "high" },
+      },
+    ]);
     // Sent exactly one message: the INTENT prompt (the opening turn now), naming the intent-clarifier
     // subagent + the request. (Recon follows intent, so the scope-recon prompt is NOT the first send.)
     expect(rec.sendMessage).toHaveLength(1);
@@ -2083,7 +2091,7 @@ describe("orchestrator — sequencer via scripted frames", () => {
     expect(recon?.contents).toBe("recon report body");
 
     // sizer turn: a SIZER split line then result.
-    await h.ingestStream(textFrame("SIZER: split / 3 / 0.82"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":3,\"confidence\":0.82}"));
     await h.ingestStream(resultFrame());
 
     // (Schema 2 stores no sizer field — the split verdict is fully encoded in the decomposing arc.)
@@ -2102,7 +2110,7 @@ describe("orchestrator — sequencer via scripted frames", () => {
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
 
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.95"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.95}"));
     await h.ingestStream(resultFrame());
 
     // The reducer collapsed single → running, pointer 0, sub 0 in recon.
@@ -2128,8 +2136,8 @@ describe("orchestrator — sequencer via scripted frames", () => {
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
 
-    // SIZER: single / 1 / 0.5 — a single decision BELOW the 0.6 confidence gate.
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.5"));
+    // SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.5} — a single decision BELOW the 0.6 confidence gate.
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.5}"));
     await h.ingestStream(resultFrame());
 
     // The reducer routed the low-confidence single to the pre-execution `decomposing` phase (a real
@@ -2173,7 +2181,7 @@ describe("orchestrator — master-write contract via the REAL ingestPermission p
     // hold is recognized in). All via live frames — the same substrate the live run uses.
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     expect(rootPhase(h)).toBe("open/decomposing");
 
@@ -2201,7 +2209,7 @@ describe("orchestrator — master-write contract via the REAL ingestPermission p
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     expect(childPhase(h, 1)).toBe("leaf/drafting");
 
@@ -2241,7 +2249,7 @@ describe("orchestrator — TWO-OUTCOME sizer: unknown decisions coerce to split"
 
     // sizer turn: a STALE `escalate` decision (the prompt no longer offers it), then result.
     await h.ingestStream(
-      textFrame("SIZER: escalate / 0 / 0.3\nTell me which database to target."),
+      textFrame('SIZER: {"decision":"escalate","num_plans":0,"confidence":0.3}\nTell me which database to target.'),
     );
     await h.ingestStream(resultFrame());
 
@@ -2339,7 +2347,7 @@ describe("orchestrator — approval-resume swallow rule", () => {
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     // Master gate.
     await h.ingestPermission(exitPlanModeReq("m", "### Sub-Plan 01: Only\nbody"));
@@ -2349,7 +2357,7 @@ describe("orchestrator — approval-resume swallow rule", () => {
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
     expect(childPhase(h, 1)).toBe("leaf/awaiting-approval");
@@ -2387,7 +2395,7 @@ describe("orchestrator — approval-resume swallow rule", () => {
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
@@ -2426,7 +2434,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame(`SIZER: split / ${numSubs} / 0.8`));
+    await h.ingestStream(textFrame(`SIZER: {"decision":"split","num_plans":${numSubs},"confidence":0.8}`));
     await h.ingestStream(resultFrame());
     const headers =
       numSubs === 1
@@ -2474,7 +2482,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     expect(childPhase(h, 1)).toBe("leaf/drafting");
 
@@ -2494,7 +2502,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
     await h.approve("01");
@@ -2527,7 +2535,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
     await h.approve("01");
@@ -2572,7 +2580,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     await h.ingestStream(textFrame("sub02 recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     expect(childPhase(h, 2)).toBe("leaf/drafting");
 
@@ -2648,7 +2656,7 @@ describe("orchestrator — deferred send: the next prompt WAITS for the resume t
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     expect(childPhase(h, 1)).toBe("leaf/drafting");
 
@@ -2731,7 +2739,7 @@ describe("orchestrator — single authoritative plan write", () => {
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
@@ -2766,7 +2774,7 @@ describe("orchestrator — master decomposition gate", () => {
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("master-tu", "### Sub-Plan 01: First\nbody\n### Sub-Plan 02: Second\nmore"),
@@ -2867,7 +2875,7 @@ describe("orchestrator — derived write policy (mode is a pure function of the 
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("master-tu", "### Sub-Plan 01: First\nx\n### Sub-Plan 02: Second\ny"),
@@ -2918,7 +2926,7 @@ describe("orchestrator — derived write policy (mode is a pure function of the 
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     // FALSIFY: keep the old unconditional setMode("plan") in the sub-recon branch → count becomes 3 → RED.
     expect(planAsserts()).toBe(2);
@@ -2943,7 +2951,7 @@ describe("orchestrator — derived write policy (mode is a pure function of the 
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
     await h.approve("01");
@@ -3016,7 +3024,7 @@ describe("orchestrator — summary threading", () => {
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("m", "### Sub-Plan 01: First\nx\n### Sub-Plan 02: Second\ny"),
@@ -3028,7 +3036,7 @@ describe("orchestrator — summary threading", () => {
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1", "sub 1 plan"));
     await h.approve("01");
@@ -3066,7 +3074,7 @@ async function driveRunAToLeakState(h: OrchestratorHandle): Promise<void> {
   await driveIntentToRecon(h);
   await h.ingestStream(textFrame("recon A"));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(
     exitPlanModeReq(
@@ -3079,7 +3087,7 @@ async function driveRunAToLeakState(h: OrchestratorHandle): Promise<void> {
   // sub-01 leaf cycle → summary (populates summaries["01"]).
   await h.ingestStream(textFrame("sub01 recon"));
   await h.ingestStream(resultFrame());
-  await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+  await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
   await h.ingestStream(resultFrame());
   await h.ingestPermission(exitPlanModeReq("subA1", "sub 1 plan"));
   await h.approve("01");
@@ -3115,7 +3123,7 @@ describe("orchestrator — #2 no cross-run transient bleed", () => {
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon B"));
     await h.ingestStream(resultFrame()); // → root sizer prompt
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame()); // root confident-single collapse → child [01] recon sent
 
     const childReconB = rec.sendMessage.at(-1)!;
@@ -3210,7 +3218,7 @@ describe("orchestrator — PHASE 1: sub-plan change-request round trip (ordered 
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("master-tu", "### Sub-Plan 01: First\nx\n### Sub-Plan 02: Second\ny"),
@@ -3220,7 +3228,7 @@ describe("orchestrator — PHASE 1: sub-plan change-request round trip (ordered 
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("sub-1a", "first draft"));
     expect(childPhase(h, 1)).toBe("leaf/awaiting-approval");
@@ -3294,7 +3302,7 @@ describe("orchestrator — PHASE 1: decomposition gate → approve(\"\") → fir
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("master-tu", "### Sub-Plan 01: First\nx\n### Sub-Plan 02: Second\ny"),
@@ -3347,7 +3355,7 @@ describe("orchestrator — PHASE 2: re-arm null-nn falls back to idle", () => {
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
@@ -3383,7 +3391,7 @@ describe("orchestrator — PHASE 2: exec→summary buffer isolation (REALIZED fi
     await driveIntentToRecon(h); // intent turn first (now opens every run), then recon below
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
@@ -3438,7 +3446,7 @@ describe("orchestrator — PHASE 3: onSummaryWritten carries the written FILE's 
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestStream(textFrame("sub recon"));
     await h.ingestStream(resultFrame());
@@ -3486,7 +3494,7 @@ describe("orchestrator — PHASE 3: nn > 99 is a LOUD master-plan validation fai
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(
       exitPlanModeReq("master-tu", "### Sub-Plan 01: First\nx\n### Sub-Plan 100: Overflow\ny"),
@@ -3537,7 +3545,7 @@ describe("orchestrator — INV-2: a HEADER-LESS decomposition draft denies-for-r
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     // The master draft has NO `### Sub-Plan NN:` headers at all.
     await h.ingestPermission(
@@ -3589,7 +3597,7 @@ describe("orchestrator — INV-2: a HEADER-LESS decomposition draft denies-for-r
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     // Two headers collide on nn 1 ("Sub-Plan 1" and "Sub-Plan 01") — the duplicate-nn draft that
     // would otherwise wedge the run mid-execution.
@@ -3643,7 +3651,7 @@ describe("orchestrator — INV-2: a HEADER-LESS decomposition draft denies-for-r
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("master-tu", "### Sub-Plan 01: Valid\nbody"));
     await flush();
@@ -3681,7 +3689,7 @@ describe("orchestrator — PHASE 3: the Mandate carries the master section body 
     await driveIntentToRecon(h);
     await h.ingestStream(textFrame("recon"));
     await h.ingestStream(resultFrame());
-    await h.ingestStream(textFrame("SIZER: split / 2 / 0.8"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"split\",\"num_plans\":2,\"confidence\":0.8}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("master-tu", MASTER_PLAN));
     await h.approve(""); // root decomposition gate (pathKey "")
@@ -3700,7 +3708,7 @@ describe("orchestrator — PHASE 3: the Mandate carries the master section body 
     await h.ingestStream(textFrame("sub01 recon"));
     await h.ingestStream(resultFrame());
     // The per-node sizer turn follows every non-root recon (single ⇒ this node is the leaf).
-    await h.ingestStream(textFrame("SIZER: single / 1 / 0.9"));
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     const draftPrompt01 = rec.sendMessage.at(-1)!;
     expect(draftPrompt01).toContain("Draft the implementation plan for sub-plan 01");
@@ -3963,8 +3971,16 @@ describe("orchestrator — every terminal path ends the SDK session (fresh sessi
     const again = await h.start({ cwd: "/work", request: "second plan" });
     expect(again).toBe(true);
     expect(rec.startSession).toEqual([
-      { cwd: "/work", permissionMode: "prototype" },
-      { cwd: "/work", permissionMode: "prototype" },
+      {
+        cwd: "/work",
+        permissionMode: "prototype",
+        execution: { model: "claude-sonnet-5", effort: "high" },
+      },
+      {
+        cwd: "/work",
+        permissionMode: "prototype",
+        execution: { model: "claude-sonnet-5", effort: "high" },
+      },
     ]);
 
     // ORDERED trace: the old session's end strictly precedes the new session's start — the new

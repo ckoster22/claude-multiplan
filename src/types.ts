@@ -6,6 +6,8 @@
 // the brands turn two bug classes (passing a raw path/stem, or swapping the two) into compile
 // errors. Brands are erased at compile time, so emitted JS is unchanged.
 
+import type { ModelOptions } from "./model-picker";
+
 declare const brand: unique symbol;
 type Brand<B extends string> = string & { readonly [brand]: B };
 export type AbsPath = Brand<"AbsPath">;
@@ -33,6 +35,10 @@ export interface PlanRecord {
   // Sourced from the backend so the sidebar filter can match on headings without querying
   // the reading pane.
   h1s: string[];
+  // Which Claude model should execute this plan ({model, effort}), or `null` for the global-model
+  // fallback. Required + nullable: the Rust wire always emits the key present-as-null (no
+  // skip_serializing_if), so the key is never absent — modeling it optional would be a lie.
+  execution_model: ModelOptions | null;
 }
 
 // A single persisted comment for a plan. FROZEN 6-key wire shape, mirroring the Rust

@@ -365,6 +365,7 @@ describe("reconcile — sidebar full-set revert (invariant E)", () => {
         child_count: null,
         collapsed: false,
         h1s: ["Custom"],
+        execution_model: null,
       },
     ];
     const story: StoryFrame[] = [
