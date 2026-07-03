@@ -4729,3 +4729,41 @@ that gate plus the per-class render tests, NOT `tsc`.
    `canUseTool` path, which the `EMU_SCENARIO` query()-seam emulator cannot produce. It stays
    covered by the hand-built scenes (`questionCard` / `exitPlanMode` / `permissionThenReply`) that
    inject the event directly onto the mock channel, grouped in `SCENES` as non-golden seams.
+
+## Amendment 2026-07-02 — `assistant_text_delta` (genuine token-by-token streaming, additive, non-breaking)
+
+Adds **one new `agent-stream` kind** — `assistant_text_delta` — plus **one new optional field** on the
+existing `assistant_text` frame. No prior section is renegotiated; the terminal `assistant_text` frame
+is unchanged in shape when it carries no correlation id (all hand-built frames, and any block that
+produced no deltas, stay **byte-for-byte** identical to before this amendment).
+
+This mirrors the SDK's `includePartialMessages` output: with that option set (`buildOptions`,
+`sidecar/index.ts`), the SDK yields `SDKPartialAssistantMessage` (`type:"stream_event"`) partial
+deltas **during** the turn AND still yields the final consolidated `assistant` message. `normalize.ts`
+maps the text deltas to `assistant_text_delta` frames and the consolidated message to the authoritative
+`assistant_text` frame as before.
+
+| kind | fields (beyond `seq`/`kind`) | source |
+|------|------------------------------|--------|
+| `assistant_text_delta` | `text, block_uid, parent_tool_use_id` | a `text_delta` on an SDK `stream_event`/`content_block_delta` |
+
+- **`text` is a VERBATIM additive chunk** — appended, never trimmed; whitespace-only chunks are NOT
+  dropped (dropping one would lose an inter-word space and diverge from the terminal block).
+  Concatenating a block's `assistant_text_delta.text` values **in `seq` order** reconstructs that
+  block's authoritative `assistant_text.text` byte-for-byte.
+- **`block_uid`** is a **session-unique** string minted by the sidecar (a monotonic counter, NOT the
+  SDK's per-message `content_block` index, which resets to 0 every turn and would collide across the
+  long-lived session). All of a block's deltas share one `block_uid`, and the terminal `assistant_text`
+  for that block now ALSO carries the SAME `block_uid` — this is the correlation between the live delta
+  stream and the committed authoritative block.
+- **`assistant_text` gains an OPTIONAL `block_uid`** (same value as its deltas). When a block produced
+  deltas the field is present; when it did not (hand-built frames, non-streamed replies) the field is
+  **OMITTED entirely** (not `null`/`undefined`) — preserving today's exact bytes.
+- **`seq` stays globally monotonic** across all frames, deltas included (the single shared counter).
+- **`parent_tool_use_id`** carries through from the `stream_event` exactly as on `assistant_text`
+  (non-null inside a subagent group).
+
+**No Rust / demux change.** `parse_stream_line` (`src-tauri/src/agent.rs`) forwards any
+non-`error`/non-`permission` frame verbatim to `agent-stream`; `src/mock/golden.ts` `demuxLine` routes
+unknown kinds to `agent-stream` unchanged. The new kind/fields pass through both untouched.
+

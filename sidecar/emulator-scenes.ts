@@ -1,39 +1,23 @@
-// Scripted-fixture LLM emulator — RAW `SDKMessage` fixture data (SEAM A).
+// Fixture data for the emulator: builders producing RAW SDK messages (one hop upstream of
+// normalize.ts) plus a named-scenario registry. Imports ONLY the `SDKMessage` type (`import type`,
+// never the SDK's `query()`) so vitest can drive each scenario through the real normalize/quota/
+// backoff functions in-process.
 //
-// This module is the fixture DATA for the emulator: tiny builders that produce RAW SDK messages
-// (one hop UPSTREAM of normalize.ts) plus a named-scenario registry. It is SDK-RUNTIME-FREE — it
-// imports ONLY the `SDKMessage` TYPE (`import type`), never the SDK's `query()`, so vitest can
-// import it in-process and drive each scenario through the REAL `normalize`/quota/backoff functions.
+// These are RAW (not the pre-normalized frames src/mock/fixtures/scenes.ts feeds the frontend): the
+// point is to emit the SDK's `SDKMessage` union so the sidecar's quota/overload/backoff/permission
+// logic actually runs. So the `system`-envelope carriers must match what normalize.ts reads, NOT the
+// flat frontend shape: taskStarted/permissionDenied are `{ type:"system", subtype, … }`, and
+// permissionDenied's field is `tool_name`, not the flat `tool` scenes.ts uses.
 //
-// WHY RAW (not pre-normalized): `src/mock/fixtures/scenes.ts` already provides PRE-normalized
-// `agent-stream` frames for the FRONTEND. This module deliberately INVERTS that: it emits the SDK's
-// large `SDKMessage` union so the sidecar's quota/overload/backoff/permission logic ACTUALLY RUNS.
-// Therefore the easiest mistake here is copying scenes.ts's already-flat shapes — DO NOT. The two
-// `system`-envelope carriers below are spelled RAW (matching what normalize.ts READS), not flat:
-//   - taskStarted → { type:"system", subtype:"task_started", tool_use_id, subagent_type, description }
-//     (normalize.ts:154-162), NOT a top-level message type.
-//   - permissionDenied → { type:"system", subtype:"permission_denied", tool_name, … } — the raw SDK
-//     field is `tool_name` (normalize.ts:177-186 reads `msg.tool_name`), NOT the flat `tool` that
-//     scenes.ts:291-299 uses for the ALREADY-normalized frame.
-//
-// Every fixture is cast `as unknown as SDKMessage` — the same convention normalize.test.ts uses:
-// the SDK's `.d.ts` union is large and over-precise; we build the exact wire shape `normalize`
-// reads and cast through `unknown`. The literals here are derived from the shapes pinned in
-// normalize.test.ts / quota.test.ts (the project's confirmed reference shapes).
+// Fixtures are cast `as unknown as SDKMessage` (the SDK's `.d.ts` union is over-precise; we build
+// the exact wire shape normalize reads and cast through `unknown`).
 
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
-// A session-limit string CONFIRMED matched by isUsageLimitText and parseable by parseClockTimeInTz
-// (quota.test.ts: it yields a real future epoch-ms via the "resets <h:mm><am|pm> (<tz>)" clause).
+// Must satisfy isUsageLimitText AND parseClockTimeInTz (the "resets <h:mm><am|pm> (<tz>)" clause).
 export const SESSION_LIMIT_TEXT =
   "You've hit your session limit · resets 2:10pm (America/Chicago)";
 
-// ---------------------------------------------------------------------------
-// RAW `SDKMessage` builders. Each returns the EXACT wire shape normalize.ts reads, cast through
-// `unknown` (the normalize.test.ts convention). `parent` defaults to null (top-level turn).
-// ---------------------------------------------------------------------------
-
-/** A `system`/`init` message — the conventional first frame of a turn (normalize.ts:164-175). */
 export function sysInit(): SDKMessage {
   return {
     type: "system",
@@ -48,7 +32,6 @@ export function sysInit(): SDKMessage {
   } as unknown as SDKMessage;
 }
 
-/** An assistant message carrying a single renderable text block (normalize.ts:210-219). */
 export function assistantText(text: string, parent: string | null = null): SDKMessage {
   return {
     type: "assistant",
@@ -57,7 +40,31 @@ export function assistantText(text: string, parent: string | null = null): SDKMe
   } as unknown as SDKMessage;
 }
 
-/** An assistant message carrying a single tool_use block (normalize.ts:220-228). */
+/** Split `text` into word-sized chunks WITH surrounding whitespace preserved, so concatenating the
+ *  chunks reproduces `text` byte-for-byte. */
+export function streamTokens(text: string): string[] {
+  if (text.length === 0) return [];
+  return text.match(/\s*\S+\s*/g) ?? [text];
+}
+
+/** Token-by-token stream for one text block, mirroring the SDK's `includePartialMessages` output:
+ *  `stream_event` deltas during the turn followed by the consolidated `assistantText` (the final
+ *  authoritative block). Splice `...assistantTextStreamed(...)` where a plain `assistantText(...)`
+ *  reply would appear. */
+export function assistantTextStreamed(text: string, parent: string | null = null): SDKMessage[] {
+  const streamEvent = (event: Record<string, unknown>): SDKMessage =>
+    ({ type: "stream_event", event, parent_tool_use_id: parent } as unknown as SDKMessage);
+  return [
+    streamEvent({ type: "message_start" }),
+    streamEvent({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }),
+    ...streamTokens(text).map((chunk) =>
+      streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: chunk } }),
+    ),
+    streamEvent({ type: "content_block_stop", index: 0 }),
+    assistantText(text, parent),
+  ];
+}
+
 export function assistantToolUse(
   id: string,
   name: string,
@@ -71,7 +78,6 @@ export function assistantToolUse(
   } as unknown as SDKMessage;
 }
 
-/** A `user` message carrying a single tool_result block (normalize.ts:235-251). */
 export function userToolResult(
   toolUseId: string,
   content: unknown,
@@ -88,7 +94,7 @@ export function userToolResult(
   } as unknown as SDKMessage;
 }
 
-/** A RAW `system`/`task_started` message (normalize.ts:154-162). NOT a top-level message type. */
+/** RAW `system`/`task_started` — NOT a top-level message type. */
 export function taskStarted(
   toolUseId: string,
   subagentType: string,
@@ -103,8 +109,7 @@ export function taskStarted(
   } as unknown as SDKMessage;
 }
 
-/** A RAW `system`/`permission_denied` message (normalize.ts:177-186). The raw SDK field is
- *  `tool_name` (NOT the flat `tool` that scenes.ts uses for the already-normalized frame). */
+/** RAW `system`/`permission_denied`; the field is `tool_name`, not the flat `tool`. */
 export function permissionDenied(
   toolName: string,
   toolUseId: string,
@@ -121,7 +126,6 @@ export function permissionDenied(
   } as unknown as SDKMessage;
 }
 
-/** A terminal successful `result` (normalize.ts:255-288). */
 export function resultSuccess(text = "Done."): SDKMessage {
   return {
     type: "result",
@@ -135,8 +139,8 @@ export function resultSuccess(text = "Done."): SDKMessage {
   } as unknown as SDKMessage;
 }
 
-/** A terminal `is_error` result with a NON-limit string (normalize.ts:255-288). `subtype` defaults
- *  to "error_during_execution" — the orchestrator's graceful-advance subtype. */
+/** A terminal `is_error` result with a non-limit string. `subtype` defaults to
+ *  "error_during_execution" — the orchestrator's graceful-advance subtype. */
 export function resultError(
   subtype = "error_during_execution",
   text = "build step crashed",
@@ -153,9 +157,8 @@ export function resultError(
   } as unknown as SDKMessage;
 }
 
-/** A terminal `result` carrying the in-band HTTP-529 overload (isOverloadedMessage branch (2):
- *  `api_error_status === 529`, normalize.ts:79). Emitted as the FIRST message of an attempt
- *  (pre-output) so index.ts's retry loop re-drives. */
+/** A terminal `result` carrying the in-band HTTP-529 overload (`api_error_status === 529`). Emit as
+ *  the FIRST message of an attempt (pre-output) so index.ts's retry loop re-drives. */
 export function resultOverload529(): SDKMessage {
   return {
     type: "result",
@@ -166,8 +169,7 @@ export function resultOverload529(): SDKMessage {
   } as unknown as SDKMessage;
 }
 
-/** An assistant message carrying error:"overloaded" (isOverloadedMessage branch (1),
- *  normalize.ts:75). The other documented in-band 529 carrier. */
+/** An assistant message carrying `error:"overloaded"` — the other in-band 529 carrier. */
 export function assistantOverloaded(): SDKMessage {
   return {
     type: "assistant",
@@ -177,8 +179,7 @@ export function assistantOverloaded(): SDKMessage {
   } as unknown as SDKMessage;
 }
 
-/** A REJECTED `rate_limit_event` carrying a structured resetsAt (decideRateLimitFrame quota path,
- *  normalize.ts:291-307). `resetsAt` is epoch-ms (>= 1e12 passes through unchanged). */
+/** A REJECTED `rate_limit_event`. `resetsAt` is epoch-ms (>= 1e12 passes through unchanged). */
 export function rateLimitRejected(resetsAt: number): SDKMessage {
   return {
     type: "rate_limit_event",
@@ -186,8 +187,7 @@ export function rateLimitRejected(resetsAt: number): SDKMessage {
   } as unknown as SDKMessage;
 }
 
-/** A terminal `is_error` result whose payload is the human usage-limit wall string
- *  (result-carrier quota path: decideResultQuota, normalize.ts:274-277). */
+/** A terminal `is_error` result whose payload is the human usage-limit wall string. */
 export function resultUsageLimit(text: string = SESSION_LIMIT_TEXT): SDKMessage {
   return {
     type: "result",
@@ -198,19 +198,14 @@ export function resultUsageLimit(text: string = SESSION_LIMIT_TEXT): SDKMessage 
   } as unknown as SDKMessage;
 }
 
-// ---------------------------------------------------------------------------
-// Scenario registry. `attempts[i]` is the message stream the i-th query() call replays; index >= 1
-// only occurs on a backoff retry (the overloaded scenarios). All others have a single attempt.
-// An attempt is either a plain message array (the stream ends normally) or a throw-tailed shape:
-// the fake query yields `messages` then THROWS `thenThrow()` — driving index.ts's catch block
-// (auth / thrown-quota / generic-sdk classification), which a message fixture cannot reach.
-// ---------------------------------------------------------------------------
-
+// `attempts[i]` is the message stream the i-th query() call replays; index >= 1 only occurs on a
+// backoff retry (the overloaded scenarios). An attempt is either a plain message array (ends
+// normally) or a throw-tailed shape: yield `messages` then THROW `thenThrow()`, driving index.ts's
+// catch block (auth / thrown-quota / generic-sdk classification), which a message fixture cannot reach.
 export type EmulatorAttempt =
   | SDKMessage[]
   | { messages: SDKMessage[]; thenThrow: () => Error };
 
-/** The raw messages of an attempt, regardless of how it ends (normal return or throw). */
 export function attemptMessages(attempt: EmulatorAttempt): SDKMessage[] {
   return Array.isArray(attempt) ? attempt : attempt.messages;
 }
@@ -220,18 +215,16 @@ export interface EmulatorScenario {
   attempts: EmulatorAttempt[];
 }
 
-// Borrowed realistic tool inputs (paths mirror the app's plan/prototype/review conventions).
 const PLANS_PATH = "/Users/emulator/.claude/plans/emulator-plan.md";
 const PROTOTYPE_PATH = "/Users/emulator/work/.plan-tree/prototype/preview.html";
 
-// The one pinned reset instant every quota fixture carries. Epoch-MS (>= 1e12 → passes through
-// toEpochMs unchanged) and embedded VERBATIM in the thrown-quota error text so parseResetFromError's
-// bare-epoch branch yields it Date.now()-independently. Relative forms (retry-after deltas, ISO
-// offsets) are BANNED in fixtures — they resolve against the wall clock and flake the goldens.
+// The one pinned reset instant every quota fixture carries. Epoch-ms (>= 1e12 passes through
+// unchanged) and embedded verbatim in the thrown-quota error text so parseResetFromError's bare-epoch
+// branch yields it independently of Date.now(). Relative forms (retry-after deltas, ISO offsets) are
+// banned in fixtures — they resolve against the wall clock and flake the goldens.
 export const FIXED_RESET_EPOCH_MS = 1_750_000_000_000;
 
-// Thrown-error texts, exported so tests assert the classification the REAL index.ts catch block
-// applies to these exact strings (isAuth regex / parseResetFromError).
+// Thrown-error texts, exported so tests assert the exact classification index.ts's catch block applies.
 export const AUTH_ERROR_MESSAGE = "401 Unauthorized: OAuth token expired";
 export const THROWN_QUOTA_ERROR_MESSAGE =
   "Claude usage limit reached; the limit will reset at " + FIXED_RESET_EPOCH_MS + ".";
@@ -244,8 +237,8 @@ const SCENARIOS: EmulatorScenario[] = [
     attempts: [
       [
         sysInit(),
-        assistantText("Here is the first part of my answer."),
-        assistantText("And here is the conclusion."),
+        ...assistantTextStreamed("Here is the first part of my answer."),
+        ...assistantTextStreamed("And here is the conclusion."),
         resultSuccess("All done."),
       ],
     ],
@@ -257,7 +250,7 @@ const SCENARIOS: EmulatorScenario[] = [
         sysInit(),
         assistantToolUse("emu-tool-1", "Bash", { command: "npm run build" }),
         userToolResult("emu-tool-1", "build succeeded"),
-        assistantText("The build passed."),
+        ...assistantTextStreamed("The build passed."),
         resultSuccess("Build complete."),
       ],
     ],
@@ -272,7 +265,7 @@ const SCENARIOS: EmulatorScenario[] = [
           content: "# Plan\n\n- Step one\n- Step two\n",
         }),
         userToolResult("emu-plan-1", "wrote " + PLANS_PATH),
-        assistantText("Plan written to disk."),
+        ...assistantTextStreamed("Plan written to disk."),
         resultSuccess("Plan saved."),
       ],
     ],
@@ -296,7 +289,7 @@ const SCENARIOS: EmulatorScenario[] = [
     attempts: [
       [
         sysInit(),
-        assistantText("I have a complete plan ready for your review."),
+        ...assistantTextStreamed("I have a complete plan ready for your review."),
         assistantToolUse("emu-review-1", "ExitPlanMode", {
           plan: "# Plan under review\n\n- Step one\n- Step two\n",
         }),
@@ -315,12 +308,12 @@ const SCENARIOS: EmulatorScenario[] = [
           description: "Investigate the renderer seam",
         }),
         taskStarted("T1", "general-purpose", "Investigate the renderer seam"),
-        assistantText("Scanning src/render for entry points…", "T1"),
+        ...assistantTextStreamed("Scanning src/render for entry points…", "T1"),
         // The subagent's OWN internal tool call (parent "T1") — its matching tool_result below
         // correlates to THIS tool_use id, so the child flow is self-consistent (no orphan result).
         assistantToolUse("subtool-1", "Grep", { pattern: "renderInto", path: "src/render" }, "T1"),
         userToolResult("subtool-1", "found renderInto(...)", false, "T1"),
-        assistantText("Investigation complete.", null),
+        ...assistantTextStreamed("Investigation complete.", null),
         resultSuccess("Fanout done."),
       ],
     ],
@@ -340,12 +333,11 @@ const SCENARIOS: EmulatorScenario[] = [
     attempts: [
       [
         sysInit(),
-        // The rejected event PINS the reset instant: without it, decideResultQuota falls back to
-        // parseClockTimeInTz on the wall string with an implicit Date.now() — a resetAt that rolls
-        // DAILY (nondeterministic fixtures/goldens). With it, the structured-reuse branch yields
-        // FIXED_RESET_EPOCH_MS. NOTE: in the LIVE pipeline index.ts pauses (gracefulExit 0) on the
-        // rejected event's own quota_exceeded frame, so the trailing result-carrier is consumed
-        // only by the in-process tests (which drive every message through normalize).
+        // The rejected event pins the reset instant: without it, decideResultQuota falls back to
+        // parseClockTimeInTz on the wall string against Date.now() — a resetAt that rolls daily
+        // (nondeterministic goldens). In the live pipeline index.ts pauses (gracefulExit 0) on the
+        // rejected event's own quota_exceeded frame, so the trailing result-carrier is consumed only
+        // by the in-process tests (which drive every message through normalize).
         rateLimitRejected(FIXED_RESET_EPOCH_MS),
         resultUsageLimit(SESSION_LIMIT_TEXT),
       ],
@@ -445,10 +437,8 @@ const SCENARIOS: EmulatorScenario[] = [
   },
 ];
 
-/** name → scenario. The `EMU_SCENARIO` env value selects an entry. */
 export const EMULATOR_SCENARIOS: Record<string, EmulatorScenario> = Object.fromEntries(
   SCENARIOS.map((s) => [s.name, s]),
 );
 
-/** The valid `EMU_SCENARIO` values (registry keys). */
 export const SCENARIO_NAMES: string[] = SCENARIOS.map((s) => s.name);

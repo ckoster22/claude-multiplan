@@ -12,7 +12,7 @@
 // index.ts retry CONTROL FLOW (break→backoff→re-query()) is covered by the manual spawned-binary
 // recipe (Phase 3); these tests prove the PREDICATES that loop depends on.
 //
-// FALSIFY discipline (mirrors normalize.test.ts): every behavioral assertion below was proven RED by
+// FALSIFY discipline: every behavioral assertion below was proven RED by
 // temporarily breaking the fixture/input, then restored to GREEN. The `// FALSIFY:` comments record
 // the exact break that turns each assertion red.
 
@@ -39,6 +39,7 @@ import {
   resultSuccess,
   assistantOverloaded,
   assistantText,
+  streamTokens,
 } from "./emulator-scenes";
 
 /** Fresh normalizer per call so the seq counter / throttle state never bleeds across cases. */
@@ -46,6 +47,12 @@ function freshNormalize() {
   const seq: SeqCounter = { value: 0 };
   const { normalize } = createNormalizer({ seq, logErr: () => {} });
   return normalize;
+}
+
+/** The exact frame-kind sequence a STREAMED assistant text block produces: one
+ *  `assistant_text_delta` per streamTokens() chunk, then the terminal `assistant_text`. */
+function streamedKinds(text: string): string[] {
+  return [...streamTokens(text).map(() => "assistant_text_delta"), "assistant_text"];
 }
 
 /** Drive a whole attempt's raw messages through ONE normalizer and flatten the emitted frames —
@@ -63,7 +70,7 @@ function scenarioAttempt0(name: string): SDKMessage[] {
 }
 
 // ---------------------------------------------------------------------------
-// Selector — pure env reader (mirrors optionOverridesFromEnv's whitelist guard).
+// Selector — pure env reader.
 // ---------------------------------------------------------------------------
 describe("selectEmulatorScenario — env whitelist guard", () => {
   it("a known EMU_SCENARIO selects that scenario", () => {
@@ -171,9 +178,14 @@ describe("scenario happy-text — assistant_text frames + result", () => {
   it("emits two assistant_text frames then a success result", () => {
     const frames = runAttempt(scenarioAttempt0("happy-text"));
     const kinds = frames.map((f) => f.kind);
-    // system_init, assistant_text, assistant_text, result.
-    // FALSIFY: drop one assistantText fixture → only one assistant_text frame → RED.
-    expect(kinds).toEqual(["system_init", "assistant_text", "assistant_text", "result"]);
+    // system_init, then each streamed block = its deltas + terminal assistant_text, then result.
+    // FALSIFY: drop one assistantTextStreamed fixture → the block's delta+terminal run is missing → RED.
+    expect(kinds).toEqual([
+      "system_init",
+      ...streamedKinds("Here is the first part of my answer."),
+      ...streamedKinds("And here is the conclusion."),
+      "result",
+    ]);
     const texts = frames.filter((f) => f.kind === "assistant_text").map((f) => f.text);
     expect(texts).toEqual([
       "Here is the first part of my answer.",
@@ -182,6 +194,66 @@ describe("scenario happy-text — assistant_text frames + result", () => {
     const result = frames.find((f) => f.kind === "result")!;
     expect(result.is_error).toBe(false);
     expect(result.result).toBe("All done.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streaming correlation — the delta frames' block_uid must equal the terminal assistant_text's
+// block_uid EVEN WHEN a non-text block precedes the text block (index-space alignment), and the
+// concatenated deltas (seq order) must reconstruct the terminal text. Driven through the REAL
+// normalize(), NOT the emulator's own splitter, so it catches index-space drift in normalize.ts.
+// ---------------------------------------------------------------------------
+describe("normalize streaming — delta ↔ terminal block_uid correlation (index-space)", () => {
+  it("correlates deltas to the terminal text block when a thinking block precedes it at index 0", () => {
+    const normalize = freshNormalize();
+    const TEXT = "Hello streamed world.";
+    const chunks = ["Hello ", "streamed ", "world."];
+    const streamEvent = (event: Record<string, unknown>): SDKMessage =>
+      ({ type: "stream_event", event, parent_tool_use_id: null } as unknown as SDKMessage);
+
+    // A message whose consolidated content is [thinking(0), text(1)]. The thinking block occupies
+    // content index 0, so the text block's stream events / terminal block are BOTH at index 1.
+    const raw: SDKMessage[] = [
+      streamEvent({ type: "message_start" }),
+      streamEvent({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } }),
+      streamEvent({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }),
+      ...chunks.map((c) =>
+        streamEvent({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: c } }),
+      ),
+      streamEvent({ type: "content_block_stop", index: 1 }),
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "some private reasoning" },
+            { type: "text", text: TEXT },
+          ],
+        },
+        parent_tool_use_id: null,
+      } as unknown as SDKMessage,
+    ];
+
+    const frames: Array<Record<string, unknown>> = [];
+    for (const m of raw) frames.push(...normalize(m));
+
+    const deltas = frames.filter((f) => f.kind === "assistant_text_delta");
+    const terminal = frames.find((f) => f.kind === "assistant_text")!;
+    expect(deltas.length).toBe(chunks.length);
+    expect(terminal.block_uid).toBeDefined();
+
+    // (a) index-space alignment: every delta's block_uid equals the terminal block's block_uid. This
+    // fails if normalize stamps the terminal from an emit-counter (which skips the un-rendered
+    // thinking block → maps index 0 → undefined) instead of the raw content index (→ index 1).
+    // FALSIFY: in normalize.ts stamp the terminal via an emit-only counter → terminal.block_uid
+    // undefined ≠ the deltas' uid → RED (confirmed).
+    for (const d of deltas) expect(d.block_uid).toBe(terminal.block_uid);
+
+    // (b) concatenating the delta text in seq order reconstructs the terminal (authoritative) text.
+    // FALSIFY: drop a delta chunk from the fixture → the join no longer equals TEXT → RED.
+    const ordered = [...deltas].sort((a, b) => (a.seq as number) - (b.seq as number));
+    expect(ordered.map((d) => d.text).join("")).toBe(TEXT);
+    expect(terminal.text).toBe(TEXT);
   });
 });
 
@@ -234,7 +306,7 @@ describe("scenario review-cycle — review tool flow", () => {
     const kinds = frames.map((f) => f.kind);
     expect(kinds).toEqual([
       "system_init",
-      "assistant_text",
+      ...streamedKinds("I have a complete plan ready for your review."),
       "tool_use",
       "tool_result",
       "result",

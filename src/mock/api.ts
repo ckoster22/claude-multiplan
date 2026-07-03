@@ -231,6 +231,20 @@ type ConvJump =
 
 const JUMP_PARAM = "mockjump";
 
+// Per-frame delay (ms) for interactive `npm run mock` scene/golden replay. Spacing frames apart lets
+// streamed assistant_text_delta frames reveal token-by-token instead of collapsing into one paint;
+// small enough that a whole scene still finishes in ~1-2s.
+const INTERACTIVE_REPLAY_DELAY_MS = 22;
+
+// Only a real browser session animates. vitest/jsdom (which set __mockNoReload and assert synchronous
+// emission) and node (no window) stay at 0, preserving the deterministic delayMs<=0 path for tests.
+// __mockNoReload is the test-vs-browser discriminator: tests set it before driving playback; the
+// deck/boot browser path never does.
+function interactiveReplayDelayMs(): number {
+  if (typeof window === "undefined" || window.__mockNoReload) return 0;
+  return INTERACTIVE_REPLAY_DELAY_MS;
+}
+
 // Serialize a jump to a compact URL-param value. The "none" sentinel uses a reserved, namespaced value
 // (`__none`) so it can never collide with a real scene name.
 function encodeJump(j: ConvJump): string {
@@ -294,7 +308,7 @@ function routeConvJump(j: ConvJump): boolean {
 function runConvJumpInPlace(j: ConvJump): void {
   switch (j.kind) {
     case "scene":
-      stagePlayScene(j.name);
+      stagePlayScene(j.name, interactiveReplayDelayMs());
       break;
     case "history":
       void stageHistory();

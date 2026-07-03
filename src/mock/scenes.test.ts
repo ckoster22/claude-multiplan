@@ -82,10 +82,18 @@ describe("scenes — each scene yields its signature node through the real pipel
   // frame) makes the signature assertion fail. This is the committed in-test guard that the per-scene
   // assertions above are not vacuous — each scene's signature depends on a specific frame.
   it("FALSIFY: dropping the signature frame fails the assertion (assistantText loses .conv-text)", () => {
-    // assistantText's signature nodes are its assistant_text frames. Remove them → no .conv-text.
+    // assistantText streams: its signature nodes come from BOTH the live `assistant_text_delta` chunks
+    // (each grows the bubble) AND the terminal `assistant_text` commit. Remove every text-bearing frame
+    // (deltas + commits) → no .conv-text at all. (Dropping only the terminal would leave the un-
+    // finalized delta bubble, so it must not pass regardless — hence both kinds are filtered.)
     const frames = SCENES.assistantText();
     const withoutText = frames.filter(
-      (f) => !(f.event === "agent-stream" && (f.payload as { kind?: string }).kind === "assistant_text"),
+      (f) =>
+        !(
+          f.event === "agent-stream" &&
+          ((f.payload as { kind?: string }).kind === "assistant_text" ||
+            (f.payload as { kind?: string }).kind === "assistant_text_delta")
+        ),
     );
     const container = renderScene(withoutText);
     expect(container.querySelector(".conv-text")).toBeNull();
@@ -279,6 +287,7 @@ describe("scenes — AgentStream union exhaustiveness guard", () => {
   const COVERAGE = {
     system_init: "scene",
     assistant_text: "scene",
+    assistant_text_delta: "scene",
     tool_use: "scene",
     tool_result: "scene",
     subagent_started: "scene",

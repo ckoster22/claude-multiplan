@@ -310,12 +310,10 @@ if (envOverrides.effort !== undefined || envOverrides.model !== undefined) {
   );
 }
 
-// SCRIPTED-FIXTURE LLM EMULATOR (SEAM A) — read ONCE at startup. Indirection so the sole query()
-// call site below resolves to either the real SDK `query` (the default) or a fake one that replays
-// a named sequence of RAW SDKMessages (see sidecar/emulator.ts / emulator-scenes.ts). Entirely
-// gated on EMU_SCENARIO: unset/unknown → `emulatorScenario` is null → `queryImpl` stays the real
-// `query` → byte-identical to before. When active we log LOUDLY to stderr (never fd 1) so a token-
-// free emulator run can never be mistaken for a real one.
+// Resolve the query() call site below to the real SDK `query` or a scripted fixture replay
+// (sidecar/emulator.ts). Gated on EMU_SCENARIO: unset/unknown → `emulatorScenario` null → `queryImpl`
+// stays the real `query`, byte-identical to before. When active, log to stderr (never fd 1) so a
+// token-free emulator run can never be mistaken for a real one on the wire.
 let queryImpl: typeof query = query;
 const emulatorScenario = selectEmulatorScenario(process.env);
 if (emulatorScenario) {
@@ -338,6 +336,10 @@ function buildOptions(start: StartCmd) {
   return {
     ...modelEffort,
     cwd: start.cwd,
+    // Token-by-token streaming: the SDK yields `stream_event` partial deltas during the turn
+    // (normalize → `assistant_text_delta`) AND still yields the final consolidated `assistant`
+    // message (the authoritative `assistant_text`).
+    includePartialMessages: true,
     // NEVER the raw wire mode: host-only modes (e.g. "prototype") map to SDK "default"
     // (SDK "plan" hard-blocks Write at the CLI level regardless of canUseTool; the host
     // policy gate enforces the prototype containment instead).
@@ -528,7 +530,12 @@ async function runSession(start: StartCmd): Promise<void> {
           emit(frame);
           const kind = (frame as { kind?: string }).kind;
           // Track output for THIS attempt's `emittedAnyFrame` gate (only rendered content counts).
-          if (kind === "assistant_text" || kind === "tool_use") emittedAnyFrame = true;
+          // `assistant_text_delta` counts too: a mid-stream 529 arriving after deltas but before the
+          // terminal block must be treated as mid-turn (synthesize-result), not re-driven pre-output
+          // (which would re-stream and double the text).
+          if (kind === "assistant_text" || kind === "tool_use" || kind === "assistant_text_delta") {
+            emittedAnyFrame = true;
+          }
           // A completed turn (its terminal `result`) clears the pending-turn buffer so a future
           // turn's 529 retry only ever re-pushes the CURRENT turn, never a stale prior one.
           if (kind === "result") pendingTurn = [];
@@ -606,10 +613,9 @@ async function runSession(start: StartCmd): Promise<void> {
     // Abortable wait. A SIGTERM/SIGINT/`end` during the sleep aborts it (backoffAbort, wired into
     // gracefulExit.onBeforeDrain) — stop retrying and let graceful shutdown proceed.
     //
-    // EMULATOR CLAMP: when the scripted-fixture emulator is active, compress the real 1–30min wait to
-    // EMU_BACKOFF_MS so the retry path runs fast yet GENUINELY (the loop still breaks→backs-off→re-
-    // queries). Inert when EMU_SCENARIO is unset (`emulatorScenario` null → identity). The status
-    // LABEL above intentionally still shows the un-clamped real schedule (the user-facing retry clock).
+    // While the emulator is active, compress the real 1–30min wait to EMU_BACKOFF_MS so the retry
+    // path runs fast yet genuinely. Inert when EMU_SCENARIO is unset (`emulatorScenario` null →
+    // identity). The status label above still shows the un-clamped real schedule (the retry clock).
     const delayMs = emulatorScenario ? Math.min(decision.delayMs, EMU_BACKOFF_MS) : decision.delayMs;
     try {
       await abortableSleep(delayMs, backoffAbort.signal);

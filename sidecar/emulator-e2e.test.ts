@@ -47,6 +47,7 @@ import {
   AUTH_ERROR_MESSAGE,
   THROWN_QUOTA_ERROR_MESSAGE,
   STREAM_ABORT_ERROR_MESSAGE,
+  streamTokens,
 } from "./emulator-scenes";
 import { SCENARIO_EXIT_CODES } from "./exit-codes";
 import { SECOND_START_MESSAGE } from "./session-start";
@@ -82,6 +83,12 @@ if (missingTools.length > 0) {
 const describeE2E = missingTools.length === 0 ? describe : describe.skip;
 
 type Frame = Record<string, unknown>;
+
+/** The exact frame-kind sequence a STREAMED assistant text block produces on the wire: one
+ *  `assistant_text_delta` per streamTokens() chunk, then the terminal authoritative `assistant_text`. */
+function streamed(text: string): string[] {
+  return [...streamTokens(text).map(() => "assistant_text_delta"), "assistant_text"];
+}
 
 /** The frames both consumers treat as ending a run: a turn `result`, a quota pause, a fatal error. */
 function isTerminal(f: Frame): boolean {
@@ -246,7 +253,12 @@ const SPECS: Spec[] = [
   {
     name: "happy-text",
     scenario: "happy-text",
-    kinds: ["system_init", "assistant_text", "assistant_text", "result"],
+    kinds: [
+      "system_init",
+      ...streamed("Here is the first part of my answer."),
+      ...streamed("And here is the conclusion."),
+      "result",
+    ],
     verify: (frames) => {
       const result = firstOf(frames, "result");
       expect(result.is_error).toBe(false);
@@ -256,7 +268,7 @@ const SPECS: Spec[] = [
   {
     name: "tool-call",
     scenario: "tool-call",
-    kinds: ["system_init", "tool_use", "tool_result", "assistant_text", "result"],
+    kinds: ["system_init", "tool_use", "tool_result", ...streamed("The build passed."), "result"],
     verify: (frames) => {
       assertToolCorrelation(frames);
       const use = firstOf(frames, "tool_use");
@@ -267,7 +279,7 @@ const SPECS: Spec[] = [
   {
     name: "plan-write",
     scenario: "plan-write",
-    kinds: ["system_init", "tool_use", "tool_result", "assistant_text", "result"],
+    kinds: ["system_init", "tool_use", "tool_result", ...streamed("Plan written to disk."), "result"],
     verify: (frames) => {
       assertToolCorrelation(frames);
       const use = firstOf(frames, "tool_use");
@@ -288,7 +300,13 @@ const SPECS: Spec[] = [
   {
     name: "review-cycle",
     scenario: "review-cycle",
-    kinds: ["system_init", "assistant_text", "tool_use", "tool_result", "result"],
+    kinds: [
+      "system_init",
+      ...streamed("I have a complete plan ready for your review."),
+      "tool_use",
+      "tool_result",
+      "result",
+    ],
     verify: (frames) => {
       assertToolCorrelation(frames);
       expect(firstOf(frames, "tool_use").tool).toBe("ExitPlanMode");
@@ -301,10 +319,10 @@ const SPECS: Spec[] = [
       "system_init",
       "tool_use",
       "subagent_started",
-      "assistant_text",
+      ...streamed("Scanning src/render for entry points…"),
       "tool_use",
       "tool_result",
-      "assistant_text",
+      ...streamed("Investigation complete."),
       "result",
     ],
     verify: (frames) => {
@@ -449,7 +467,13 @@ const SPECS: Spec[] = [
     name: "resume-fallback",
     scenario: "happy-text",
     start: { resume: "emu-bogus-resume-id" },
-    kinds: ["resume_fallback", "system_init", "assistant_text", "assistant_text", "result"],
+    kinds: [
+      "resume_fallback",
+      "system_init",
+      ...streamed("Here is the first part of my answer."),
+      ...streamed("And here is the conclusion."),
+      "result",
+    ],
     verify: (frames) => {
       expect(firstOf(frames, "resume_fallback").reason).toBe(RESUME_FALLBACK_REASON);
     },
