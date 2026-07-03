@@ -22,8 +22,8 @@
 // REAL app obtains one — a fresh page load. Conversation jumps therefore route through a scoped reload
 // carrying the target jump in the URL; on boot the deck replays it into the FRESH model.
 
-import { SCENES, SCENE_NAMES, type SceneName } from "./fixtures/scenes";
-import { playSceneFrames, clearAgentBuffers } from "./player";
+import { SCENE_NAMES, type SceneName } from "./fixtures/scenes";
+import { playSceneFrames, clearAgentBuffers, resolveSceneBuilder, allSceneNames } from "./player";
 import {
   setActiveScene,
   clearAnswers,
@@ -231,6 +231,20 @@ type ConvJump =
 
 const JUMP_PARAM = "mockjump";
 
+// Per-frame delay (ms) for interactive `npm run mock` scene/golden replay. Spacing frames apart lets
+// streamed assistant_text_delta frames reveal token-by-token instead of collapsing into one paint;
+// small enough that a whole scene still finishes in ~1-2s.
+const INTERACTIVE_REPLAY_DELAY_MS = 22;
+
+// Only a real browser session animates. vitest/jsdom (which set __mockNoReload and assert synchronous
+// emission) and node (no window) stay at 0, preserving the deterministic delayMs<=0 path for tests.
+// __mockNoReload is the test-vs-browser discriminator: tests set it before driving playback; the
+// deck/boot browser path never does.
+function interactiveReplayDelayMs(): number {
+  if (typeof window === "undefined" || window.__mockNoReload) return 0;
+  return INTERACTIVE_REPLAY_DELAY_MS;
+}
+
 // Serialize a jump to a compact URL-param value. The "none" sentinel uses a reserved, namespaced value
 // (`__none`) so it can never collide with a real scene name.
 function encodeJump(j: ConvJump): string {
@@ -245,7 +259,7 @@ export function readPendingConvJump(): ConvJump | null {
   if (!raw) return null;
   if (raw.startsWith("scene:")) {
     const name = raw.slice("scene:".length);
-    return (SCENES as Record<string, unknown>)[name] ? { kind: "scene", name: name as SceneName } : null;
+    return resolveSceneBuilder(name) ? { kind: "scene", name: name as SceneName } : null;
   }
   if (raw === "history" || raw === "empty") return { kind: raw };
   // The conv.session="none" sentinel. Validated explicitly so an unknown param value → null (no-op, no
@@ -294,7 +308,7 @@ function routeConvJump(j: ConvJump): boolean {
 function runConvJumpInPlace(j: ConvJump): void {
   switch (j.kind) {
     case "scene":
-      stagePlayScene(j.name);
+      stagePlayScene(j.name, interactiveReplayDelayMs());
       break;
     case "history":
       void stageHistory();
@@ -342,9 +356,9 @@ export function bootEmptyDefault(): void {
 // replays ONLY this scene. Exported staging is internal; the public playScene() routes through the
 // reset+reload seam.
 function stagePlayScene(name: SceneName | string, delayMs = 0): boolean {
-  const builder = (SCENES as Record<string, (typeof SCENES)[SceneName] | undefined>)[name];
+  const builder = resolveSceneBuilder(name);
   if (!builder) {
-    console.warn("[mock] unknown scene:", name, "— known:", SCENE_NAMES.join(", "));
+    console.warn("[mock] unknown scene:", name, "— known:", allSceneNames().join(", "));
     return false;
   }
   setActiveScene(name as SceneName);
@@ -359,9 +373,9 @@ function stagePlayScene(name: SceneName | string, delayMs = 0): boolean {
 // run in-place (test mode). NOTE: under a reload the actual frames appear AFTER the reload, replayed
 // by the deck — the return value reports that the jump was accepted, not that frames are on screen yet.
 export function playScene(name: SceneName | string, delayMs = 0): boolean {
-  const builder = (SCENES as Record<string, unknown>)[name];
+  const builder = resolveSceneBuilder(name);
   if (!builder) {
-    console.warn("[mock] unknown scene:", name, "— known:", SCENE_NAMES.join(", "));
+    console.warn("[mock] unknown scene:", name, "— known:", allSceneNames().join(", "));
     return false;
   }
   // delayMs only matters for in-place staging; a reload-then-replay always uses the instant default

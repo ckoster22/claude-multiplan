@@ -5,7 +5,7 @@
 // It NORMALIZES the SDK's large `SDKMessage` union into a small, stable wire vocabulary
 // so the SDK's version volatility is encapsulated HERE and never leaks into Rust or the
 // frontend. The committed `agent-stream` kinds are:
-//   system_init | assistant_text | tool_use | tool_result | mode_change |
+//   system_init | assistant_text | assistant_text_delta | tool_use | tool_result | mode_change |
 //   result | permission_denied | subagent_started | status | quota_exceeded
 // (Unrecognized subtypes are dropped, logged to THIS process's stderr.)
 //
@@ -130,6 +130,26 @@ export function createNormalizer(deps: NormalizerDeps): Normalizer {
 
   const statusThrottle = new StatusThrottle();
 
+  // Token-by-token streaming correlation. `blockUidCounter` mints a session-unique id per streamed
+  // text block. The index→uid lookup is AGENT-SCOPED (an inner map per agent, keyed by
+  // `parent_tool_use_id`, "root" for the parent stream) because the SDK's per-message content index
+  // resets to 0 for EVERY agent independently: a single shared index→uid map would let interleaved
+  // parent/subagent streams (both opening a text block at index 0) collide, and one agent's
+  // `message_start` reset would wipe another agent's in-flight entry. Fan-out (many concurrent
+  // subagents) is this app's core scenario. Only the transient index→uid lookup needs scoping — the
+  // minted uid stays GLOBALLY unique via the monotonic counter, so deltas and the terminal
+  // `assistant_text` still correlate by one session-unique block_uid.
+  let blockUidCounter = 0;
+  const blockUidByAgentIndex = new Map<string, Map<number, string>>();
+  const agentIndexMap = (agent: string): Map<number, string> => {
+    let m = blockUidByAgentIndex.get(agent);
+    if (!m) {
+      m = new Map();
+      blockUidByAgentIndex.set(agent, m);
+    }
+    return m;
+  };
+
   function nextFrame(kind: string, extra: Record<string, unknown>): Record<string, unknown> {
     return { seq: seq.value++, kind, ...extra };
   }
@@ -207,11 +227,24 @@ export function createNormalizer(deps: NormalizerDeps): Normalizer {
 
       case "assistant": {
         const frames: Array<Record<string, unknown>> = [];
-        for (const block of contentBlocks(msg.message?.content)) {
+        const content = msg.message?.content;
+        // block_uid was minted on content_block_start keyed by the raw content-array index (the same
+        // index content_block_delta carries). thinking/tool_use blocks occupy indices too, so stamp
+        // each text block with the uid mapped from its raw index — not an emit-counter that skips
+        // non-rendered blocks (that would drift). Derive the index from the raw array so any block
+        // contentBlocks() drops or synthesizes cannot shift it.
+        const rawContent = Array.isArray(content) ? (content as unknown[]) : null;
+        const agent = msg.parent_tool_use_id ?? "root";
+        for (const block of contentBlocks(content)) {
           if (block.type === "text" && isRenderableText(block.text)) {
+            const contentIndex = rawContent ? rawContent.indexOf(block) : 0;
+            const uid = blockUidByAgentIndex.get(agent)?.get(contentIndex);
             frames.push(
               nextFrame("assistant_text", {
                 text: block.text,
+                // Omit the field when this block produced no deltas (hand-built / non-streamed
+                // frames), so those stay byte-identical to pre-streaming.
+                ...(uid !== undefined ? { block_uid: uid } : {}),
                 parent_tool_use_id: msg.parent_tool_use_id ?? null,
               }),
             );
@@ -227,7 +260,61 @@ export function createNormalizer(deps: NormalizerDeps): Normalizer {
           }
           // thinking / other blocks are not committed → silently skipped.
         }
+        // Clear THIS agent's index→uid map so a following non-streamed message from the same agent
+        // (which carries no preceding message_start to reset it) cannot inherit a stale uid at the
+        // same content index — and, being agent-scoped, cannot inherit another agent's stale entry.
+        blockUidByAgentIndex.delete(agent);
         return frames;
+      }
+
+      case "stream_event": {
+        // The SDK's `includePartialMessages` yields these partial deltas during the turn and still
+        // yields the consolidated `assistant` message at the end. Emit an additive `assistant_text_delta`
+        // per text chunk (the terminal `assistant_text` stays the authoritative full block); chunks are
+        // appended verbatim (never trimmed) so concatenating a block's deltas reproduces its text.
+        const event = msg.event as {
+          type?: string;
+          index?: number;
+          content_block?: { type?: string };
+          delta?: { type?: string; text?: string };
+        };
+        const agent = msg.parent_tool_use_id ?? "root";
+        switch (event.type) {
+          case "message_start":
+            // Reset only THIS agent's index→uid map — NOT the shared table — so an interleaved
+            // subagent's in-flight block at the same index is not wiped.
+            blockUidByAgentIndex.set(agent, new Map());
+            return [];
+          case "content_block_start":
+            if (event.content_block?.type === "text" && typeof event.index === "number") {
+              agentIndexMap(agent).set(event.index, String(blockUidCounter++));
+            }
+            return [];
+          case "content_block_delta":
+            if (event.delta?.type === "text_delta" && typeof event.index === "number") {
+              const m = agentIndexMap(agent);
+              // A delta must NEVER carry an undefined block_uid (the wire type `AssistantTextDelta`
+              // requires a string). A content_block_start always precedes its deltas, but if the
+              // lookup misses (dropped/absent start), mint on the fly rather than emit undefined.
+              let uid = m.get(event.index);
+              if (uid === undefined) {
+                uid = String(blockUidCounter++);
+                m.set(event.index, uid);
+              }
+              return [
+                nextFrame("assistant_text_delta", {
+                  text: event.delta.text ?? "",
+                  block_uid: uid,
+                  parent_tool_use_id: msg.parent_tool_use_id ?? null,
+                }),
+              ];
+            }
+            return [];
+          default:
+            // content_block_stop / message_stop / message_delta / input_json_delta / thinking_delta —
+            // nothing to commit.
+            return [];
+        }
       }
 
       case "user": {

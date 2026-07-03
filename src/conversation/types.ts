@@ -31,6 +31,24 @@ export interface AssistantText {
   text: string;
   // Non-null when the text originated inside a subagent sub-stream (groups under that agent).
   parent_tool_use_id: string | null;
+  // Present only when this block was streamed: the session-unique id correlating this consolidated
+  // block to its live `assistant_text_delta` chunks. Absent for non-streamed / hand-built frames,
+  // which keep the fresh-node-per-frame path.
+  block_uid?: string;
+}
+
+// A live streaming chunk of one assistant text block, additive to the wire (mirrors the SDK's
+// `stream_event` text_delta). Every chunk of a block shares `block_uid`; concatenating a block's
+// deltas in `seq` order reconstructs its text verbatim (chunks are never trimmed — they carry
+// inter-word/paragraph spacing). The terminal `assistant_text` with the same `block_uid` is the
+// authoritative full block and finalizes the growing bubble.
+export interface AssistantTextDelta {
+  seq: number;
+  kind: "assistant_text_delta";
+  text: string;
+  block_uid: string;
+  // Non-null when the delta originated inside a subagent sub-stream (groups under that agent).
+  parent_tool_use_id: string | null;
 }
 
 export interface ToolUse {
@@ -143,6 +161,7 @@ export interface QuotaExceeded {
 export type AgentStream =
   | SystemInit
   | AssistantText
+  | AssistantTextDelta
   | ToolUse
   | ToolResult
   | ModeChange

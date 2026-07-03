@@ -14,6 +14,7 @@
 
 import type { AgentStream, ToolPermissionRequested, AskUserQuestionItem } from "../../conversation/types";
 import { cloneQuestions } from "./questions";
+import { goldenFrames } from "../golden";
 
 // The event channels a scene frame can target — the four REAL Tauri events the conversation domain
 // subscribes to. Every scene drives one of these via the mock event bus, so a deck preset's live
@@ -94,22 +95,20 @@ function result(
   };
 }
 
-// Assistant text bubble (.conv-text). The signature frame is the assistant_text — removing it
+// Golden-derived scenes: content is a captured sidecar golden's demuxed frame stream (one frame
+// registry, no drift by construction) rather than hand-built frames. They use goldenFrames, not
+// goldenScene: the hand registry models a live session mid-flight, so the synthesized
+// process-termination `agent-exit` is omitted (it belongs to the full-session GOLDEN_SCENES replay).
+// Scenes below that no golden can derive stay hand-built — see the non-golden-seams marker.
+
+// Assistant text bubble (.conv-text). The signature frames are the assistant_texts — removing them
 // leaves only system_init + result, so no `.conv-text` node exists (the falsifiability target).
-export const assistantText: SceneBuilder = () => [
-  stream(systemInit(1)),
-  stream({
-    seq: 2,
-    kind: "assistant_text",
-    text: "Here is a plan to **ship the widget pipeline**:\n\n1. Validate the schema\n2. Wire the renderer\n3. Add tests",
-    parent_tool_use_id: null,
-  }),
-  stream(result(3)),
-];
+export const assistantText: SceneBuilder = () => goldenFrames("happy-text");
 
 // A tool row still RUNNING (.conv-tool[data-status="running"]). NO result frame and NO matching
 // tool_result, so the model leaves the tool node at status "running". Dropping the tool_use frame
-// removes the row entirely (falsifiability target).
+// removes the row entirely (falsifiability target). Hand-built: every golden captures a COMPLETED
+// run (the e2e drives each scenario to its terminal frame), so no golden can hold a mid-turn state.
 export const toolRunning: SceneBuilder = () => [
   stream(systemInit(1)),
   stream({
@@ -123,34 +122,15 @@ export const toolRunning: SceneBuilder = () => [
   // No tool_result, no result — the turn is still generating, the tool stays "running".
 ];
 
-// A completed tool row (.conv-tool[data-status="done"]). The tool_result with is_error:false
+// A completed tool row (.conv-tool[data-status="done"]). The golden's tool_result (is_error:false)
 // correlates onto the tool_use by id → status "done". Dropping the tool_result leaves the tool with
-// no result when the terminal result(4) ends the turn, so it is demoted to "interrupted"
+// no result when the terminal result ends the turn, so it is demoted to "interrupted"
 // (turn-end demotion) — the [data-status="done"] selector fails either way (falsifiability target).
-export const toolDone: SceneBuilder = () => [
-  stream(systemInit(1)),
-  stream({
-    seq: 2,
-    kind: "tool_use",
-    id: "tool-done-1",
-    tool: "Read",
-    input: { file_path: "/Users/mock/work/widgets/src/index.ts" },
-    parent_tool_use_id: null,
-  }),
-  stream({
-    seq: 3,
-    kind: "tool_result",
-    tool_use_id: "tool-done-1",
-    content: "export const widget = () => {/* … */};",
-    is_error: false,
-    parent_tool_use_id: null,
-  }),
-  stream(result(4)),
-];
+export const toolDone: SceneBuilder = () => goldenFrames("tool-call");
 
 // An errored tool row (.conv-tool[data-status="error"]). The tool_result with is_error:true
 // correlates onto the tool_use → status "error". Dropping the (is_error) tool_result leaves the row
-// "running" (falsifiability target).
+// "running" (falsifiability target). Hand-built: no golden carries an is_error tool_result.
 export const toolError: SceneBuilder = () => [
   stream(systemInit(1)),
   stream({
@@ -172,124 +152,49 @@ export const toolError: SceneBuilder = () => [
   stream(result(4)),
 ];
 
-// A subagent group (.conv-subagent). subagent_started seeds a labeled group; a nested assistant_text
-// + tool_use carry the SAME parent_tool_use_id so they fold into that group. Dropping the
-// subagent_started frame AND the nested child frames removes the group (falsifiability target — the
-// per-scene assertion targets .conv-subagent which only exists when the group is present).
-export const subagentGroup: SceneBuilder = () => {
-  const agentId = "subagent-task-1";
-  return [
-    stream(systemInit(1)),
-    stream({
-      seq: 2,
-      kind: "subagent_started",
-      tool_use_id: agentId,
-      subagent_type: "general-purpose",
-      description: "Investigate the renderer seam",
-      prompt: "Explore src/render and report the public render entry points.",
-    }),
-    stream({
-      seq: 3,
-      kind: "assistant_text",
-      text: "Scanning src/render for the public render entry points…",
-      parent_tool_use_id: agentId,
-    }),
-    stream({
-      seq: 4,
-      kind: "tool_use",
-      id: "subtool-1",
-      tool: "Grep",
-      input: { pattern: "export function render", path: "src/render" },
-      parent_tool_use_id: agentId,
-    }),
-    stream({
-      seq: 5,
-      kind: "tool_result",
-      tool_use_id: "subtool-1",
-      content: "src/render/index.ts: export function renderInto(...)",
-      is_error: false,
-      parent_tool_use_id: agentId,
-    }),
-    stream(result(6)),
-  ];
-};
+// A subagent group (.conv-subagent). The golden's subagent_started seeds a labeled group; its
+// nested assistant_text + tool_use/tool_result carry the SAME parent_tool_use_id ("T1") so they
+// fold into that group. Dropping the subagent_started frame AND the nested child frames removes the
+// group (falsifiability target — the per-scene assertion targets .conv-subagent which only exists
+// when the group is present).
+export const subagentGroup: SceneBuilder = () => goldenFrames("subagent-fanout");
 
 // A successful terminal result (.conv-result, NOT .conv-result-error / -interrupted). The signature
-// is the success result row. Inverting is_error to true flips it to .conv-result-error
-// (falsifiability target for resultSuccess uses the absence of the error/interrupted classes).
-export const resultSuccess: SceneBuilder = () => [
-  stream(systemInit(1)),
-  stream({
-    seq: 2,
-    kind: "assistant_text",
-    text: "All steps completed successfully.",
-    parent_tool_use_id: null,
-  }),
-  stream(result(3, { is_error: false, result: "Pipeline shipped." })),
-];
+// is the golden's success result row (the per-scene test also asserts the absence of the
+// error/interrupted classes, so an is_error golden could never satisfy it).
+export const resultSuccess: SceneBuilder = () => goldenFrames("happy-text");
 
-// A failed terminal result (.conv-result-error). is_error:true → the loud "Run failed" row.
-// Flipping is_error to false makes it the plain .conv-result (falsifiability target).
-export const resultError: SceneBuilder = () => [
-  stream(systemInit(1)),
-  stream(result(2, { is_error: true, subtype: "error_during_execution", result: "build step crashed" })),
-];
+// A failed terminal result (.conv-result-error). The golden's result carries is_error:true → the
+// loud "Run failed" row; a success result renders the plain .conv-result instead (falsifiability
+// target).
+export const resultError: SceneBuilder = () => goldenFrames("error-midstream");
 
 // A deliberately-interrupted terminal result (.conv-result-interrupted). The render branch keys
 // EXCLUSIVELY on deliberateInterrupt, so we set it on the stored frame (the host normally tags this
 // at ingest; here the fixture pre-tags it). Removing deliberateInterrupt makes it render as a loud
-// .conv-result-error instead (falsifiability target).
+// .conv-result-error instead (falsifiability target). Hand-built: deliberateInterrupt is a
+// HOST-side annotation, never on the wire, so no golden can carry it.
 export const resultInterrupted: SceneBuilder = () => [
   stream(systemInit(1)),
   stream(result(2, { is_error: true, subtype: "error_during_execution", result: "", deliberateInterrupt: true })),
 ];
 
-// A FATAL agent error (.conv-error-fatal). agent-error is its own event (not agent-stream); the
-// model assigns the seq from the controller — but in a pure-model replay the player appends it with
-// a monotonic seq. Carries fatal:true → the .conv-error-fatal class. Flipping fatal to false drops
-// the -fatal class (falsifiability target).
-export const errorFatal: SceneBuilder = () => [
-  stream(systemInit(1)),
-  { event: "agent-error", payload: { kind: "sdk", message: "the SDK process died unexpectedly", fatal: true } },
-];
+// A FATAL agent error (.conv-error-fatal). The golden's terminal `error` line demuxes onto the
+// agent-error channel (error_kind lifted into the public `kind`) carrying fatal:true → the
+// .conv-error-fatal class. Flipping fatal to false drops the -fatal class (falsifiability target).
+export const errorFatal: SceneBuilder = () => goldenFrames("stream-abort");
 
-// A DENIED tool permission row (.conv-perm-denied — which the minimap maps to the red "danger"
-// tier). FIDELITY: the sidecar emits this as a DIRECT agent-stream frame (kind:"permission_denied"),
-// NOT as the resolution of a tool-permission-requested round-trip — see sidecar/index.ts (~264) which
-// forwards the SDK's permission_denied sub-message straight onto the wire with
-// tool/tool_use_id/agent_id/decision_reason_type/message. So the scene leads with an assistant_text +
-// a tool_use (the Write the agent attempted), then the permission_denied frame for that same
-// tool_use_id (a deny verdict decided OUTSIDE the canUseTool seam — e.g. a host deny rule). The model
-// emits a PermissionDeniedNode → renderTree draws .conv-perm-denied. Removing the permission_denied
-// frame removes the row entirely (falsifiability target). The turn then ends with a failed result, as
-// a real denied write does.
-export const permissionDenied: SceneBuilder = () => [
-  stream(systemInit(1)),
-  stream({
-    seq: 2,
-    kind: "assistant_text",
-    text: "I'll write the generated config to disk now.",
-    parent_tool_use_id: null,
-  }),
-  stream({
-    seq: 3,
-    kind: "tool_use",
-    id: "tool-denied-1",
-    tool: "Write",
-    input: { file_path: "/etc/hosts", content: "127.0.0.1 widgets.local\n" },
-    parent_tool_use_id: null,
-  }),
-  stream({
-    seq: 4,
-    kind: "permission_denied",
-    tool: "Write",
-    tool_use_id: "tool-denied-1",
-    agent_id: null,
-    decision_reason_type: "rule",
-    message: "Write to /etc/hosts is outside the allowed prototype directory.",
-  }),
-  stream(result(5, { is_error: true, subtype: "error_during_execution", result: "tool permission denied" })),
-];
+// A denied tool permission row (.conv-perm-denied — the minimap's red "danger" tier). The sidecar
+// emits this as a direct agent-stream frame (kind:"permission_denied"), not as the resolution of a
+// tool-permission-requested round-trip — a deny verdict decided outside the canUseTool seam. The
+// model emits a PermissionDeniedNode → renderTree draws .conv-perm-denied; removing the
+// permission_denied frame removes the row entirely (falsifiability target).
+export const permissionDenied: SceneBuilder = () => goldenFrames("permission-denied");
+
+// Non-golden seams — the interactive `tool-permission-requested` scenes below (questionCard /
+// exitPlanMode / permissionThenReply) inject the event directly onto the mock channel. The prompt is
+// driven by the sidecar's canUseTool path, which the query()-seam emulator cannot produce, so no
+// golden can cover them (see CONTRACT.md "frontend golden replay").
 
 // An INTERACTIVE AskUserQuestion card (.conv-question, pending). Surfaced via a
 // tool-permission-requested frame carrying tool:"AskUserQuestion" + input.questions. The model reads
@@ -425,16 +330,20 @@ export function questionPermissionFrame(id: string, questions: AskUserQuestionIt
 }
 
 export const SCENES = {
+  // Golden-derived (content = a demuxed sidecar frame golden; see the marker above assistantText).
   assistantText,
-  toolRunning,
   toolDone,
-  toolError,
   subagentGroup,
   resultSuccess,
   resultError,
-  resultInterrupted,
   errorFatal,
   permissionDenied,
+  // Hand-built: states no completed-run golden can hold (mid-turn / is_error tool_result /
+  // host-side deliberateInterrupt).
+  toolRunning,
+  toolError,
+  resultInterrupted,
+  // Hand-built: the interactive tool-permission-requested seam (see the NON-GOLDEN SEAMS marker).
   questionCard,
   exitPlanMode,
   permissionThenReply,

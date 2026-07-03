@@ -343,3 +343,98 @@ describe("overloadResultFrame — mid-turn-529 graceful turn-boundary frame", ()
     expect(overloadResultFrame(7).seq).toBe(7);
   });
 });
+
+// AGENT-SCOPED block_uid correlation under INTERLEAVED parent/subagent streaming.
+//
+// THE BEHAVIOR UNDER TEST: the SDK's per-message content index resets to 0 for EVERY agent, so a
+// parent stream and a subagent stream both open a text block at index 0. The index→uid map is
+// AGENT-SCOPED (keyed by parent_tool_use_id) so their partial `stream_event`s can interleave without
+// colliding, and one agent's `message_start` reset must NOT wipe another agent's in-flight entry.
+// Fan-out (concurrent subagents) is this app's core scenario, so the streams DO interleave on the wire.
+//
+// FALSIFIABILITY: with a single shared index→uid map reset on every message_start (the pre-fix code),
+// the subagent's message_start would wipe the parent's index-0 entry, and both agents' index-0 blocks
+// would then draw the SAME uid — collapsing/cross-contaminating the two bubbles downstream. The
+// distinct-uid + no-undefined assertions below go RED under that reversion.
+describe("normalize — interleaved parent/subagent streams get agent-scoped block_uids", () => {
+  const streamEvent = (event: Record<string, unknown>, parent: string | null): SDKMessage =>
+    ({ type: "stream_event", event, parent_tool_use_id: parent } as unknown as SDKMessage);
+  const assistantTextMsg = (text: string, parent: string | null): SDKMessage =>
+    ({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text }] },
+      parent_tool_use_id: parent,
+    } as unknown as SDKMessage);
+
+  it("two index-0 text blocks (root + subagent) interleaved → distinct uids, correct terminals", () => {
+    const normalize = freshNormalize();
+    const flat = (msgs: SDKMessage[]) => msgs.flatMap((m) => normalize(m));
+
+    // The wire order INTERLEAVES the two agents: the subagent's message_start lands BETWEEN the
+    // parent's content_block_start and its first delta — the exact ordering the pre-fix shared-map
+    // reset corrupted.
+    const rootDeltas = flat([
+      streamEvent({ type: "message_start" }, null),
+      streamEvent({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, null),
+    ]);
+    // Subagent T1 opens ITS index-0 block now — a full reset here would wipe root's index-0 uid.
+    flat([
+      streamEvent({ type: "message_start" }, "T1"),
+      streamEvent({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }, "T1"),
+    ]);
+    const rootD1 = flat([
+      streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Root " } }, null),
+    ]);
+    const subD1 = flat([
+      streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Sub " } }, "T1"),
+    ]);
+    const rootD2 = flat([
+      streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "text." } }, null),
+    ]);
+    const subD2 = flat([
+      streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "text." } }, "T1"),
+    ]);
+    const rootTerm = flat([assistantTextMsg("Root text.", null)]);
+    const subTerm = flat([assistantTextMsg("Sub text.", "T1")]);
+
+    void rootDeltas; // the two content_block_start frames emit nothing (commit []).
+
+    // Every root delta shares ONE uid; every subagent delta shares ANOTHER; the two are DISTINCT.
+    const rootUid = rootD1[0].block_uid;
+    const subUid = subD1[0].block_uid;
+    expect(typeof rootUid).toBe("string");
+    expect(typeof subUid).toBe("string");
+    expect(rootUid).not.toBe(subUid);
+    expect(rootD2[0].block_uid).toBe(rootUid);
+    expect(subD2[0].block_uid).toBe(subUid);
+
+    // No delta EVER carries an undefined block_uid (the wire type requires a string).
+    for (const d of [rootD1, subD1, rootD2, subD2]) {
+      expect(d[0].kind).toBe("assistant_text_delta");
+      expect(d[0].block_uid).not.toBeUndefined();
+    }
+
+    // The terminal assistant_text of each agent carries ITS agent's uid (correlates to its deltas),
+    // and its own parent_tool_use_id — so the frontend keys each to its own single growing bubble.
+    expect(rootTerm[0].kind).toBe("assistant_text");
+    expect(rootTerm[0].block_uid).toBe(rootUid);
+    expect(rootTerm[0].parent_tool_use_id).toBeNull();
+    expect(subTerm[0].kind).toBe("assistant_text");
+    expect(subTerm[0].block_uid).toBe(subUid);
+    expect(subTerm[0].parent_tool_use_id).toBe("T1");
+  });
+
+  it("a text_delta whose content_block_start was dropped still gets a minted uid (never undefined)", () => {
+    const normalize = freshNormalize();
+    // No content_block_start precedes this delta — the lookup misses, so normalize must MINT rather
+    // than emit block_uid: undefined (a required string on the wire).
+    // FALSIFY: revert to `block_uid: map.get(index)` (no mint-on-miss) → block_uid is undefined → RED.
+    const frames = normalize(
+      streamEvent({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "orphan" } }, null),
+    );
+    expect(frames).toHaveLength(1);
+    expect(frames[0].kind).toBe("assistant_text_delta");
+    expect(frames[0].block_uid).not.toBeUndefined();
+    expect(typeof frames[0].block_uid).toBe("string");
+  });
+});

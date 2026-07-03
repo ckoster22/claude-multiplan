@@ -24,10 +24,10 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
 | Conversation / live-session | 7 | 25 | 0 | 1 | 0 | 0 | 0 | 5 | 38 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
-| Sidecar / agent-driver | 3 | 13 | 0 | 0 | 4 | 0 | 0 | 3 | 23 |
+| Sidecar / agent-driver | 4 | 16 | 0 | 0 | 4 | 0 | 0 | 4 | 28 |
 | Rust backend (`src-tauri/`) | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | 3 |
 | Other | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | 17 | 67 | 5 | 1 | 4 | 3 | 1 | 21 | 119 |
+| **Total** | 18 | 70 | 5 | 1 | 4 | 3 | 1 | 22 | 124 |
 
 ## Reading-pane render
 
@@ -388,7 +388,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 **Tests:** `render.reconcile.test.ts (f) — rerendering the same model does NOT reuse the question card element`
 
 ### keyed-element-reuse-by-node-identity
-**`runtime-guard`** — a node whose object identity is unchanged across derives reuses its cached DOM element; a fresh element is built only when the object changed or is missing.
+**`runtime-guard`** — a node whose object identity is unchanged across derives reuses its cached DOM element; a CHANGED streamed text node keeps its cached element too but refreshes that element's content in place (a new object per delta would otherwise rebuild every token); every other changed-or-missing node builds a fresh element.
 
 **Prevents:** a full-DOM rebuild every frame — interval churn, image flicker, and lost scroll / selection / focus.
 
@@ -408,7 +408,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** an incrementally-fed model drifting from a fresh full replay (the storyboard oracle covers only the replay path).
 
-**Anchor:** `src/conversation/stream.ts:651` — `let fallback = this.acc === null || this.quotaDirty;`
+**Anchor:** `src/conversation/stream.ts:666` — `let fallback = this.acc === null || this.quotaDirty;`
 
 **Tests:** `stream.incremental.test.ts incremental-equals-fresh equivalence battery over adversarial sequences`
 
@@ -417,21 +417,21 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** seq-order scrambling across a resume (which resets the wire seq)
 
-**Anchor:** `src/conversation/stream.ts:727` — `const segmentOf = new Map<ModelEvent, number>();`
+**Anchor:** `src/conversation/stream.ts:742` — `const segmentOf = new Map<ModelEvent, number>();`
 
 ### turn-end-demotion-segment-and-seq-scoped
 **`reducer-total`** — a still-running tool is demoted to interrupted iff a turn-terminal frame is causally after it, compared (segment,seq) lexicographically.
 
 **Prevents:** a running turn-N tool flipped by an earlier turn's terminal, or a resumed-session tool flipped by the prior session's synthetic exit
 
-**Anchor:** `src/conversation/stream.ts:1074` — `function demoteAbandonedTools(acc: DeriveAccum): void {`
+**Anchor:** `src/conversation/stream.ts:1141` — `function demoteAbandonedTools(acc: DeriveAccum): void {`
 
 ### derive-snapshot-isolation
 **`runtime-guard`** — the fast path edits an earlier node copy-on-write (a fresh object replaces the old), never mutating a node a prior derive() already handed out.
 
 **Prevents:** a caller-held tree mutating underneath the renderer's object-identity checks.
 
-**Anchor:** `src/conversation/stream.ts:1254` — `function liveSink(acc: DeriveAccum): DeriveSink {`
+**Anchor:** `src/conversation/stream.ts:1327` — `function liveSink(acc: DeriveAccum): DeriveSink {`
 
 **Tests:** `stream.incremental.test.ts identity test (a) — a correlating tool_result yields a NEW node while a tree held from before still shows 'running'`
 
@@ -440,7 +440,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a full-replay fallback needlessly re-creating every node object and forcing the renderer to rebuild unchanged DOM
 
-**Anchor:** `src/conversation/stream.ts:1340` — `function reconcileIdentity(fresh: DeriveAccum, prev: DeriveAccum): void {`
+**Anchor:** `src/conversation/stream.ts:1438` — `function reconcileIdentity(fresh: DeriveAccum, prev: DeriveAccum): void {`
 
 ## App shell — selection / review / gates
 
@@ -700,6 +700,41 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `sidecar/env-overrides.ts:32` — `export function optionOverridesFromEnv(`
 
+### hostpolicy-host-written-only
+**`convention`** — hostPolicy is updated only by the start and set-permission-mode handlers, never from SDK mode_change frames.
+
+**Prevents:** the SDK's silent self-flip widening the backstop.
+
+**Anchor:** `sidecar/index.ts:174` — `let hostPolicy: HostPolicy = "plan";`
+
+### draining-flag-precedes-drain-await
+**`runtime-guard`** — sessionDraining is set before the drain await, and currentSession checks draining/dead first.
+
+**Prevents:** a command mid-drain routing to apply on a query being closed.
+
+**Anchor:** `sidecar/index.ts:680` — `function currentSession(): Session {`
+
+### hostpolicy-unconditional-write
+**`runtime-guard`** — hostPolicy is a required field on every decision and applied unconditionally before the action switch.
+
+**Prevents:** a late command on a dead session leaving the host-policy backstop stale.
+
+**Anchor:** `sidecar/index.ts:800` — `hostPolicy = decision.hostPolicy;`
+
+### setpermissionmode-toctou-trycatch-backstop
+**`runtime-guard`** — the await q.setPermissionMode is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
+
+**Prevents:** an unhandled rejection killing the sidecar process.
+
+**Anchor:** `sidecar/index.ts:814` — `try {`
+
+### setpermissionmode-exhaustiveness-guard
+**`type-level`** — every SessionCommandDecision.action is handled; an unhandled future variant is a compile error.
+
+**Prevents:** a new action silently falling through into the sibling case.
+
+**Anchor:** `sidecar/index.ts:833` — `const _exhaustive: never = decision.action;`
+
 ### plan-bash-write-blocklist-preserves-tests
 **`runtime-guard`** — under plan, write-shaped Bash is denied while read-only test runs stay allowed (best-effort blocklist, NOT a sandbox).
 
@@ -863,7 +898,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** install/uninstall merging over — clobbering — a momentarily-corrupt user ~/.claude/settings.json.
 
-**Anchor:** `src-tauri/src/lib.rs:3156` — `Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {`
+**Anchor:** `src-tauri/src/lib.rs:3154` — `Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| {`
 
 **Tests:** `read_settings_value_refuses_unparseable_and_defaults_absent`
 
@@ -872,7 +907,7 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a config edit from silently re-opening inline/eval script execution (an XSS foothold) or plugin/object embedding in the shipped WebView.
 
-**Anchor:** `src-tauri/src/lib.rs:7185` — `#[test]`
+**Anchor:** `src-tauri/src/lib.rs:7183` — `#[test]`
 
 **Tests:** `csp_production_script_src_forbids_inline_and_eval`
 

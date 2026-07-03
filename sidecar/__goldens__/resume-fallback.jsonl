@@ -1,0 +1,18 @@
+{"seq":0,"kind":"resume_fallback","reason":"transcript missing/expired"}
+{"seq":1,"kind":"system_init","model":"claude-emulator","cwd":"/Users/emulator/work","tools":["Read","Edit","Bash","Write","Task"],"skills":[],"slash_commands":[],"permission_mode":"default","session_id":"emu-session"}
+{"seq":2,"kind":"assistant_text_delta","text":"Here ","block_uid":"0","parent_tool_use_id":null}
+{"seq":3,"kind":"assistant_text_delta","text":"is ","block_uid":"0","parent_tool_use_id":null}
+{"seq":4,"kind":"assistant_text_delta","text":"the ","block_uid":"0","parent_tool_use_id":null}
+{"seq":5,"kind":"assistant_text_delta","text":"first ","block_uid":"0","parent_tool_use_id":null}
+{"seq":6,"kind":"assistant_text_delta","text":"part ","block_uid":"0","parent_tool_use_id":null}
+{"seq":7,"kind":"assistant_text_delta","text":"of ","block_uid":"0","parent_tool_use_id":null}
+{"seq":8,"kind":"assistant_text_delta","text":"my ","block_uid":"0","parent_tool_use_id":null}
+{"seq":9,"kind":"assistant_text_delta","text":"answer.","block_uid":"0","parent_tool_use_id":null}
+{"seq":10,"kind":"assistant_text","text":"Here is the first part of my answer.","block_uid":"0","parent_tool_use_id":null}
+{"seq":11,"kind":"assistant_text_delta","text":"And ","block_uid":"1","parent_tool_use_id":null}
+{"seq":12,"kind":"assistant_text_delta","text":"here ","block_uid":"1","parent_tool_use_id":null}
+{"seq":13,"kind":"assistant_text_delta","text":"is ","block_uid":"1","parent_tool_use_id":null}
+{"seq":14,"kind":"assistant_text_delta","text":"the ","block_uid":"1","parent_tool_use_id":null}
+{"seq":15,"kind":"assistant_text_delta","text":"conclusion.","block_uid":"1","parent_tool_use_id":null}
+{"seq":16,"kind":"assistant_text","text":"And here is the conclusion.","block_uid":"1","parent_tool_use_id":null}
+{"seq":17,"kind":"result","subtype":"success","is_error":false,"result":"All done.","num_turns":1,"duration_ms":1234,"total_cost_usd":0,"session_id":"emu-session"}

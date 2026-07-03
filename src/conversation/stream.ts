@@ -45,12 +45,18 @@ export interface ToolNode {
   isError: boolean;
 }
 
-// An assistant-text bubble.
+// An assistant-text bubble. A streamed block carries `blockUid` — the session-unique correlation id
+// shared by its `assistant_text_delta` chunks and the terminal `assistant_text` — so the reducer keys
+// ONE growing node across every delta and the commit (see nodeKey); `live` is true while deltas
+// accumulate, false once the terminal block finalizes it. A non-streamed block omits both, keeping
+// the fresh-node-per-frame path.
 export interface TextNode {
   type: "text";
   seq: number;
   segment?: number;
   text: string;
+  blockUid?: string;
+  live?: boolean;
 }
 
 // A user-attributed bubble: the verbatim text the user typed/submitted (free-text message, prototype
@@ -368,6 +374,14 @@ interface DeriveAccum {
   // Submitted AskUserQuestion answers by request id, and the question nodes they fold onto.
   answersById: Map<string, AskUserQuestionAnswers>;
   questionNodesById: Map<string, QuestionRequestNode>;
+  // The live streaming text node for each in-flight block, keyed by liveKey(segment, block_uid). The
+  // first delta creates + emits the node; later deltas grow it; the terminal `assistant_text`
+  // finalizes it and deletes the entry. The SEGMENT scope is load-bearing: a resume restarts the
+  // sidecar's block_uid counter at 0, and the full replay consumes events in seq order (segments
+  // interleave, since a resume resets the wire seq), so keying by block_uid ALONE would let a new
+  // segment's block "0" cross-attach to an orphaned prior-segment node (a block interrupted before its
+  // terminal). Mirrors nodeKey's own segment scoping.
+  liveTextByUid: Map<string, TextNode>;
   // Subagent groups by agent_id (= parent_tool_use_id), and the assembled top-level list (sorted).
   groupsById: Map<string, SubagentGroupNode>;
   topNodes: TopNode[];
@@ -400,6 +414,7 @@ function emptyAccum(): DeriveAccum {
     subagentMeta: new Map(),
     answersById: new Map(),
     questionNodesById: new Map(),
+    liveTextByUid: new Map(),
     groupsById: new Map(),
     topNodes: [],
     permissionMode: null,
@@ -764,6 +779,10 @@ export class ConversationModel {
 interface DeriveSink {
   // A produced render node + the parent_tool_use_id it belongs under (null = top level).
   emit(node: RenderNode, parent: string | null): void;
+  // Patch a text node already in the tree (a streaming-delta append or the terminal commit) and
+  // return the now-authoritative node. The full replay mutates it in place (still held in `placed`);
+  // the fast path replaces it copy-on-write so a prior derive's node is never mutated.
+  patchText(node: TextNode, patch: Partial<TextNode>): TextNode;
   // Correlate a tool_result onto its tool_use row (running → done/error). No-op if the id is unknown.
   correlateResult(toolUseId: string, content: unknown, isError: boolean): void;
   // The subagent metadata for `id` was just updated (a `subagent_started` frame) — sync the group.
@@ -797,6 +816,7 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
     // SDK emits no frames for the turn while a canUseTool hold is pending.
     switch (ev.kind) {
       case "assistant_text":
+      case "assistant_text_delta":
       case "tool_use":
       case "tool_result":
       case "status":
@@ -832,12 +852,59 @@ function consume(acc: DeriveAccum, ev: ModelEvent, segment: number, sink: Derive
         });
         sink.syncSubagentMeta(ev.tool_use_id);
         break;
-      case "assistant_text":
+      case "assistant_text_delta": {
+        // A live streaming chunk. The first delta for a block_uid mints + emits a growing text node;
+        // each later delta appends its text verbatim to that node (never trimmed — a chunk carries
+        // inter-word/paragraph spacing, so dropping a whitespace-only one would diverge from the
+        // terminal block). Routed through the same sink/segment/parent machinery as assistant_text so
+        // a subagent delta groups under its parent_tool_use_id.
+        const key = liveKey(segment, ev.block_uid);
+        const live = acc.liveTextByUid.get(key);
+        if (!live) {
+          const node: TextNode = {
+            type: "text",
+            seq: ev.seq,
+            segment,
+            text: ev.text,
+            blockUid: ev.block_uid,
+            live: true,
+          };
+          acc.liveTextByUid.set(key, node);
+          sink.emit(node, ev.parent_tool_use_id);
+        } else {
+          const grown = sink.patchText(live, { text: live.text + ev.text });
+          acc.liveTextByUid.set(key, grown);
+        }
+        break;
+      }
+      case "assistant_text": {
+        // A streamed block carries `block_uid` correlating it to its live delta node: finalize that
+        // node — the terminal text is authoritative over the concatenated chunks — and mark it
+        // committed, so exactly one bubble finalizes in place (no flash, no duplicate).
+        if (ev.block_uid !== undefined) {
+          const key = liveKey(segment, ev.block_uid);
+          const live = acc.liveTextByUid.get(key);
+          if (live) {
+            sink.patchText(live, { text: ev.text, live: false });
+            acc.liveTextByUid.delete(key);
+            break;
+          }
+          // block_uid present but no deltas seen (dropped, or the block produced none): emit a fresh
+          // committed node carrying the uid so it keys stably, applying the whitespace drop.
+          if (ev.text.trim() === "") break;
+          sink.emit(
+            { type: "text", seq: ev.seq, segment, text: ev.text, blockUid: ev.block_uid },
+            ev.parent_tool_use_id,
+          );
+          break;
+        }
+        // No block_uid → exact pre-streaming behavior (preserves every hand-built-frame test).
         // Whitespace-only text frames render as empty bubbles (and a blank subagent child would seed
         // an empty group via its parent_tool_use_id) — drop them entirely.
         if (ev.text.trim() === "") break;
         sink.emit({ type: "text", seq: ev.seq, segment, text: ev.text }, ev.parent_tool_use_id);
         break;
+      }
       case "tool_use": {
         const node: ToolNode = {
           type: "tool",
@@ -1233,6 +1300,12 @@ function replaceNodeInTree(acc: DeriveAccum, oldNode: RenderNode, newNode: Rende
 function batchSink(acc: DeriveAccum, placed: Placed[]): DeriveSink {
   return {
     emit: (node, parent) => placed.push({ node, parent }),
+    // A replay builds fresh nodes, so mutate in place — the same object is held in `placed` and in
+    // liveTextByUid, so both reflect the growth without an O(n) find/swap.
+    patchText: (node, patch) => {
+      Object.assign(node, patch);
+      return node;
+    },
     correlateResult: (toolUseId, content, isError) => {
       const target = acc.toolById.get(toolUseId);
       if (target) {
@@ -1265,6 +1338,14 @@ function liveSink(acc: DeriveAccum): DeriveSink {
       const children = group.children.slice();
       insertSorted(children, node);
       cowGroup(acc, group, { children });
+    },
+    // Copy-on-write: a grown/committed text node is a fresh object replacing the old one, so a prior
+    // derive()'s node is never mutated (snapshot isolation) and the changed object identity signals
+    // the renderer to refresh the bubble.
+    patchText: (node, patch) => {
+      const updated: TextNode = { ...node, ...patch };
+      replaceNodeInTree(acc, node, updated);
+      return updated;
     },
     correlateResult: (toolUseId, content, isError) => {
       const old = acc.toolById.get(toolUseId);
@@ -1320,9 +1401,26 @@ export function nodeKey(n: RenderNode | SubagentGroupNode): string {
       return `perm:${n.id}`;
     case "subagent":
       return `group:${n.agentId}`;
+    case "text":
+      // A streamed block keys on its session-unique block_uid — stable across every delta and the
+      // terminal commit, so all map to ONE cache slot / one bubble (and never collide across turns).
+      // A non-streamed block keeps the (segment, type, seq) key.
+      return n.blockUid !== undefined
+        ? `${n.segment ?? 0}:text:uid:${n.blockUid}`
+        : `${n.segment ?? 0}:${n.type}:${n.seq}`;
     default:
       return `${n.segment ?? 0}:${n.type}:${n.seq}`;
   }
+}
+
+// Key for the live-streaming-node map (DeriveAccum.liveTextByUid): a streamed block is scoped to BOTH
+// its arrival segment AND its session-unique block_uid. A resume restarts the sidecar's block_uid
+// counter at 0, so two segments each open a block "0"; the full replay consumes events in seq order,
+// which interleaves segments (a resume resets the wire seq). Without the segment scope a new segment's
+// block would cross-attach to an orphaned prior-segment node (a block interrupted before its
+// terminal). Mirrors nodeKey's segment scoping — the same defect, the same guard.
+function liveKey(segment: number, blockUid: string): string {
+  return `${segment}:${blockUid}`;
 }
 
 function jsonEq(a: unknown, b: unknown): boolean {

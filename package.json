@@ -13,7 +13,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "pretest": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "node scripts/run-vitest-capped.mjs",
     "tauri": "tauri",
     "build:sidecar": "node scripts/sidecar-build.mjs"
   },

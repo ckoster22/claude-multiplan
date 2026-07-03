@@ -21,6 +21,24 @@ macOS desktop app (Tauri v2) that browses and live-renders Claude Code plan mark
 - **Frontend**: `src/main.ts` wires commands/events; `src/render/` owns the reading pane (markdown/mermaid/image/link rendering); `src/cwd.ts` + `src/resolve.ts` own the sidebar cwd/read-state; `src/titlebar.ts` owns window drag/zoom; `src/conversation/` owns the live-session domain (the `orchestrator.ts` recursive multiplan driver + its pure `plan-tree.ts` reducer, the `stream.ts`/`render.ts` conversation pane, composer, history); `src/model-picker.ts`, `src/prototype.ts`, and `src/review.ts` own the model/effort picker, prototype gate, and review bar. The reading pane and the sidebar are separate domains — keep them disjoint.
 - **`CONTRACT.md`** is the source of truth for the DOM selector contract and the Tauri command/event surface. Update it additively, never rewrite prior sections.
 
+## Integration testing (token-free LLM emulator)
+Use this any time you want to integration-test the full app — the sidecar pipeline AND the frontend render — across the LLM response classes (text, tool_use/tool_result, plan/prototype writes, review cycle, subagent fan-out, quota/rate-limit, 529 overload with retry/mid-turn/exhaustion, permission_denied, mid-stream errors, and auth/transport failures) WITHOUT spending Anthropic tokens. The emulator swaps the SDK's `query()` inside the sidecar, gated on the `EMU_SCENARIO` env var (unset → real `query()`, unchanged); scenarios live in `sidecar/emulator-scenes.ts` (`SCENARIO_NAMES`). Token cost is zero.
+
+Two verification layers, one canonical fixture set:
+- **Layer 1 — sidecar spawned-binary e2e** (`sidecar/emulator-e2e.test.ts`): `EMU_SCENARIO=<name>` drives the compiled `agent-driver` binary and asserts its fd-1 stdout JSON-line frames against `sidecar/__goldens__/*.jsonl`.
+- **Layer 2 — frontend replay** (`src/mock/golden.ts`, `src/mock/golden-scenes.test.ts`): replays those captured goldens through the host's real fd-1 → event demux into the `src/mock` shim and renders them.
+
+How to run (from repo root):
+- `npm test` — both layers (the e2e file skips loudly if the bun/rustc toolchain is missing).
+- `npx vitest run sidecar/emulator-e2e.test.ts` — Layer 1 only (builds + spawns the binary).
+- `UPDATE_GOLDENS=1 npx vitest run sidecar/emulator-e2e.test.ts` — regenerate the goldens.
+- `npm run mock` → http://localhost:1421, pick from the **"Presets · golden replay"** group to watch a scenario render.
+- `npx vitest run src/mock/golden-scenes.test.ts` — Layer 2 only.
+
+To add a scenario: add it to `sidecar/emulator-scenes.ts` (and `SCENARIO_NAMES`), add its exit code to `sidecar/exit-codes.ts` if non-zero, then regenerate goldens with `UPDATE_GOLDENS=1`; the frontend roster/picker/lockstep sweep pick it up automatically from the `__goldens__/*.jsonl` glob.
+
+Key invariant: the goldens are the single source of truth for the fd-1 frame contract. The frontend replays them — it never re-derives frames through a second in-process pipeline — so the two layers cannot drift (`golden-scenes.test.ts` pins this with a golden-diff identity gate).
+
 ## Conventions & gotchas (learned the hard way)
 - **Window drag** requires the `core:window:allow-start-dragging` capability in `src-tauri/capabilities/default.json` — it is NOT included in `core:default`. `data-tauri-drag-region` silently no-ops without it. Double-click-to-zoom needs `core:window:allow-toggle-maximize` (note: `allow-toggle-maximization` is NOT a valid permission name).
 - **Local images** cannot be served via Tauri's asset protocol: its `FsScope` globs do not match path segments beginning with `.` (e.g. `~/.claude/...`), so they 403. Use the `read_image_as_data_url` Rust command instead; CSP stays `null`.

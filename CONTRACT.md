@@ -4599,3 +4599,171 @@ inline styles into a bundled stylesheet.
   loads (JS bundle executes + IPC `connect-src` works), a mermaid diagram renders WITH styling and
   multi-line labels intact (`style-src` concession survives Tauri's nonce injection), a local image
   displays (`img-src data:`), and a highlighted code block renders.
+
+---
+
+## Amendment 2026-06-26 — `EMU_SCENARIO` scripted-fixture LLM emulator (SEAM A, test-only, additive, non-breaking)
+
+A new **test seam (SEAM A)** lets the `agent-driver` sidecar replay a named, fully-scripted conversation
+**without spending a token or touching the real Anthropic API** — for fast, deterministic, diffable
+integration coverage of the live-session pipeline.
+
+**What it does.** When the env var `EMU_SCENARIO` is set to a known scenario name, the sidecar swaps the
+SDK's `query()` for a fake one (`sidecar/emulator.ts` `makeEmulatorQuery`) that replays a fixed sequence of
+**raw `SDKMessage`** objects (`sidecar/emulator-scenes.ts`) — one hop *upstream* of the normalizer, so the
+real `normalize` → quota/overload/backoff/permission logic actually runs against the fixtures. The emitted
+fd-1 frames are **exactly the existing committed `agent-stream` vocabulary** (`system_init`,
+`assistant_text`, `tool_use`, `tool_result`, `subagent_started`, `permission_denied`, `result`,
+`quota_exceeded`, `status`, `mode_change`) — **no new wire kinds, no command/event-surface change**. Rust
+and the frontend are untouched and unaware of the seam.
+
+**Gating (load-bearing).** The seam is inert unless `EMU_SCENARIO` is set to a *known* name:
+- unset / empty / unknown value → `selectEmulatorScenario` returns `null` → the real SDK `query()` runs,
+  **byte-identical to before** (the `queryImpl` indirection and the backoff clamp are both identities when
+  the scenario is null);
+- when active, the sidecar logs `[emulator] ACTIVE scenario=<name>` **to stderr** (never fd 1), so a
+  token-free run is never mistaken for a real one.
+
+**Backoff compression.** Under an active emulator the 529-retry sleep is clamped to `EMU_BACKOFF_MS` (10ms)
+so the retry path runs fast yet genuinely (the loop still breaks → backs off → re-queries). The user-facing
+status *label* still shows the un-clamped real schedule (e.g. "retrying in 1m"); a ~10ms retry under a "1m"
+label is correct by design, not a discrepancy.
+
+**`SCENARIO_NAMES`** (the valid `EMU_SCENARIO` values, from `sidecar/emulator-scenes.ts`):
+`happy-text`, `tool-call`, `plan-write`, `prototype-write`, `review-cycle`, `subagent-fanout`,
+`quota-rate-limit`, `quota-result`, `overloaded-retry`, `overloaded-exhausted`, `permission-denied`,
+`error-midstream`.
+
+The emulator bytes ship in the production binary (reachable from `index.ts`), but activation is hard-gated
+on the distinctive opt-in `EMU_SCENARIO` env var, so production behavior is unchanged. The fixtures are
+derived from the shapes pinned in `sidecar/normalize.test.ts` / `quota.test.ts`; in-process falsifiable
+tests (`sidecar/emulator.test.ts`) drive every scenario through the real normalize/decider functions.
+
+## Amendment 2026-07-02 — `sidecar/__goldens__/<name>.jsonl` frame-golden fixtures (captured fd-1 contract, additive, non-breaking)
+
+The `EMU_SCENARIO` emulator (Amendment 2026-06-26 above) now has a **spawned-binary e2e tier**
+(`sidecar/emulator-e2e.test.ts`) that pins the sidecar's fd-1 output as **committed golden fixtures**.
+These goldens are the **frame-contract source of truth** for what a real `agent-driver` process writes
+to stdout per scenario, intended for downstream replay — the frontend mock layer consumes them in the
+next sub-plan.
+
+**What a golden is.** `sidecar/__goldens__/<name>.jsonl` holds the *exact* stdout JSON lines — the
+committed `agent-stream` frames, one per line, trailing newline — captured from the REAL compiled
+`agent-driver` binary (`bun build --compile`, built once per suite run) spawned with `EMU_SCENARIO=<scenario>`
+and driven over the stdin JSON-lines protocol (`start` → `user` → terminal frame → `end`). A golden is
+captured/compared only **after** that scenario's behavioral assertions pass (frame-kind sequence, key
+fields, monotonic `seq`, `tool_use_id` correlation, exit code) — the assertions establish correctness;
+the golden then pins the exact bytes against drift (`checkGolden` compares byte-for-byte).
+
+**Which cases have goldens.** 17 files: one per registered scenario (all 16 `SCENARIO_NAMES`) plus
+`resume-fallback.jsonl` — a protocol-driven case (the `happy-text` scenario started with a bogus
+`start.resume`, pinning the `resume_fallback` frame; its `getSessionInfo` pre-flight is the one
+un-emulated SDK call, a local no-network session-store lookup). The `second-start-reject` e2e case is
+deliberately **assertions-only, no golden**: its pre-reject frame stream is `happy-text`'s, already pinned.
+
+**Determinism (no scrubbing).** The goldens are byte-stable *by construction*, not by post-capture
+scrubbing: `system_init` hardcodes cwd `/Users/emulator/work`, model `claude-emulator`, session id
+`emu-session`; every quota `resetAt` derives from the pinned `FIXED_RESET_EPOCH_MS`
+(`1750000000000`), never `Date.now()`. One binary-tier nuance: `quota-result.jsonl` shows
+`source:"rate_limit_event"`, because the rejected rate-limit event that pins that scenario's reset
+instant itself pauses the live session (`index.ts` gracefulExit 0 on the first `quota_exceeded`), so
+the trailing result-carrier message is never consumed at this tier — `decideResultQuota`'s
+structured-reuse branch is asserted in-process (`sidecar/emulator.test.ts`).
+
+**Regeneration.** `UPDATE_GOLDENS=1 npx vitest run sidecar/emulator-e2e.test.ts` rewrites every golden
+from a fresh binary run; without the env var a missing or mismatching golden fails the test. All
+spawned-binary e2e must stay in that single file (parallel test files would race two `bun build
+--compile` runs on the same output path and corrupt the binary).
+
+**`SCENARIO_NAMES` delta.** Since the 2026-06-26 amendment the registry has grown 12 → 16; the four
+additions (each with a golden) are: `overloaded-midturn`, `auth-failure`, `thrown-quota`,
+`stream-abort`. The 12 names listed in that amendment are unchanged and still valid.
+
+## Amendment 2026-07-02 (frontend golden replay) — `src/mock/golden.ts` is the sanctioned golden→mock bridge (test/dev-only, additive, non-breaking)
+
+Distinct from the same-dated amendment above (which committed the goldens themselves); this one
+commits how the FRONTEND consumes them. The frame goldens (`sidecar/__goldens__/<name>.jsonl`) are
+now replayed through the mock harness and the frontend test suite via exactly one adapter:
+`src/mock/golden.ts`. No other module may parse a golden or fabricate golden-equivalent frames — one
+frame registry, no second frame-generation path.
+
+**The adapter.** An eager `?raw` `import.meta.glob` over `sidecar/__goldens__/*.jsonl` loads every
+golden identically under vitest and the browser mock harness (`npm run mock`); the scene roster IS
+the glob's basenames (never a hardcoded list or count, kept in lockstep with the shared
+`SCENARIO_EXIT_CODES` map by test). Each line is routed by `demuxLine`, then `goldenScene(name)`
+appends the synthesized `agent-exit`. Golden-derived scenes live in the separate `GOLDEN_SCENES`
+registry (the hand-typed `SCENES` registry keeps its exhaustive tsc/signature guarantees); the mock
+deck lists them as a second preset group, and hand scenes whose response class a golden fully covers
+now source their frames from the golden under their existing `SCENES` key.
+
+**Demux fidelity obligation.** `demuxLine` is a TypeScript port of the host's fd-1 →
+event-channel seam (`src-tauri/src/agent.rs` `parse_stream_line` + `normalize_error_payload`) and
+MUST track it:
+
+- whitespace-only (after trim) → skipped, never a frame;
+- `kind:"tool_permission_requested"` → the `tool-permission-requested` channel, payload untouched;
+- `kind:"error"` → the `agent-error` channel with the internal `error_kind` lifted into the public
+  `kind` (default `"sdk"`) and dropped; every other field carries through verbatim;
+- any other `kind` → the `agent-stream` channel, payload untouched;
+- a non-JSON line → a synthetic `agent-error` `{kind:"contamination", message, fatal:false}`
+  carrying the raw line in its diagnostic (the embedded parser text differs between serde and
+  `JSON.parse`; only the shape is contractual).
+
+The port's guard is the golden-diff gate in `src/mock/golden-scenes.test.ts` (run on the bad-path
+`overloaded-exhausted` golden): every pass-through frame parsed-JSON-equal to its golden line —
+nothing dropped, nothing reordered, `seq` preserved — and the terminal `error` line equal to a
+hand-written normalized-expected shape derived from this contract (never from adapter output).
+Golden-derived frames are raw JSON casts that bypass the typed scene builders; their drift guard is
+that gate plus the per-class render tests, NOT `tsc`.
+
+**The two non-golden seams** (deliberate, documented — no golden exists and none will):
+
+1. **`agent-exit` synthesis.** Process termination never appears on fd-1, so no golden line carries
+   it. The adapter synthesizes the trailing `agent-exit {code}` from `SCENARIO_EXIT_CODES`
+   (`sidecar/exit-codes.ts`) — the single shared per-golden exit-code map, keyed by golden BASENAME
+   (`resume-fallback`'s basename ≠ its `EMU_SCENARIO`), consumed by BOTH the spawned-binary e2e
+   (`sidecar/emulator-e2e.test.ts` asserts the real exit codes against it) and this adapter. Only
+   the fatal-error scenarios exit 1 (`overloaded-exhausted`, `auth-failure`, `stream-abort`);
+   `error-midstream`, `thrown-quota`, and `overloaded-midturn` end gracefully (0).
+2. **`tool-permission-requested` injection.** The interactive prompt is driven by the sidecar's
+   `canUseTool` path, which the `EMU_SCENARIO` query()-seam emulator cannot produce. It stays
+   covered by the hand-built scenes (`questionCard` / `exitPlanMode` / `permissionThenReply`) that
+   inject the event directly onto the mock channel, grouped in `SCENES` as non-golden seams.
+
+## Amendment 2026-07-02 — `assistant_text_delta` (genuine token-by-token streaming, additive, non-breaking)
+
+Adds **one new `agent-stream` kind** — `assistant_text_delta` — plus **one new optional field** on the
+existing `assistant_text` frame. No prior section is renegotiated; the terminal `assistant_text` frame
+is unchanged in shape when it carries no correlation id (all hand-built frames, and any block that
+produced no deltas, stay **byte-for-byte** identical to before this amendment).
+
+This mirrors the SDK's `includePartialMessages` output: with that option set (`buildOptions`,
+`sidecar/index.ts`), the SDK yields `SDKPartialAssistantMessage` (`type:"stream_event"`) partial
+deltas **during** the turn AND still yields the final consolidated `assistant` message. `normalize.ts`
+maps the text deltas to `assistant_text_delta` frames and the consolidated message to the authoritative
+`assistant_text` frame as before.
+
+| kind | fields (beyond `seq`/`kind`) | source |
+|------|------------------------------|--------|
+| `assistant_text_delta` | `text, block_uid, parent_tool_use_id` | a `text_delta` on an SDK `stream_event`/`content_block_delta` |
+
+- **`text` is a VERBATIM additive chunk** — appended, never trimmed; whitespace-only chunks are NOT
+  dropped (dropping one would lose an inter-word space and diverge from the terminal block).
+  Concatenating a block's `assistant_text_delta.text` values **in `seq` order** reconstructs that
+  block's authoritative `assistant_text.text` byte-for-byte.
+- **`block_uid`** is a **session-unique** string minted by the sidecar (a monotonic counter, NOT the
+  SDK's per-message `content_block` index, which resets to 0 every turn and would collide across the
+  long-lived session). All of a block's deltas share one `block_uid`, and the terminal `assistant_text`
+  for that block now ALSO carries the SAME `block_uid` — this is the correlation between the live delta
+  stream and the committed authoritative block.
+- **`assistant_text` gains an OPTIONAL `block_uid`** (same value as its deltas). When a block produced
+  deltas the field is present; when it did not (hand-built frames, non-streamed replies) the field is
+  **OMITTED entirely** (not `null`/`undefined`) — preserving today's exact bytes.
+- **`seq` stays globally monotonic** across all frames, deltas included (the single shared counter).
+- **`parent_tool_use_id`** carries through from the `stream_event` exactly as on `assistant_text`
+  (non-null inside a subagent group).
+
+**No Rust / demux change.** `parse_stream_line` (`src-tauri/src/agent.rs`) forwards any
+non-`error`/non-`permission` frame verbatim to `agent-stream`; `src/mock/golden.ts` `demuxLine` routes
+unknown kinds to `agent-stream` unchanged. The new kind/fields pass through both untouched.
+

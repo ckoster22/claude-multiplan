@@ -33,8 +33,8 @@ import {
 import { TINY_PNG_DATA_URL, ERROR_PLAN_PATH } from "./fixtures/markdown";
 import { stripFrontmatter } from "./fixtures/nested";
 import type { AgentAuthStatus, AskUserQuestionAnswers, AgentStream } from "../conversation/types";
-import { SCENES } from "./fixtures/scenes";
-import { playSceneFrames, clearAgentBuffers } from "./player";
+import { SCENES, DEFAULT_SCENE } from "./fixtures/scenes";
+import { playSceneFrames, clearAgentBuffers, resolveSceneBuilder } from "./player";
 import { emitMockEvent } from "./event";
 import { transcriptFor, type PlanTranscriptResult } from "./fixtures/transcripts";
 import { MOCK_REVIEW } from "./fixtures/reviews";
@@ -162,7 +162,9 @@ function playActiveScene(delayMs = 0): void {
   // Stop any in-flight delayed playback so a restart never interleaves the old scene's tail.
   cancelActivePlayback?.();
   clearAnswers();
-  const builder = SCENES[getActiveScene()];
+  // The active scene may be a golden-derived name (not a SCENES key), so resolve across both
+  // registries; fall back to the default if the stored name went stale.
+  const builder = resolveSceneBuilder(getActiveScene()) ?? SCENES[DEFAULT_SCENE];
   cancelActivePlayback = playSceneFrames(builder(delayMs), delayMs);
 }
 

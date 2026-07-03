@@ -770,7 +770,11 @@ function renderNodeInner(node: RenderNode, handlers?: RenderHandlers): HTMLEleme
       const row = document.createElement("div");
       row.className = "conv-error";
       if (node.fatal) row.classList.add("conv-error-fatal");
-      row.textContent = `Error (${node.errorKind}): ${node.message}`;
+      // The sidecar stringifies a thrown error with String(e), which prepends "Error:" (sidecar/
+      // index.ts). Our own "Error (kind): " prefix would then double it ("Error (auth): Error: 401…"),
+      // so strip a single leading "Error:" from the message before interpolating.
+      const message = node.message.replace(/^Error:\s*/, "");
+      row.textContent = `Error (${node.errorKind}): ${message}`;
       return row;
     }
     case "exit": {
@@ -929,7 +933,7 @@ function buildWorkingIndicator(label: string): HTMLElement {
 
 // Obtain the element for `node` — reuse the cached one when the node object is unchanged, else build
 // fresh (a group also reconciles its header + children into a reused/rebuilt shell). Updates `cache`.
-// INVARIANT[keyed-element-reuse-by-node-identity] (runtime-guard): a node whose object identity is unchanged across derives reuses its cached DOM element; a fresh element is built only when the object changed or is missing.
+// INVARIANT[keyed-element-reuse-by-node-identity] (runtime-guard): a node whose object identity is unchanged across derives reuses its cached DOM element; a CHANGED streamed text node keeps its cached element too but refreshes that element's content in place (a new object per delta would otherwise rebuild every token); every other changed-or-missing node builds a fresh element.
 //   prevents: a full-DOM rebuild every frame — interval churn, image flicker, and lost scroll / selection / focus.
 //   test: render.reconcile.test.ts identity tests (a) same-tree rerender reuses every element and (b) an append reuses all prior elements
 function obtainElem(
@@ -958,6 +962,21 @@ function obtainElem(
     if (entry && entry.elem !== group) entry.elem.remove();
     cache.set(key, { node, elem: group, children: childCache });
     return group;
+  }
+
+  // A streamed text bubble mints a new node object per delta (copy-on-write in the reducer), so the
+  // object-identity fast path below never reuses it. Keyed on block_uid, every delta and the terminal
+  // commit map to the same cache slot: reuse the existing element and refresh its content in place
+  // rather than rebuilding a fresh `.conv-text` every token (which would drop text selection and churn
+  // the DOM). markdown+sanitize still re-runs over the whole accumulated text each delta (O(n²) across
+  // a block) — acceptable at prototype scale; the element reuse is the churn/flicker fix.
+  if (node.type === "text" && entry && entry.elem.parentNode === parent) {
+    if (entry.node !== node) {
+      entry.elem.innerHTML = renderNode(node, handlers).innerHTML;
+      entry.elem.dataset.seq = String(node.seq);
+      cache.set(key, { node, elem: entry.elem });
+    }
+    return entry.elem;
   }
 
   if (entry && entry.node === node && !isInteractiveNode(node) && entry.elem.parentNode === parent) {

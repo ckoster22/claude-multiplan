@@ -82,10 +82,18 @@ describe("scenes — each scene yields its signature node through the real pipel
   // frame) makes the signature assertion fail. This is the committed in-test guard that the per-scene
   // assertions above are not vacuous — each scene's signature depends on a specific frame.
   it("FALSIFY: dropping the signature frame fails the assertion (assistantText loses .conv-text)", () => {
-    // assistantText's signature node is the assistant_text frame (index 1). Remove it → no .conv-text.
+    // assistantText streams: its signature nodes come from BOTH the live `assistant_text_delta` chunks
+    // (each grows the bubble) AND the terminal `assistant_text` commit. Remove every text-bearing frame
+    // (deltas + commits) → no .conv-text at all. (Dropping only the terminal would leave the un-
+    // finalized delta bubble, so it must not pass regardless — hence both kinds are filtered.)
     const frames = SCENES.assistantText();
     const withoutText = frames.filter(
-      (f) => !(f.event === "agent-stream" && (f.payload as { kind?: string }).kind === "assistant_text"),
+      (f) =>
+        !(
+          f.event === "agent-stream" &&
+          ((f.payload as { kind?: string }).kind === "assistant_text" ||
+            (f.payload as { kind?: string }).kind === "assistant_text_delta")
+        ),
     );
     const container = renderScene(withoutText);
     expect(container.querySelector(".conv-text")).toBeNull();
@@ -107,11 +115,11 @@ describe("scenes — each scene yields its signature node through the real pipel
 
   // FALSIFIABILITY PROOF for the permissionDenied scene (its signature is .conv-perm-denied, which the
   // minimap maps to the red "danger" tier). The signature node is produced by the SINGLE
-  // permission_denied agent-stream frame — removing it leaves only the assistant_text + tool_use +
-  // failed result, so NO .conv-perm-denied node exists. (Verified RED-then-GREEN: with the frame
+  // permission_denied agent-stream frame — removing it leaves only the golden's system_init +
+  // terminal result, so NO .conv-perm-denied node exists. (Verified RED-then-GREEN: with the frame
   // present the per-scene loop above asserts the row exists; here we assert removing it removes the
-  // row, and that the tool row that attempted the write still renders — proving the deny row vanished,
-  // not the whole turn.)
+  // row, and that the turn's result row still renders — proving the deny row vanished, not the
+  // whole turn.)
   it("FALSIFY: dropping the permission_denied frame removes .conv-perm-denied from permissionDenied", () => {
     const frames = SCENES.permissionDenied();
     const withoutDenial = frames.filter(
@@ -119,8 +127,8 @@ describe("scenes — each scene yields its signature node through the real pipel
     );
     const container = renderScene(withoutDenial);
     expect(container.querySelector(".conv-perm-denied")).toBeNull();
-    // The tool the agent attempted to run still renders — proving only the deny row vanished.
-    expect(container.querySelector(".conv-tool")).not.toBeNull();
+    // The turn's terminal result still renders — proving only the deny row vanished.
+    expect(container.querySelector(".conv-result")).not.toBeNull();
   });
 });
 
@@ -279,6 +287,7 @@ describe("scenes — AgentStream union exhaustiveness guard", () => {
   const COVERAGE = {
     system_init: "scene",
     assistant_text: "scene",
+    assistant_text_delta: "scene",
     tool_use: "scene",
     tool_result: "scene",
     subagent_started: "scene",
