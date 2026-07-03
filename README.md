@@ -35,8 +35,8 @@ Every shot below is the real frontend captured from the token-free demo harness 
 ![A live agent session showing a subagent group and the message composer](docs/screenshots/conversation-subagent.png)
 *Live agent session: the conversation pane streams tool calls and subagent fan-out, with a composer to reply mid-run.*
 
-![The review bar over a rendered visual prototype, offering approve or request-changes](docs/screenshots/review-prototype.png)
-*Review bar: the session pauses at a gate — here a visual-prototype round — to approve or request changes before it proceeds.*
+![A working HTML game prototype (Chompy Asteroids) with a live canvas, HUD, and control panels](docs/screenshots/review-prototype.png)
+*A working HTML prototype the agent built during intent confirmation — the review gate holds the run until you approve it (prototypes open in your browser).*
 
 ![The conversation paused on a usage-limit banner counting down to quota refresh](docs/screenshots/quota-banner.png)
 *Quota-aware: when usage limits are hit mid-turn, the session parks on a countdown and auto-resumes when quota refreshes.*
