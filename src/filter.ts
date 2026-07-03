@@ -2,8 +2,8 @@
 // TITLE (filename_stem), its working DIR (cwd), and its H1 HEADINGS (h1s, sourced from the
 // backend). This module is pure: it takes records + a query and returns the filtered list, and
 // it builds highlighted DOM safely. It NEVER queries `#reading-pane` (the filter reads `h1s`
-// straight off the in-memory records — honoring the sidebar↔reading-pane disjointness in
-// CONTRACT.md) and it never touches the Contents/ToC tab.
+// straight off the in-memory records — honoring the sidebar↔reading-pane disjointness) and it
+// never touches the Contents/ToC tab.
 
 import type { PlanRecord } from "./types";
 
@@ -28,8 +28,8 @@ export function matchesQuery(record: PlanRecord, query: string): boolean {
 // Filter the pre-ordered record stream, PRESERVING the master→sub nesting so a matched sub is
 // never orphaned. The flat `records` array is the display-ordered stream from `list_plans`:
 // each master (flavor "master" with child_count >= 1) is IMMEDIATELY followed by its subs
-// (flavor "sub"), then standalones / 0-child masters render flat (see CONTRACT.md
-// §"Pre-ordering guarantee"). We walk it as groups:
+// (flavor "sub"), then standalones / 0-child masters render flat (the pre-ordering guarantee
+// from `list_plans`). We walk it as groups:
 //   - a master group = the master record + the run of "sub" records that follow it;
 //   - any other record (standalone, or a 0-child master) is its own single-record group.
 // Inclusion rules:

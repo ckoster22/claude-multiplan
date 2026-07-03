@@ -1,7 +1,7 @@
 // Table-of-contents extraction from the rendered reading pane.
 //
 // This is the ONE sanctioned read-only data flow from the reading-pane domain to
-// the sidebar domain (CLAUDE.md / CONTRACT.md keep those domains disjoint). The
+// the sidebar domain (CLAUDE.md keeps those domains disjoint). The
 // render layer PRODUCES a plain `TocEntry[]`; the sidebar CONSUMES it to build
 // `#toc-list`. The sidebar never queries `#reading-pane` itself.
 //

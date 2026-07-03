@@ -194,7 +194,7 @@ export const permissionDenied: SceneBuilder = () => goldenFrames("permission-den
 // Non-golden seams — the interactive `tool-permission-requested` scenes below (questionCard /
 // exitPlanMode / permissionThenReply) inject the event directly onto the mock channel. The prompt is
 // driven by the sidecar's canUseTool path, which the query()-seam emulator cannot produce, so no
-// golden can cover them (see CONTRACT.md "frontend golden replay").
+// golden can cover them (frontend golden replay).
 
 // An INTERACTIVE AskUserQuestion card (.conv-question, pending). Surfaced via a
 // tool-permission-requested frame carrying tool:"AskUserQuestion" + input.questions. The model reads

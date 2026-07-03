@@ -1,5 +1,6 @@
 // CSS class strings are LOAD-BEARING — pinned by contract.test.ts golden snapshots; do not rename.
-// CONTRACT.md forbids sidebar ↔ reading-pane imports (converge at main.ts only).
+// The sidebar and reading-pane domains never import each other (CLAUDE.md keeps them disjoint —
+// they converge at main.ts only).
 
 import type { PlanRecord, SidebarCtx } from "./types";
 

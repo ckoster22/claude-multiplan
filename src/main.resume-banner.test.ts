@@ -972,8 +972,8 @@ describe("Phase 5 — resume_fallback toast", () => {
 // it). Opening such a row must: (a) NOT call read_plan_contents for the sentinel (it would reject —
 // no file), (b) render a graceful placeholder pane (prefer the tree's INTENT.md, else a static note),
 // and (c) still surface the resume banner with the forward action (the banner reads the row's cwd +
-// state.json, independent of the absolute_path being a real file). See CONTRACT.md §"Amendment
-// 2026-06-17 — Synthetic resume sidebar rows".
+// state.json, independent of the absolute_path being a real file). This covers the synthetic
+// resume sidebar rows.
 
 const SENTINEL_TREE = "tree-synth-01";
 const SENTINEL_PATH = `plan-tree-resume://${SENTINEL_TREE}`;

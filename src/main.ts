@@ -107,13 +107,13 @@ export { suppressConversationFlip, shouldClearPlaceholderOnExit } from "./run-su
 export { setHookStatus } from "./review-bar";
 export { chainHandler } from "./ipc";
 
-// ---- Frozen contract type (mirrors Rust PlanChanged in CONTRACT.md) ----
+// ---- Frozen contract type (mirrors the Rust PlanChanged wire shape) ----
 interface PlanChanged {
   path: string;
   kind: string;
 }
 
-// ---- DOM handles (the frozen selector contract — see CONTRACT.md) ----
+// ---- DOM handles (the frozen selector contract) ----
 let planListEl: HTMLElement | null;
 let planCountEl: HTMLElement | null;
 let readerScrollEl: HTMLElement | null;
@@ -921,8 +921,8 @@ function planSrcText(rec: PlanRecord): string {
 // ---- Synthetic "resume" sidebar rows ------------------------------------------------
 //
 // `list_plans` synthesizes a `PlanRecord` for a mid-decompose plan-tree that has NO real plan `.md`
-// file yet, so the tree is still visible + its resume banner reachable (see CONTRACT.md §"Amendment
-// 2026-06-17 — Synthetic resume sidebar rows"). The row carries a SENTINEL `absolute_path` of the
+// file yet, so the tree is still visible + its resume banner reachable (synthetic resume sidebar
+// rows). The row carries a SENTINEL `absolute_path` of the
 // form `plan-tree-resume://<tree_id>` — there is NO file behind it. Anything that would `invoke`
 // `read_plan_contents` / `set_open_plan` / `mark_viewed` against the path MUST guard on this
 // predicate first (the Rust commands reject a sentinel — canonicalize fails on the scheme string).
@@ -1447,8 +1447,8 @@ function showToast(msg: string): void {
 
 // ---- Nested sidebar rendering ----------------------------------------------
 //
-// `list_plans` returns records PRE-ORDERED for direct nested rendering (see CONTRACT.md
-// §"Nested master/sub hierarchy"): top-level masters + standalones interleaved by recency,
+// `list_plans` returns records PRE-ORDERED for direct nested rendering:
+// top-level masters + standalones interleaved by recency,
 // each master IMMEDIATELY followed by its children in nn-ascending order, as a closed flavor
 // set with orphans/duplicates already normalized. So `renderSidebar` walks top-to-bottom with
 // NO re-aggregation and NO flavor-fallback logic.
@@ -1470,7 +1470,7 @@ function buildFlatRow(rec: PlanRecord, ctx: SidebarCtx): HTMLElement {
   const title = document.createElement("span");
   title.className = "plan-title";
   // A synthetic resume-sentinel row's `filename_stem` is the tree_id (display-incidental) — show the
-  // tree's title instead, which rides `h1s[0]` (see CONTRACT.md §"Amendment 2026-06-17"). Real rows
+  // tree's title instead, which rides `h1s[0]` (synthetic resume-sentinel rows). Real rows
   // keep the existing `filename_stem` title. A sentinel with no h1s falls back to the stem.
   title.textContent = isResumeSentinel(rec.absolute_path)
     ? rec.h1s[0] ?? rec.filename_stem
@@ -1550,8 +1550,8 @@ function buildMaster(rec: PlanRecord, ctx: SidebarCtx): { wrapper: HTMLElement; 
 // nn_path by exactly one segment nests inside it; otherwise frames pop until its parent prefix
 // matches. The stack carries SubTreeNodes (not DOM) so "internal" = actually-accumulated kids.
 // Reads the module singletons selection / collapseOverride / subCollapse + the cwd subsystem + the
-// DOM-handle let-bindings; CONTRACT.md forbids the sidebar and reading-pane domains from importing
-// each other, so they converge only here.
+// DOM-handle let-bindings; the sidebar and reading-pane domains never import each other (CLAUDE.md
+// keeps them disjoint), so they converge only here.
 export function renderSidebar(listEl: HTMLElement, records: PlanRecord[], ctx: SidebarCtx): void {
   listEl.replaceChildren();
 

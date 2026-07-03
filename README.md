@@ -86,7 +86,7 @@ bash scripts/install.sh
 | `npm run mock-animate`               | Mock harness with the scrubbable, time-driven "Trailhead" walkthrough of the multiplan flow (`MOCK_ANIMATE=1`). |
 | `npm run mock-annotate`              | Mock-animate in author mode for marking up the demo with pen/arrow/box annotations (`MOCK_ANNOTATE=1`); see the annotation section below. |
 
-The DOM selector contract and the Tauri command/event surface (including the nested-hierarchy `PlanRecord` fields and the `set_tree_collapsed` command) are documented in [`CONTRACT.md`](CONTRACT.md).
+The DOM selector contract and the Tauri command/event surface (including the nested-hierarchy `PlanRecord` fields and the `set_tree_collapsed` command) are pinned by tests: `src/contract.test.ts` on the frontend (selectors + `PlanRecord`/`CommentRecord` key sets) and the Rust `*_wire_contract_is_frozen` tests in `src-tauri/src/lib.rs` (serialization).
 
 ## Mock mode (token-free visual QA)
 

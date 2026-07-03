@@ -1,7 +1,8 @@
 // Conversation domain — pure stream-model tests (falsifiable).
 //
-// These assert the model against ONLY the frozen vocabulary in CONTRACT.md. We do NOT assert
-// any Skill or subagent-NAME shape (unfrozen — deferred to live smoke).
+// These assert the model against ONLY the frozen agent-stream vocabulary typed in
+// `src/conversation/types.ts`. We do NOT assert any Skill or subagent-NAME shape (unfrozen —
+// deferred to live smoke).
 
 import { describe, it, expect } from "vitest";
 import { ConversationModel } from "./stream";

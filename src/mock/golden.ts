@@ -7,7 +7,7 @@
 // `parse_stream_line` + `normalize_error_payload`). If that Rust seam changes, this port must change
 // with it — the golden-diff gate in golden-scenes.test.ts pins the ported behavior against the goldens.
 //
-// Two synthesized / non-golden seams (see CONTRACT.md "frontend golden replay"):
+// Two synthesized / non-golden seams (frontend golden replay):
 //   - `agent-exit {code}` comes from process termination, never fd-1: `goldenScene` synthesizes it
 //     from the shared SCENARIO_EXIT_CODES map (the same map the spawned-binary e2e asserts against).
 //   - the interactive `tool-permission-requested` prompt is driven by the sidecar's canUseTool path,

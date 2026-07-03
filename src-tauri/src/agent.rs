@@ -252,7 +252,7 @@ pub fn parse_stream_line(line: &str) -> Result<Option<AgentEvent>, String> {
         "tool_permission_requested" => AgentEvent::PermissionRequested(value),
         // Sidecar-originated errors arrive as `{kind:"error", error_kind, message,
         // fatal}` — `kind:"error"` is just the sidecar's INTERNAL routing token.
-        // The public `agent-error` wire shape (CONTRACT.md) is `{kind, message,
+        // The public `agent-error` wire shape emitted to the frontend is `{kind, message,
         // fatal}` where `kind` is the discriminator (auth/sdk/spawn/…). Normalize
         // at this seam: lift `error_kind` into `kind` (default "sdk" if absent) and
         // drop the internal `error_kind` field, so the `payload.kind ===

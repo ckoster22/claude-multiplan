@@ -3,7 +3,7 @@
 `npm run mock` runs the **real, unmodified frontend** in a plain browser against a fake Tauri layer:
 no Rust backend, no sidecar, no agent, **zero LLM tokens**. It exists for fast visual QA of every
 distinct UI state. This guide is for maintainers of the harness itself. User-facing overview lives in
-the repo `README.md` → "Mock mode"; the contract surface it mirrors is in `CONTRACT.md`.
+the repo `README.md` → "Mock mode"; the command/event surface it mirrors is the one the real frontend consumes (pinned by `src/contract.test.ts` and the Rust wire-contract tests).
 
 > **Hard rule:** the harness lives entirely under `src/mock/**` plus `vite.mock.config.ts` and a single
 > `package.json` `"mock"` script. It NEVER modifies production source (`src/main.ts`,

@@ -2,7 +2,7 @@
 # Ownership-guard tests for the GLOBAL PostToolUse:ExitPlanMode hook
 # ~/.claude/scripts/plan-tree-save-plan.sh.
 #
-# CONTRACT UNDER TEST (see CONTRACT.md "Ownership of .plan-tree/ ..."):
+# CONTRACT UNDER TEST (ownership of .plan-tree/):
 #   .plan-tree/state.json is the app-owned marker — the claude-plan-reader app is
 #   the SOLE writer of state.json; the CLI /multiplan flow never creates one.
 #   When state.json exists under the hook's working dir, the hook MUST exit 0
