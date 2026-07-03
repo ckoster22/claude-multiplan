@@ -9,6 +9,7 @@ import { parseNn, nonEmpty, pathKey, PlanValidationError } from "./ids";
 import type { Nn, NodePath } from "./ids";
 import type { TreeNode, PlanTreeState2, ApprovalGate2, AcceptanceGate } from "./model";
 import type { PlanTreeEvent2, Effect2 } from "./events";
+import type { ModelOptions } from "../../model-picker";
 import {
   cloneNode,
   replaceAt,
@@ -20,11 +21,45 @@ import {
 } from "./nav";
 import { assertCoherent2 } from "./coherence";
 import { planName2, summaryName2 } from "./select";
+import { codingModelForScale, decompositionModel } from "./triage";
 
 // A freshly-minted pending child: artifact-free by CONSTRUCTION — the open stage has no path
-// fields, so "no artifacts yet" is structural, not null-at-rest.
-function makeNode2(nn: Nn, title: string): TreeNode {
-  return { nn, title, redraftCount: 0, lastFeedback: null, state: { stage: "open", phase: "pending" } };
+// fields, so "no artifacts yet" is structural, not null-at-rest. `inheritModel` (when provided)
+// seeds the minted node with the parent's execution_model as a PROVISIONAL auto value — superseded
+// when the node sizes (a leaf gets its scale tier, a split gets the decomposition model).
+function makeNode2(nn: Nn, title: string, inheritModel?: ModelOptions | null): TreeNode {
+  const base: TreeNode = {
+    nn,
+    title,
+    redraftCount: 0,
+    lastFeedback: null,
+    state: { stage: "open", phase: "pending" },
+  };
+  return inheritModel ? { ...base, execution_model: inheritModel, model_source: "auto" } : base;
+}
+
+// Stamp an AUTO-triaged execution_model onto a node — but NEVER over a user "override" (re-triage
+// must not clobber a deliberate pick). Returns the node unchanged when it is already overridden.
+function stampAuto(node: TreeNode, options: ModelOptions): TreeNode {
+  if (node.model_source === "override") return node;
+  return { ...node, execution_model: options, model_source: "auto" };
+}
+
+// Re-derive inherited-auto models for every still-`open` DESCENDANT of `node` (used by
+// EXECUTION_MODEL_SET). An already-sized descendant (leaf/split) keeps its own stage triage; an
+// overridden descendant keeps its override. `node` itself is NOT touched here (the caller stamps it).
+function retriageOpenDescendants(node: TreeNode, options: ModelOptions): TreeNode {
+  if (node.state.stage !== "split") return node;
+  const children = nonEmpty(
+    node.state.children.map((c): TreeNode => {
+      const seeded =
+        c.state.stage === "open" && c.model_source !== "override"
+          ? { ...c, execution_model: options, model_source: "auto" as const }
+          : c;
+      return retriageOpenDescendants(seeded, options);
+    }),
+  );
+  return { ...node, state: { ...node.state, children } };
 }
 
 // Construct the fresh initial gen-2 state for a brand-new tree. The root's nn is conventional
@@ -42,6 +77,9 @@ function initial2(treeId: string, request: string, nowMs: number): PlanTreeState
       lastFeedback: null,
       // GENESIS: the run opens with the intent-clarifier (root-only phase).
       state: { stage: "open", phase: "clarifying-intent" },
+      // The root IS the decomposition node — seed it with the Opus decomposition model (auto).
+      execution_model: decompositionModel(),
+      model_source: "auto",
     },
     // No SDK session yet — captured on the first system_init frame (SESSION_INITIALIZED).
     sdk_session_id: undefined,
@@ -297,26 +335,44 @@ export function reduce2(
           // decomposition gate is COLLAPSED — the root becomes a split with EXACTLY ONE child 01
           // ("Plan"), materialized immediately (no CHILDREN_PARSED, no gate), child active in recon.
           // The child's OWN leaf gate is the only plan gate in the whole run.
-          const only: TreeNode = { ...makeNode2(parseNn(1), "Plan"), state: { stage: "open", phase: "recon" } };
-          next.root = {
-            ...next.root,
-            state: {
-              stage: "split",
-              phase: "running-children",
-              children: nonEmpty([only]),
-              planPath: null,
-              summaryPath: null,
-              plansDirPath: null,
-            },
+          // The collapse child skips its OWN sizer (it inherited the root's `single` verdict), so it
+          // carries the ROOT's scale onto its leaf coding model here — preserved through its
+          // recon→leaf hop (NODE_RECON_DONE's root-collapse branch spreads it forward, never restamps).
+          const only: TreeNode = {
+            ...makeNode2(parseNn(1), "Plan"),
+            state: { stage: "open", phase: "recon" },
+            execution_model: codingModelForScale(event.outcome.scale),
+            model_source: "auto",
           };
+          // The root single-collapse NODE becomes a split (decomposition) → the Opus decomposition
+          // model (auto, unless the user overrode the root).
+          next.root = stampAuto(
+            {
+              ...next.root,
+              state: {
+                stage: "split",
+                phase: "running-children",
+                children: nonEmpty([only]),
+                planPath: null,
+                summaryPath: null,
+                plansDirPath: null,
+              },
+            },
+            decompositionModel(),
+          );
         } else {
           // NON-ROOT SINGLE: the node ITSELF becomes the leaf (NO collapse child — the
           // collapse exists only at the root, where a gate must still follow). Its leaf gate is this
-          // node's human checkpoint.
-          next.root = replaceAt(next.root, event.path, (n) => ({
-            ...n,
-            state: { stage: "leaf", phase: "drafting", planPath: null, summaryPath: null, plansDirPath: null },
-          }));
+          // node's human checkpoint. Stamp its scale-tiered coding model (auto, unless overridden).
+          next.root = replaceAt(next.root, event.path, (n) =>
+            stampAuto(
+              {
+                ...n,
+                state: { stage: "leaf", phase: "drafting", planPath: null, summaryPath: null, plansDirPath: null },
+              },
+              codingModelForScale(event.outcome.scale),
+            ),
+          );
         }
       } else {
         // SPLIT (or low-confidence single treated as one) → the decomposition draft turn, at ANY
@@ -414,9 +470,11 @@ export function reduce2(
       // open/pending, held until the gate resolves. The node STAYS open: every split phase requires
       // child activity the held-gate window cannot have (assertCoherent2's exactly-one-active rule),
       // so the open→split replacement happens at DECOMPOSITION_APPROVED, not here.
+      // Children INHERIT the splitting parent's execution_model as a provisional auto value (each is
+      // superseded when it sizes). `node` is the parent being decomposed.
       next.parsedChildren = {
         path: event.path,
-        children: nonEmpty(event.children.map((c) => makeNode2(c.nn, c.title))),
+        children: nonEmpty(event.children.map((c) => makeNode2(c.nn, c.title, node.execution_model ?? null))),
       };
       effects.push({ kind: "persist" });
       break;
@@ -443,17 +501,24 @@ export function reduce2(
       const children = nonEmpty(
         stash.children.map((c, i): TreeNode => (i === 0 ? { ...c, state: { stage: "open", phase: "recon" } } : c)),
       );
-      next.root = replaceAt(next.root, event.path, (n) => ({
-        ...n,
-        state: {
-          stage: "split",
-          phase: "running-children",
-          children,
-          planPath: gate ? gate.planPath : null,
-          summaryPath: null,
-          plansDirPath: gate ? gate.plansDirPath : null,
-        },
-      }));
+      // The node becomes a split (decomposition) → stamp the Opus decomposition model (auto, unless
+      // the user overrode it).
+      next.root = replaceAt(next.root, event.path, (n) =>
+        stampAuto(
+          {
+            ...n,
+            state: {
+              stage: "split",
+              phase: "running-children",
+              children,
+              planPath: gate ? gate.planPath : null,
+              summaryPath: null,
+              plansDirPath: gate ? gate.plansDirPath : null,
+            },
+          },
+          decompositionModel(),
+        ),
+      );
       next.parsedChildren = null;
       next.pendingApproval = null;
       // The APPROVE effect shape, unified onto the decomposition gate: resolve-allow + persist.
@@ -785,7 +850,10 @@ export function reduce2(
         const children = nonEmpty(
           n.state.children.map((c): TreeNode => {
             if (!resetSegs.includes(c.nn)) return c;
-            const fresh = makeNode2(c.nn, c.title);
+            // RESET-TO-INHERITED-AUTO (deliberate): the re-mint discards the prior node's
+            // execution_model/model_source and re-inherits the parent split's model provisionally, so
+            // a refined sub-plan re-triages from scratch (any prior override is dropped by design).
+            const fresh = makeNode2(c.nn, c.title, n.execution_model ?? null);
             return c.nn === targetSeg
               ? { ...fresh, state: { stage: "open", phase: "recon" } }
               : fresh;
@@ -796,6 +864,24 @@ export function reduce2(
       // BACK TO EXECUTING: clear the held gate (no verdict recorded — acceptance_ stays absent). The
       // re-executed nodes will eventually re-arm the gate at root re-completion.
       next.pendingAcceptance = null;
+      effects.push({ kind: "persist" });
+      break;
+    }
+
+    case "EXECUTION_MODEL_SET": {
+      // USER OVERRIDE: stamp the target node's execution_model + model_source:"override" (re-triage
+      // never clobbers an override), then re-derive inherited-auto models for still-`open` descendants
+      // (already-sized leaf/split descendants keep their own stage triage — usually a no-op). NOT
+      // active-node-scoped: the picker may target ANY node (validate the path exists via nodeAtPath).
+      if (!nodeAtPath(next.root, event.path)) {
+        throw new Error(`EXECUTION_MODEL_SET illegal: no node at "${pathKey(event.path)}"`);
+      }
+      next.root = replaceAt(next.root, event.path, (n) =>
+        retriageOpenDescendants(
+          { ...n, execution_model: event.options, model_source: "override" },
+          event.options,
+        ),
+      );
       effects.push({ kind: "persist" });
       break;
     }

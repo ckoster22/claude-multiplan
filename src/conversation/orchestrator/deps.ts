@@ -2,6 +2,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { resolveModelOptions } from "../../model-picker";
+import type { ModelOptions } from "../../model-picker";
 import { resolveAutoResumeBudget } from "../../auto-resume-setting";
 import type { AttachedImage } from "../images";
 import type { WritePolicy } from "../plan-tree";
@@ -13,12 +14,22 @@ export interface OrchestratorDeps {
   // start_agent_session({ cwd, permissionMode, resumeSessionId? }). `resumeSessionId` (camelCase →
   // Rust `resume_session_id` → sidecar `"resume"`) is omitted when undefined ⇒ fresh session. start()
   // never passes it; resume() passes state.sdk_session_id (undefined → fresh expired-transcript path).
-  startSession(args: { cwd: string; permissionMode: string; resumeSessionId?: string }): Promise<void>;
+  // `execution` is the per-phase EFFECTIVE model the active node opens the session with (E1). When
+  // present it wins over the global header picker; absent ⇒ the adapter falls back to
+  // resolveModelOptions() (key-omission intact — never sends effort: undefined).
+  startSession(args: {
+    cwd: string;
+    permissionMode: string;
+    resumeSessionId?: string;
+    execution?: ModelOptions;
+  }): Promise<void>;
   // send_agent_message({ text }) — or { text, images } for the multimodal first-turn send. `images`
   // is omitted when empty: every text-only send forwards the byte-identical `{ text }` shape.
   sendMessage(text: string, images?: AttachedImage[]): Promise<void>;
   // set_agent_permission_mode({ mode }) — only the two derived write policies are ever asserted.
   setMode(mode: WritePolicy): Promise<void>;
+  // set_agent_model({ model }) — mid-session model switch on the live SDK session (sibling of setMode).
+  setModel(model: string): Promise<void>;
   // resolve_tool_permission({ id, allow, message?, updatedInput? })
   resolvePermission(args: {
     id: string;
@@ -75,10 +86,17 @@ export interface OrchestratorDeps {
   // this so the user can exercise the baseline against the build. OPTIONAL; absent ⇒ the gate still
   // surfaces, just without the "open baseline" step.
   openBaseline?(cwd: string, path: string): Promise<void>;
-  // write_agent_plan({ plan, treeId, nn }) -> the absolute path written. `nnPath` is null for the
-  // root decomposition plan (flavor master), else the node's dotted PathKey string ("01", "02.01", …).
-  // Rust takes Option<String> and REJECTS a bare JSON number — callers must send the string form.
-  writeAgentPlan(plan: string, treeId: string, nnPath: string | null): Promise<string>;
+  // write_agent_plan({ plan, treeId, nn, executionModel }) -> the absolute path written. `nnPath` is
+  // null for the root decomposition plan (flavor master), else the node's dotted PathKey string
+  // ("01", "02.01", …). Rust takes Option<String> and REJECTS a bare JSON number — callers must send
+  // the string form. `executionModel` is the node's triaged {model, effort} (Phase D); absent/null ⇒
+  // no execution_model frontmatter (legacy fallback preserved).
+  writeAgentPlan(
+    plan: string,
+    treeId: string,
+    nnPath: string | null,
+    executionModel?: ModelOptions | null,
+  ): Promise<string>;
   // INJECTABLE TIMER SEAM (optional — defaults to the global timers): the resume watchdog schedules
   // through these so tests fire/inspect it without sleeping. The handle type is opaque (`unknown`)
   // so DOM-number and Node-Timeout environments both fit.
@@ -116,7 +134,9 @@ export function defaultDeps(): OrchestratorDeps {
         // RESUME: forward `resumeSessionId` only when present (key-omission otherwise, so a
         // fresh start never sends `resumeSessionId: undefined`). Rust maps it to `resume_session_id`.
         ...(args.resumeSessionId !== undefined ? { resumeSessionId: args.resumeSessionId } : {}),
-        ...resolveModelOptions(),
+        // Per-phase effective model wins when the caller passes it; absent ⇒ the global header
+        // picker. Both go through the key-omission builders, so a missing effort is a missing key.
+        ...(args.execution ?? resolveModelOptions()),
       }).then(() => undefined),
     sendMessage: (text, images) =>
       invoke(
@@ -124,6 +144,7 @@ export function defaultDeps(): OrchestratorDeps {
         images && images.length ? { text, images } : { text },
       ).then(() => undefined),
     setMode: (mode) => invoke("set_agent_permission_mode", { mode }).then(() => undefined),
+    setModel: (model) => invoke("set_agent_model", { model }).then(() => undefined),
     resolvePermission: (args) =>
       invoke("resolve_tool_permission", {
         id: args.id,
@@ -148,8 +169,13 @@ export function defaultDeps(): OrchestratorDeps {
     ensureBaselineDir: (cwd) => invoke<string>("ensure_baseline_dir", { cwd }),
     freezeBaseline: (cwd) => invoke<string>("freeze_baseline", { cwd }),
     openBaseline: (cwd, path) => invoke("open_baseline", { cwd, path }).then(() => undefined),
-    writeAgentPlan: (plan, treeId, nnPath) =>
-      invoke<string>("write_agent_plan", { plan, treeId, nn: nnPath }),
+    writeAgentPlan: (plan, treeId, nnPath, executionModel) =>
+      invoke<string>("write_agent_plan", {
+        plan,
+        treeId,
+        nn: nnPath,
+        executionModel: executionModel ?? null,
+      }),
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     now: () => Date.now(),

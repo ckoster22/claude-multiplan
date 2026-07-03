@@ -56,6 +56,7 @@ const handle: OrchestratorHandle = {
   approve: noopAsync,
   requestChanges: noopAsync,
   answerClarify: noopAsync,
+  setExecutionModel: noopAsync,
   approvePrototype: noopAsync,
   refinePrototype: noopAsync,
   approveAcceptance: noopAsync,

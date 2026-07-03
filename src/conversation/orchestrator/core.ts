@@ -53,6 +53,8 @@ import {
   type PrototypeGate,
   type AcceptanceGate,
 } from "../plan-tree";
+import { phaseModel } from "../plan-tree/triage";
+import type { ModelOptions } from "../../model-picker";
 import type {
   AgentStream,
   AskUserQuestionAnswers,
@@ -93,6 +95,16 @@ import type { OrchestratorHandle, OrchestratorObserver, Mandate } from "./types"
 // a compile-time error — and, defensively at runtime, throws.
 function assertNever(x: never): never {
   throw new Error(`unreachable discriminant: ${String(x)}`);
+}
+
+// The EFFECTIVE model a node's live turn runs with: an explicit user override (model_source
+// "override") pins the node's stamped execution_model; otherwise the domain-aware phaseModel for the
+// node's current (stage, phase). Both the session-open boundaries (E1) and the per-turn model seam
+// (E3) resolve through THIS single helper so the opened model and the asserted model can never drift.
+function effectiveModel(node: TreeNode): ModelOptions {
+  return node.model_source === "override" && node.execution_model
+    ? node.execution_model
+    : phaseModel(node).options;
 }
 
 // Legacy handlers (main.ts, index.ts) don't hold the handle but must know whether an orchestration
@@ -239,6 +251,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // DERIVED WRITE POLICY cache: the last permission mode the driver knows the session is in (null =
     // unknown, forcing a re-assert). Mode is a PURE function of the ledger; this only avoids redundant setMode.
     assertedPolicy: WritePolicy | null;
+    // DERIVED MODEL cache: the last model the driver knows the live session is on (null = unknown,
+    // forcing a re-assert). The model is a PURE function of the active node's (stage, phase) + override
+    // (effectiveModel); this only avoids redundant setModel. Twin of assertedPolicy.
+    assertedModel: string | null;
     // TURN WATCHDOG handle (one shared slot — one turn in flight): armed alongside every resuming hold
     // AND every summary/parent-review/intent turn; a missing result drives a LOUD terminal FATAL.
     turnWatchdog: unknown;
@@ -269,6 +285,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       resumedGate: false,
       adjustNote: null,
       assertedPolicy: "plan",
+      assertedModel: null,
       turnWatchdog: null,
       quotaPause: null,
       quotaPausePending: false,
@@ -699,6 +716,23 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         await deps.setMode(policy);
         run.assertedPolicy = policy;
       }
+      // DERIVED MODEL (the model twin of the policy seam, kept AFTER it to match the startSession
+      // open order — setMode then setModel; both are idempotent caches). The live session's model
+      // tracks the ACTIVE node's pipeline DOMAIN via effectiveModel (override-aware): Sonnet recon →
+      // Opus sizing/decompose/draft → the leaf's scale-tiered coding model at leaf-execute. Re-asserted
+      // whenever the effective model differs from the cache. When there is no active node (the
+      // acceptance/terminal window ⇒ activePathOf null) the session stays on its last model — skip.
+      // INVARIANT[asserted-model-is-a-pure-ledger-cache] (runtime-guard): the live session model is a pure function of the active node's (stage, phase) + override (effectiveModel); run.assertedModel is only a cache, re-asserted when it differs.
+      //   prevents: a phase running on the wrong (stale) model after the active node advanced
+      const ap = activePathOf(next.root);
+      const activeNode = ap ? nodeAtPath(next.root, ap) : null;
+      if (activeNode) {
+        const m = effectiveModel(activeNode).model;
+        if (m !== run.assertedModel) {
+          await deps.setModel(m);
+          run.assertedModel = m;
+        }
+      }
     }
     emitSnapshot(toSnapshot2(next));
   };
@@ -1006,10 +1040,17 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       "path" in pause.awaitingVariant
         ? (pause.awaitingVariant.path as NodePath)
         : ([] as NodePath);
+    // Re-open on the captured node's effective model (same node the resumed turn continues on). Null
+    // node (torn/absent path) ⇒ omit execution, falling back to the global picker. Prime assertedModel
+    // to this SAME value so the QUOTA_RESUMED dispatch's model seam fires no redundant setModel (null
+    // captured node leaves the cache untouched-null, deferring to the seam).
+    const capturedNode = state ? nodeAtPath(state.root, capturedPath) : null;
+    run.assertedModel = capturedNode ? effectiveModel(capturedNode).model : null;
     await deps.startSession({
       cwd: run.cwd,
       permissionMode: policy,
       ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
+      ...(capturedNode ? { execution: effectiveModel(capturedNode) } : {}),
     });
     await deps.sendMessage(quotaResumePrompt(pause.awaitingVariant, capturedPath));
     await dispatch({ type: "QUOTA_RESUMED", nowMs: nowFn() });
@@ -1295,7 +1336,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           diag(
             `sizer: no parseable single/split SIZER decision — COERCING to split. buffer head: ${JSON.stringify(sizerBuffer.slice(0, 200))}`,
           );
-          sizer = { decision: "split", confidence: 0, num_plans: 0 };
+          sizer = { decision: "split", confidence: 0, num_plans: 0, scale: "standard" };
         }
         // EXHAUSTIVE dispatch over the sizer decision (each case returns; trailing assertNever makes a
         // missing case a compile error). The reducer enforces the confidence threshold; the driver
@@ -1590,7 +1631,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         diag(
           `master-write: path=writeAgentPlan tree_id=${st.tree_id} nn=${decompNn ?? "null"} flavor=${decompNn === null ? "master" : "sub"} node=${node.state.stage}/${node.state.phase}`,
         );
-        const masterPath = await deps.writeAgentPlan(plan, st.tree_id, decompNn);
+        const masterPath = await deps.writeAgentPlan(plan, st.tree_id, decompNn, node.execution_model ?? null);
         diag(`master-write: wrote -> ${masterPath}`);
         // Child paths are minted as [...parentPath, parseNn(headerNn)] — the header NN is the PER-LEVEL
         // segment; the full dotted id derives from nesting. The mandate map stays keyed by full
@@ -1651,7 +1692,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         diag(
           `sub-write: path=writeAgentPlan tree_id=${st.tree_id} nn=${nnPath ?? "null"} flavor=${nnPath === null ? "master (root-single)" : "sub"} node=${node.state.stage}/${node.state.phase}`,
         );
-        const realPath = await deps.writeAgentPlan(plan, st.tree_id, nnPath);
+        const realPath = await deps.writeAgentPlan(plan, st.tree_id, nnPath, node.execution_model ?? null);
         diag(`sub-write: wrote -> ${realPath}`);
         await dispatch({
           type: "NODE_DRAFTED",
@@ -2176,6 +2217,20 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // set-permission-mode is dropped). The first real assert is "plan" at the
       // INTENT_CLARIFIED/PROTOTYPE_APPROVED boundary, when the session is live.
       run.assertedPolicy = "prototype";
+      // MODEL TWIN of the policy prime: the START dispatch below runs the model seam with active===true
+      // while the driver is NOT open yet, so an unprimed null vs the genesis-phase model would fire
+      // setModel on a not-yet-live session (Err → fatal). Prime the cache to the genesis root's
+      // effective model — the genesis root is ALWAYS open/clarifying-intent (⇒ Sonnet), so this equals
+      // what E1 opens the session with below (effectiveModel of the post-START genesis root). Computed
+      // off a genesis-shaped node (mirroring dispatch's START base) because the real root does not exist
+      // until the dispatch, exactly as assertedPolicy is primed to the literal genesis policy.
+      run.assertedModel = effectiveModel({
+        nn: parseNn(1),
+        title: run.request,
+        redraftCount: 0,
+        lastFeedback: null,
+        state: { stage: "open", phase: "clarifying-intent" },
+      }).model;
       active = true;
       activeOrchestrator = handle;
       // wire the wake seam for the lifetime of the run (torn down at markTerminal). A
@@ -2204,7 +2259,14 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // Open the single SDK session in the derived genesis policy ("prototype" — see the
         // assertedPolicy note above), then send the INTENT prompt and arm "intent" so the first
         // turn-completion `result` advances the sequencer (intent → recon/prototype-review → …).
-        await deps.startSession({ cwd: run.cwd, permissionMode: "prototype" });
+        // Open on the genesis node's EFFECTIVE model (root at clarifying-intent ⇒ Sonnet/high via
+        // phaseModel). E3 will prime run.assertedModel to this SAME value so the first dispatch's
+        // model seam fires no setModel on the not-yet-live driver.
+        await deps.startSession({
+          cwd: run.cwd,
+          permissionMode: "prototype",
+          execution: effectiveModel(requireState().root),
+        });
         // VISUAL MODE: pre-create <cwd>/.plan-tree/prototype/ BEFORE the intent prompt goes out —
         // the sidecar's "prototype" policy only allows writes UNDER the dir (it cannot mkdir it),
         // and the prompt tells the clarifier the dir already exists. Optional dep (older fakes):
@@ -2290,6 +2352,14 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // redundant setMode (and a pre-send setMode can't race a not-yet-live session).
       const policy = writePolicyFor2(state.root);
       run.assertedPolicy = policy;
+      // MODEL TWIN of the policy prime: the first post-resume dispatch runs the model seam with
+      // active===true. Resolve the resumed ACTIVE node ONCE (reused to OPEN the session at E1 below so
+      // the opened model and the primed cache are byte-identical) and prime the cache to its effective
+      // model. A null active path (acceptance/terminal window) leaves the cache null — the session opens
+      // on the global picker and the seam sets the model once a node is active.
+      const resumeActiveNode =
+        activeForProbe !== null ? nodeAtPath(state.root, activeForProbe) : null;
+      run.assertedModel = resumeActiveNode ? effectiveModel(resumeActiveNode).model : null;
       active = true;
       activeOrchestrator = handle;
       // wire the wake seam for the resumed run too (a resumed run can hit a quota wall).
@@ -2305,10 +2375,14 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // Open the single SDK session in the derived policy, RESUMING the prior transcript. A missing/
         // undefined sdk_session_id ⇒ the dep omits resumeSessionId ⇒ a fresh session (the sidecar's
         // expired-transcript fallback emits a non-fatal resume_fallback frame and runs the step fresh).
+        // Open on the resumed ACTIVE node's effective model (resumeActiveNode, resolved above and
+        // primed onto assertedModel). Null active path (acceptance/terminal window) ⇒ omit execution,
+        // falling back to the global picker.
         await deps.startSession({
           cwd: run.cwd,
           permissionMode: policy,
           ...(state.sdk_session_id !== undefined ? { resumeSessionId: state.sdk_session_id } : {}),
+          ...(resumeActiveNode ? { execution: effectiveModel(resumeActiveNode) } : {}),
         });
         // Continue from the resolved phase: re-present the gate (no prompt) or re-send the step.
         await resumeActionForPhase(scope.plan);
@@ -2736,6 +2810,14 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       run.quotaPause.priorExited = true;
       diag("notifyAgentExit: prior paused session exited; re-checking deferred resume");
       void enqueueIngest(() => fireResume());
+    },
+
+    setExecutionModel: async (path, options) => {
+      // Thin pass-through to the reducer's override event (mirrors approvePrototype → resolveApprove →
+      // dispatch): the reducer stamps execution_model + model_source "override" and emits `persist`; the
+      // funnel emits the fresh snapshot the sidebar badge / picker re-render off. No turn is in flight to
+      // interrupt — a model override never touches the running session.
+      await dispatch({ type: "EXECUTION_MODEL_SET", path, options });
     },
 
     dispatch: (event) => dispatch(event),

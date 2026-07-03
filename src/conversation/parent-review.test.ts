@@ -84,7 +84,7 @@ function rootSplit(n: number): PlanTreeState2 {
     { type: "START", treeId: "t5", request: "r", nowMs: 1 },
     { type: "INTENT_CLARIFIED", intent: "i" },
     { type: "NODE_RECON_DONE", path: [] },
-    { type: "SIZER_DONE", path: [], outcome: { decision: "split", confidence: 0.9, num_plans: n } },
+    { type: "SIZER_DONE", path: [], outcome: { decision: "split", confidence: 0.9, num_plans: n, scale: "standard" } },
     { type: "DECOMPOSITION_DRAFTED", path: [], planPath: "/pt/m.md", plansDirPath: "/plans/m.md", toolUseId: "m" },
     {
       type: "CHILDREN_PARSED",
@@ -98,7 +98,7 @@ function rootSplit(n: number): PlanTreeState2 {
 function leafCycle(path: NodePath, tag: string): PlanTreeEvent2[] {
   return [
     { type: "NODE_RECON_DONE", path },
-    { type: "SIZER_DONE", path, outcome: { decision: "single", confidence: 0.9, num_plans: 1 } },
+    { type: "SIZER_DONE", path, outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" } },
     { type: "NODE_DRAFTED", path, toolUseId: `tu-${tag}`, planPath: `/p/${tag}.md`, plansDirPath: `/d/${tag}` },
     { type: "APPROVE", path },
     { type: "EXEC_DONE", path },
@@ -186,7 +186,7 @@ describe("PHASE 5 — reducer: the reviewing window", () => {
     let s2 = run2(rootSplit(2), [...leafCycle(p(1), "01"), { type: "PARENT_REVIEW_DONE", path: [], note: null }]);
     s2 = run2(s2, [
       { type: "NODE_RECON_DONE", path: p(2) },
-      { type: "SIZER_DONE", path: p(2), outcome: { decision: "split", confidence: 0.9, num_plans: 2 } },
+      { type: "SIZER_DONE", path: p(2), outcome: { decision: "split", confidence: 0.9, num_plans: 2, scale: "standard" } },
       { type: "DECOMPOSITION_DRAFTED", path: p(2), planPath: "/pt/02.md", plansDirPath: "/plans/02.md", toolUseId: "d2" },
       { type: "CHILDREN_PARSED", path: p(2), children: [{ nn: nnOf(1), title: "A" }, { nn: nnOf(2), title: "B" }] },
       { type: "DECOMPOSITION_APPROVED", path: p(2) },
@@ -206,7 +206,7 @@ describe("PHASE 5 — reducer: the reviewing window", () => {
     let s = run2(rootSplit(2), [...leafCycle(p(1), "01"), { type: "PARENT_REVIEW_DONE", path: [], note: null }]);
     s = run2(s, [
       { type: "NODE_RECON_DONE", path: p(2) },
-      { type: "SIZER_DONE", path: p(2), outcome: { decision: "split", confidence: 0.9, num_plans: 1 } },
+      { type: "SIZER_DONE", path: p(2), outcome: { decision: "split", confidence: 0.9, num_plans: 1, scale: "standard" } },
       { type: "DECOMPOSITION_DRAFTED", path: p(2), planPath: "/pt/02.md", plansDirPath: "/plans/02.md", toolUseId: "d2" },
       { type: "CHILDREN_PARSED", path: p(2), children: [{ nn: nnOf(1), title: "Only" }] },
       { type: "DECOMPOSITION_APPROVED", path: p(2) },
@@ -342,6 +342,7 @@ function makeDeps(): Rec {
     startSession: vi.fn(async () => {}),
     sendMessage: vi.fn(async (t: string) => void sends.push(t)),
     setMode: vi.fn(async () => {}),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async (a: { id: string; allow: boolean; message?: string }) =>
       void resolves.push({ id: a.id, allow: a.allow, message: a.message }),
     ),

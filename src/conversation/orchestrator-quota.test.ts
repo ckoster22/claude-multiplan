@@ -148,6 +148,7 @@ function makeDeps(
       rec.sendMessage.push(text);
     }),
     setMode: vi.fn(async () => {}),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async () => {}),
     cancelRun: vi.fn(async () => {}),
     interrupt: vi.fn(async () => {}),

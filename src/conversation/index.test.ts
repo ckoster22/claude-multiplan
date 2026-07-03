@@ -1635,6 +1635,7 @@ describe("controller — §2 live bridge forwards frames to the orchestrator onl
         void text;
       },
       setMode: async () => {},
+      setModel: async () => {},
       resolvePermission: async () => {},
       cancelRun: async () => {},
       interrupt: async () => {},

@@ -34,8 +34,13 @@ const nnOf = (n: number) => parseNn(n);
 const p = (...ns: number[]): NodePath => ns.map(nnOf);
 const fileOf = (s: string) => s as PlanTreeFilePath;
 
-function sizer(decision: SizerOutcome["decision"], num_plans: number, confidence = 0.9): SizerOutcome {
-  return { decision, confidence, num_plans };
+function sizer(
+  decision: SizerOutcome["decision"],
+  num_plans: number,
+  confidence = 0.9,
+  scale: SizerOutcome["scale"] = "standard",
+): SizerOutcome {
+  return { decision, confidence, num_plans, scale };
 }
 
 function blank2(): PlanTreeState2 {

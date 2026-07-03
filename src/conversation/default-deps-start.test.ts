@@ -68,6 +68,22 @@ describe("defaultDeps().startSession forwards the resolved picker model/effort t
     });
   });
 
+  it("forwards the sonnet-5 preset's model + effort (falsifies the roster rename)", async () => {
+    // Persist the renamed sonnet preset: a stale "claude-sonnet-4-6" model in
+    // PRESET_OPTIONS["sonnet-5"] would surface here as the wrong wire arg.
+    localStorage.setItem(MODEL_PRESET_KEY, "sonnet-5");
+
+    const deps = defaultDeps();
+    await deps.startSession({ cwd: "/tmp/proj", permissionMode: "plan" });
+
+    expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
+      cwd: "/tmp/proj",
+      permissionMode: "plan",
+      model: "claude-sonnet-5",
+      effort: "medium",
+    });
+  });
+
   it("falls back to the default preset (Opus 4.8 / high) when nothing is persisted", async () => {
     // Opus's effort resolves from the global plan-reader-opus-effort key (default
     // "high"); an empty store resolves Opus → effort "high".
@@ -79,6 +95,78 @@ describe("defaultDeps().startSession forwards the resolved picker model/effort t
       permissionMode: "plan",
       model: "claude-opus-4-8",
       effort: "high",
+    });
+  });
+
+  it("an explicit per-phase execution model WINS over the persisted global preset (E1)", async () => {
+    // Persist a global preset that MUST be ignored when the caller supplies `execution`: a wrong
+    // adapter (`...resolveModelOptions()` ignoring args.execution) would surface the opus preset here.
+    localStorage.setItem(MODEL_PRESET_KEY, "opus-4-8");
+
+    const deps = defaultDeps();
+    await deps.startSession({
+      cwd: "/tmp/proj",
+      permissionMode: "plan",
+      execution: { model: "claude-fable-5", effort: "low" },
+    });
+
+    // FALSIFY: revert the adapter to `...resolveModelOptions()` (ignoring args.execution) → the wire
+    // carries the opus global preset, not fable → RED.
+    expect(invokeMock).toHaveBeenCalledWith("start_agent_session", {
+      cwd: "/tmp/proj",
+      permissionMode: "plan",
+      model: "claude-fable-5",
+      effort: "low",
+    });
+  });
+
+  it("an explicit execution with NO effort omits the effort key (key-omission preserved)", async () => {
+    const deps = defaultDeps();
+    await deps.startSession({
+      cwd: "/tmp/proj",
+      permissionMode: "plan",
+      execution: { model: "claude-sonnet-5" },
+    });
+
+    // The forwarded args must lack an `effort` key entirely — never `effort: undefined`.
+    const call = invokeMock.mock.calls.find((c) => c[0] === "start_agent_session");
+    expect(call?.[1]).toEqual({
+      cwd: "/tmp/proj",
+      permissionMode: "plan",
+      model: "claude-sonnet-5",
+    });
+    expect(call?.[1] as object).not.toHaveProperty("effort");
+  });
+});
+
+describe("defaultDeps().writeAgentPlan forwards the node's triaged execution model (Phase D)", () => {
+  beforeEach(() => invokeMock.mockClear());
+
+  it("forwards executionModel:{model, effort} to write_agent_plan", async () => {
+    const deps = defaultDeps();
+    await deps.writeAgentPlan("# plan\n", "tree-1", "01", {
+      model: "claude-sonnet-5",
+      effort: "medium",
+    });
+
+    // FALSIFY: drop the 4th-arg forwarding in the adapter → executionModel absent/null → RED.
+    expect(invokeMock).toHaveBeenCalledWith("write_agent_plan", {
+      plan: "# plan\n",
+      treeId: "tree-1",
+      nn: "01",
+      executionModel: { model: "claude-sonnet-5", effort: "medium" },
+    });
+  });
+
+  it("sends executionModel:null when the node carries no model (legacy fallback)", async () => {
+    const deps = defaultDeps();
+    await deps.writeAgentPlan("# master\n", "tree-1", null);
+
+    expect(invokeMock).toHaveBeenCalledWith("write_agent_plan", {
+      plan: "# master\n",
+      treeId: "tree-1",
+      nn: null,
+      executionModel: null,
     });
   });
 });

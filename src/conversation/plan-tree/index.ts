@@ -10,7 +10,7 @@
 // ids → reduce back-edge). It stays in the VALUE group (a class) so `instanceof` keeps working.
 
 export { parseNn, pathKey, parsePathKey, nonEmpty, PlanValidationError } from "./ids";
-export { nodeAtPath, activePathOf, inRollupWindow, inAcceptanceWindow, isRootCollapseChild } from "./nav";
+export { nodeAtPath, resolveNodeByNnPath, activePathOf, inRollupWindow, inAcceptanceWindow, isRootCollapseChild } from "./nav";
 export { assertCoherent2 } from "./coherence";
 export { toLedger2, toSnapshot2, treeIsDone, writePolicyFor2, summaryName2, planName2, activePhaseLabel } from "./select";
 export { parseSizerDecision } from "./parse";

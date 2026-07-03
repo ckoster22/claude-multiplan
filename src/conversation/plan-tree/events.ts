@@ -5,6 +5,7 @@
 // shapes).
 
 import type { AskUserQuestionItem, AskUserQuestionAnswers } from "../types";
+import type { ModelOptions } from "../../model-picker";
 import type { Nn, NodePath, PlanTreeFilePath } from "./ids";
 import type { SizerOutcome, PrototypeGate, ApprovalGate2, AcceptanceGate } from "./model";
 
@@ -77,6 +78,11 @@ export type PlanTreeEvent2 =
   // re-completion (baseline_ present, acceptance_ absent) the gate RE-ARMS. Clears
   // pendingAcceptance, records NO verdict. Legal ONLY while the gate is open; else throws.
   | { type: "ACCEPTANCE_REFINED"; target: NodePath }
+  // USER MODEL OVERRIDE (03's picker dispatches this). Stamps the target node's execution_model +
+  // model_source:"override" so re-triage never clobbers it, then re-derives inherited-auto models for
+  // still-`open` descendants. May address ANY node (not just the active one) — the picker can
+  // pre-set a not-yet-active node's model. Emits persist.
+  | { type: "EXECUTION_MODEL_SET"; path: NodePath; options: ModelOptions }
   | { type: "CLARIFY_REQUESTED"; toolUseId: string; questions: AskUserQuestionItem[] }
   | { type: "CLARIFY_ANSWERED"; toolUseId: string; answers: AskUserQuestionAnswers }
   // SESSION-CAPTURE ARC (resume support): the SDK session_id arrived on the system_init frame. NOT a

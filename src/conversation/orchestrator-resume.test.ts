@@ -185,6 +185,7 @@ function makeDeps(
       rec.calls.push(`setMode:${mode}`);
       rec.setMode.push(mode);
     }),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async (args) => {
       rec.calls.push(`resolvePermission:${args.id}:${args.allow}`);
       rec.resolvePermission.push({ id: args.id, allow: args.allow, message: args.message });

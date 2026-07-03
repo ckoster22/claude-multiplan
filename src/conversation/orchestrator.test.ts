@@ -210,6 +210,7 @@ function makeDeps(): { deps: OrchestratorDeps; rec: Recorded } {
       rec.calls.push(`setMode:${mode}`);
       rec.setMode.push(mode);
     }),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async (args) => {
       rec.calls.push(`resolvePermission:${args.id}:${args.allow}:${args.message ?? ""}`);
       rec.resolvePermission.push({
@@ -1532,7 +1533,7 @@ async function dispatchSplitPrologue(h: OrchestratorHandle, titles: string[]): P
   await dispatch({
     type: "SIZER_DONE",
     path: [],
-    outcome: { decision: "split", confidence: 0.9, num_plans: titles.length },
+    outcome: { decision: "split", confidence: 0.9, num_plans: titles.length, scale: "standard" },
   });
   await dispatch({
     type: "DECOMPOSITION_DRAFTED",
@@ -1570,7 +1571,7 @@ describe("orchestrator — full split-of-3 run", () => {
       await dispatch({
         type: "SIZER_DONE",
         path: [nn],
-        outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
+        outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" },
       });
       // The draft lands through the REAL interactive path (the DRIVER is the single
       // authoritative plan writer — Effect2 has no writeAgentPlan kind, so a raw NODE_DRAFTED
@@ -1671,7 +1672,7 @@ describe("orchestrator — full split-of-3 run", () => {
       await dispatch({
         type: "SIZER_DONE",
         path: [nn],
-        outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
+        outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" },
       });
       expectedPersists++;
       await dispatch({
@@ -1949,7 +1950,7 @@ describe("orchestrator — requestChanges mid-run", () => {
     await dispatch({
       type: "SIZER_DONE",
       path: [nnOf(1)],
-      outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
+      outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" },
     });
     await dispatch({
       type: "NODE_DRAFTED",
@@ -2005,7 +2006,7 @@ describe("orchestrator — cancel purges a held approval", () => {
     await dispatch({
       type: "SIZER_DONE",
       path: [nnOf(1)],
-      outcome: { decision: "single", confidence: 0.9, num_plans: 1 },
+      outcome: { decision: "single", confidence: 0.9, num_plans: 1, scale: "standard" },
     });
     await dispatch({
       type: "NODE_DRAFTED",
@@ -2050,7 +2051,14 @@ describe("orchestrator — bootstrap + idempotent no-op", () => {
 
     // Opened the SDK session in the derived GENESIS policy ("prototype": the root opens in
     // clarifying-intent — start() carries the mode so no pre-start setMode is needed).
-    expect(rec.startSession).toEqual([{ cwd: "/work", permissionMode: "prototype" }]);
+    // The genesis node (root at clarifying-intent) opens on its phase-effective model: Sonnet/high.
+    expect(rec.startSession).toEqual([
+      {
+        cwd: "/work",
+        permissionMode: "prototype",
+        execution: { model: "claude-sonnet-5", effort: "high" },
+      },
+    ]);
     // Sent exactly one message: the INTENT prompt (the opening turn now), naming the intent-clarifier
     // subagent + the request. (Recon follows intent, so the scope-recon prompt is NOT the first send.)
     expect(rec.sendMessage).toHaveLength(1);
@@ -3963,8 +3971,16 @@ describe("orchestrator — every terminal path ends the SDK session (fresh sessi
     const again = await h.start({ cwd: "/work", request: "second plan" });
     expect(again).toBe(true);
     expect(rec.startSession).toEqual([
-      { cwd: "/work", permissionMode: "prototype" },
-      { cwd: "/work", permissionMode: "prototype" },
+      {
+        cwd: "/work",
+        permissionMode: "prototype",
+        execution: { model: "claude-sonnet-5", effort: "high" },
+      },
+      {
+        cwd: "/work",
+        permissionMode: "prototype",
+        execution: { model: "claude-sonnet-5", effort: "high" },
+      },
     ]);
 
     // ORDERED trace: the old session's end strictly precedes the new session's start — the new

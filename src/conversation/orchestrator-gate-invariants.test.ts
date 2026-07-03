@@ -66,6 +66,7 @@ function makeDeps(): {
     startSession: vi.fn(async () => {}),
     sendMessage: vi.fn(async (t: string) => void sends.push(t)),
     setMode: vi.fn(async () => {}),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async () => {}),
     cancelRun: vi.fn(async () => {}),
     interrupt: vi.fn(async () => {

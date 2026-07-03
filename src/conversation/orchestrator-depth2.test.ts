@@ -87,6 +87,7 @@ function makeDeps(): Rec {
     startSession: vi.fn(async () => {}),
     sendMessage: vi.fn(async (t: string) => void sends.push(t)),
     setMode: vi.fn(async (m: string) => void setModes.push(m)),
+    setModel: vi.fn(async () => {}),
     resolvePermission: vi.fn(async (a: { id: string; allow: boolean; message?: string }) =>
       void resolves.push({ id: a.id, allow: a.allow, message: a.message }),
     ),

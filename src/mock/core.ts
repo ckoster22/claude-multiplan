@@ -89,6 +89,7 @@ type MockCommand =
       args: { text: string; images?: { media_type: string; data: string }[] };
     }
   | { cmd: "set_agent_permission_mode"; args: { mode: string } }
+  | { cmd: "set_agent_model"; args: { model: string } }
   | {
       cmd: "resolve_tool_permission";
       args: { id: string; allow: boolean; message: string | null; updatedInput?: unknown };
@@ -137,6 +138,7 @@ export const HANDLED_COMMANDS = [
   "start_agent_session",
   "send_agent_message",
   "set_agent_permission_mode",
+  "set_agent_model",
   "resolve_tool_permission",
   "cancel_agent_run",
   "end_agent_session",
@@ -383,6 +385,11 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
       emitStream({ seq: followupSeq++, kind: "mode_change", mode });
       return undefined;
     }
+
+    case "set_agent_model":
+      // Mid-session model switch: no fd-1 output frame (the SDK Query.setModel has no visible
+      // stream effect), so the mock silently accepts it.
+      return undefined;
 
     case "cancel_agent_run":
       // Cancel/Pause interrupts the current turn. Emit a deliberate-interrupt result so the muted

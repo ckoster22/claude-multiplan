@@ -10,7 +10,7 @@ export const MODEL_PRESET_KEY = "plan-reader-model-preset";
 
 // The three preset ids, in display order. `as const` makes this the source of
 // truth for both the runtime membership check and the ModelPreset union.
-export const MODEL_PRESETS = ["opus-4-8", "fable-5", "sonnet-4-6"] as const;
+export const MODEL_PRESETS = ["opus-4-8", "fable-5", "sonnet-5"] as const;
 
 export type ModelPreset = (typeof MODEL_PRESETS)[number];
 
@@ -47,10 +47,39 @@ export interface ModelOptions {
 export const PRESET_OPTIONS: Readonly<Record<ModelPreset, ModelOptions>> = {
   "opus-4-8": { model: "claude-opus-4-8" },
   "fable-5": { model: "claude-fable-5", effort: "low" },
-  "sonnet-4-6": { model: "claude-sonnet-4-6", effort: "medium" },
+  "sonnet-5": { model: "claude-sonnet-5", effort: "medium" },
 };
 
 export const DEFAULT_PRESET: ModelPreset = "opus-4-8";
+
+// Reverse index (concrete model id → preset id) DERIVED from PRESET_OPTIONS, so the model roster has
+// exactly ONE source. The badge/picker helpers below key off it — a new preset in PRESET_OPTIONS
+// flows through with no second list to update.
+const MODEL_ID_TO_PRESET: Readonly<Record<string, ModelPreset>> = Object.fromEntries(
+  (Object.entries(PRESET_OPTIONS) as [ModelPreset, ModelOptions][]).map(([preset, opts]) => [
+    opts.model,
+    preset,
+  ]),
+);
+
+// The badge/segment CSS-class slug for a concrete model id: the preset id's FAMILY (its first
+// hyphen segment — "opus-4-8" → "opus"). Unknown model → null (the caller omits the badge). No new
+// roster: the class is the preset family already encoded in PRESET_OPTIONS' keys.
+export function presetClassForModel(model: string): string | null {
+  const preset = MODEL_ID_TO_PRESET[model];
+  return preset ? preset.split("-")[0] : null;
+}
+
+// The human-facing model name for a concrete model id, derived from its preset id ("opus-4-8" →
+// "Opus 4.8", "sonnet-5" → "Sonnet 5"): capitalize the family, join the version segments with ".".
+// Unknown model → null (the caller falls back to the raw id).
+export function friendlyModelName(model: string): string | null {
+  const preset = MODEL_ID_TO_PRESET[model];
+  if (!preset) return null;
+  const [family, ...version] = preset.split("-");
+  const capital = family.charAt(0).toUpperCase() + family.slice(1);
+  return version.length ? `${capital} ${version.join(".")}` : capital;
+}
 
 // Build a ModelOptions object that applies the key-omission rule: when `effort`
 // is undefined the returned object genuinely lacks the `effort` key (so
@@ -131,6 +160,16 @@ export function resolveModelOptions(
   const resolvedEffort =
     preset === "opus-4-8" ? readStoredEffort(storage) : effort;
   return buildOptions(model, resolvedEffort);
+}
+
+// Resolve the user's global Opus reasoning-effort choice (default "high"). The reading-pane model
+// picker uses this to build a triage-ALIGNED Opus override — mirroring resolveModelOptions' Opus arm
+// — so "override to the already-recommended Opus" stays a genuine no-op. Reuses the same hardened
+// reader (never throws).
+export function resolveOpusEffort(
+  storage: Pick<Storage, "getItem"> | null | undefined = localStorage,
+): EffortLevel {
+  return readStoredEffort(storage);
 }
 
 // Wire the header-bar segmented model/effort picker. Pure & dependency-injected

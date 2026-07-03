@@ -9,6 +9,9 @@ import {
   DEFAULT_EFFORT,
   buildOptions,
   resolveModelOptions,
+  resolveOpusEffort,
+  presetClassForModel,
+  friendlyModelName,
   initModelPicker,
   type ModelPreset,
   type EffortLevel,
@@ -37,14 +40,14 @@ describe("PRESET_OPTIONS table", () => {
       model: "claude-fable-5",
       effort: "low",
     });
-    expect(PRESET_OPTIONS["sonnet-4-6"]).toEqual({
-      model: "claude-sonnet-4-6",
+    expect(PRESET_OPTIONS["sonnet-5"]).toEqual({
+      model: "claude-sonnet-5",
       effort: "medium",
     });
   });
 
   it("lists the three presets in the documented order", () => {
-    expect([...MODEL_PRESETS]).toEqual(["opus-4-8", "fable-5", "sonnet-4-6"]);
+    expect([...MODEL_PRESETS]).toEqual(["opus-4-8", "fable-5", "sonnet-5"]);
   });
 
   it("lists the five effort levels in the documented order, default high", () => {
@@ -105,11 +108,11 @@ describe("resolveModelOptions", () => {
       effort: "low",
     });
     const sonnetStore = fakeStorage({
-      [MODEL_PRESET_KEY]: "sonnet-4-6",
+      [MODEL_PRESET_KEY]: "sonnet-5",
       [EFFORT_KEY]: "max",
     });
     expect(resolveModelOptions(sonnetStore)).toEqual({
-      model: "claude-sonnet-4-6",
+      model: "claude-sonnet-5",
       effort: "medium",
     });
   });
@@ -308,12 +311,12 @@ describe("initModelPicker", () => {
 
     expect(btn(container, "fable-5").classList.contains("active")).toBe(true);
     expect(btn(container, "opus-4-8").classList.contains("active")).toBe(false);
-    expect(btn(container, "sonnet-4-6").classList.contains("active")).toBe(false);
+    expect(btn(container, "sonnet-5").classList.contains("active")).toBe(false);
 
     // aria-pressed must be in lockstep with .active: exactly the active button true.
     expect(btn(container, "fable-5").getAttribute("aria-pressed")).toBe("true");
     expect(btn(container, "opus-4-8").getAttribute("aria-pressed")).toBe("false");
-    expect(btn(container, "sonnet-4-6").getAttribute("aria-pressed")).toBe("false");
+    expect(btn(container, "sonnet-5").getAttribute("aria-pressed")).toBe("false");
   });
 
   it("defaults to opus-4-8 active when storage is empty", () => {
@@ -323,7 +326,7 @@ describe("initModelPicker", () => {
 
     expect(btn(container, "opus-4-8").classList.contains("active")).toBe(true);
     expect(btn(container, "fable-5").classList.contains("active")).toBe(false);
-    expect(btn(container, "sonnet-4-6").classList.contains("active")).toBe(false);
+    expect(btn(container, "sonnet-5").classList.contains("active")).toBe(false);
   });
 
   it("falls back to the default active button for an unknown stored preset", () => {
@@ -339,16 +342,16 @@ describe("initModelPicker", () => {
     const { storage } = rwStorage(); // starts on the opus-4-8 default
     initModelPicker(container, storage);
 
-    btn(container, "sonnet-4-6").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    btn(container, "sonnet-5").dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     // Persistence: exact key + value.
-    expect(storage.setItem).toHaveBeenCalledWith(MODEL_PRESET_KEY, "sonnet-4-6");
+    expect(storage.setItem).toHaveBeenCalledWith(MODEL_PRESET_KEY, "sonnet-5");
     // .active moved to the clicked button and OFF the previously-active default.
-    expect(btn(container, "sonnet-4-6").classList.contains("active")).toBe(true);
+    expect(btn(container, "sonnet-5").classList.contains("active")).toBe(true);
     expect(btn(container, "opus-4-8").classList.contains("active")).toBe(false);
   });
 
-  // FALSIFIABILITY: after clicking sonnet-4-6, the OTHER buttons must NOT be
+  // FALSIFIABILITY: after clicking sonnet-5, the OTHER buttons must NOT be
   // active. If the highlight logic were inverted (e.g. classList.toggle's
   // boolean flipped, marking every non-matching button active), these
   // assertions would go red.
@@ -357,7 +360,7 @@ describe("initModelPicker", () => {
     const { storage } = rwStorage();
     initModelPicker(container, storage);
 
-    btn(container, "sonnet-4-6").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    btn(container, "sonnet-5").dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(btn(container, "opus-4-8").classList.contains("active")).toBe(false);
     expect(btn(container, "fable-5").classList.contains("active")).toBe(false);
@@ -381,10 +384,10 @@ describe("initModelPicker", () => {
       ).length,
     ).toBe(1);
 
-    btn(container, "sonnet-4-6").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    btn(container, "sonnet-5").dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    // After click: aria-pressed moved to sonnet-4-6, off all others.
-    expect(btn(container, "sonnet-4-6").getAttribute("aria-pressed")).toBe("true");
+    // After click: aria-pressed moved to sonnet-5, off all others.
+    expect(btn(container, "sonnet-5").getAttribute("aria-pressed")).toBe("true");
     expect(btn(container, "opus-4-8").getAttribute("aria-pressed")).toBe("false");
     expect(btn(container, "fable-5").getAttribute("aria-pressed")).toBe("false");
     expect(
@@ -408,15 +411,15 @@ describe("initModelPicker", () => {
     initModelPicker(container, storage); // loads on opus-4-8 default
 
     expect(() =>
-      btn(container, "sonnet-4-6").dispatchEvent(
+      btn(container, "sonnet-5").dispatchEvent(
         new MouseEvent("click", { bubbles: true }),
       ),
     ).not.toThrow();
 
     // UI moved despite the persistence failure.
-    expect(btn(container, "sonnet-4-6").classList.contains("active")).toBe(true);
+    expect(btn(container, "sonnet-5").classList.contains("active")).toBe(true);
     expect(btn(container, "opus-4-8").classList.contains("active")).toBe(false);
-    expect(btn(container, "sonnet-4-6").getAttribute("aria-pressed")).toBe("true");
+    expect(btn(container, "sonnet-5").getAttribute("aria-pressed")).toBe("true");
   });
 
   it("ignores clicks that miss a .model-preset (no persist, no change)", () => {
@@ -481,7 +484,7 @@ describe("initModelPicker", () => {
     expect(effortBtn(container, "xhigh").classList.contains("active")).toBe(true);
 
     // Switch to a non-Opus preset → segment hides.
-    btn(container, "sonnet-4-6").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    btn(container, "sonnet-5").dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(effortGroup(container).hidden).toBe(true);
 
     // Back to Opus → segment re-appears with xhigh STILL active.
@@ -624,6 +627,48 @@ describe("initModelPicker", () => {
     ).toBe(0);
     expect(effortBtn(container, "high").classList.contains("active")).toBe(before);
     expect(effortGroup(container).querySelectorAll(".effort-level.active").length).toBe(1);
+  });
+});
+
+// ---- Sub-Plan 03: badge helpers (presetClassForModel / friendlyModelName) + resolveOpusEffort ----
+
+describe("presetClassForModel (badge/segment class slug)", () => {
+  it("maps each roster model id to its family slug", () => {
+    expect(presetClassForModel("claude-opus-4-8")).toBe("opus");
+    expect(presetClassForModel("claude-sonnet-5")).toBe("sonnet");
+    expect(presetClassForModel("claude-fable-5")).toBe("fable");
+  });
+  it("returns null for an unknown model id (the caller omits the badge)", () => {
+    // FALSIFY: return a hardcoded slug for unknown ids → this goes RED.
+    expect(presetClassForModel("gpt-4o")).toBeNull();
+    expect(presetClassForModel("")).toBeNull();
+  });
+  it("is derived from PRESET_OPTIONS, not a second roster (every roster model resolves)", () => {
+    for (const preset of MODEL_PRESETS) {
+      expect(presetClassForModel(PRESET_OPTIONS[preset].model)).toBe(preset.split("-")[0]);
+    }
+  });
+});
+
+describe("friendlyModelName", () => {
+  it("derives the display name from the preset id", () => {
+    expect(friendlyModelName("claude-opus-4-8")).toBe("Opus 4.8");
+    expect(friendlyModelName("claude-sonnet-5")).toBe("Sonnet 5");
+    expect(friendlyModelName("claude-fable-5")).toBe("Fable 5");
+  });
+  it("returns null for an unknown model id", () => {
+    expect(friendlyModelName("mystery-model")).toBeNull();
+  });
+});
+
+describe("resolveOpusEffort", () => {
+  it("returns the stored global Opus effort when valid", () => {
+    // FALSIFY: ignore the stored value and always return DEFAULT_EFFORT → this goes RED.
+    expect(resolveOpusEffort(fakeStorage({ [EFFORT_KEY]: "max" }))).toBe("max");
+  });
+  it("falls back to DEFAULT_EFFORT when unset or invalid", () => {
+    expect(resolveOpusEffort(fakeStorage({}))).toBe(DEFAULT_EFFORT);
+    expect(resolveOpusEffort(fakeStorage({ [EFFORT_KEY]: "bogus" }))).toBe(DEFAULT_EFFORT);
   });
 });
 

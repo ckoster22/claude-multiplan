@@ -6,7 +6,7 @@
 // + reduce), `replaceAt` (imported by reduce), and `someNodeExecuting` (imported by select). PURE;
 // depends only on `ids` and `model`.
 
-import { pathKey, nonEmpty } from "./ids";
+import { pathKey, parsePathKey, nonEmpty } from "./ids";
 import type { NodePath } from "./ids";
 import type { TreeNode, NodeState } from "./model";
 
@@ -31,6 +31,24 @@ export function nodeAtPath(root: TreeNode, path: NodePath): TreeNode | null {
     cur = child;
   }
   return cur;
+}
+
+// Resolve a wire `nn_path` string (the canonical zero-padded dotted id, e.g. "02.01"; "" / null =
+// root) to its live `{node, path}` under `root`, or null when it addresses no node. TOTAL: parsePathKey
+// THROWS on a non-canonical/legacy nn_path, so the try/catch turns that into a null miss rather than
+// propagating. The UI (sidebar badge, reading-pane picker) maps a PlanRecord to its live node through
+// here and needs the NodePath to dispatch EXECUTION_MODEL_SET.
+export function resolveNodeByNnPath(
+  root: TreeNode,
+  nnPath: string | null | undefined,
+): { node: TreeNode; path: NodePath } | null {
+  try {
+    const path = parsePathKey(nnPath ?? "");
+    const node = nodeAtPath(root, path);
+    return node ? { node, path } : null;
+  } catch {
+    return null;
+  }
 }
 
 // The path of the ONE active node (the node the sequencer dispatches on), or null when nothing is in
