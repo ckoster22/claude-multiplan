@@ -300,8 +300,8 @@ function mountDeck(): void {
   }
   body.appendChild(convPresets);
 
-  // Golden-replay scenes (the captured sidecar frame goldens, demuxed — src/mock/golden.ts) as a
-  // second, clearly separated group so the hand-scene presets above stay the curated set.
+  // Golden-replay scenes (the captured sidecar goldens, demuxed) in their own group, separate from
+  // the curated hand-scene presets above.
   body.appendChild(sectionTitle("Presets · golden replay"));
   const goldenPresets = el("div", "mockdeck-presets");
   for (const name of GOLDEN_SCENE_NAMES) {

@@ -163,7 +163,7 @@ function playActiveScene(delayMs = 0): void {
   cancelActivePlayback?.();
   clearAnswers();
   // The active scene may be a golden-derived name (not a SCENES key), so resolve across both
-  // registries; fall back to the default scene if the stored name went stale.
+  // registries; fall back to the default if the stored name went stale.
   const builder = resolveSceneBuilder(getActiveScene()) ?? SCENES[DEFAULT_SCENE];
   cancelActivePlayback = playSceneFrames(builder(delayMs), delayMs);
 }

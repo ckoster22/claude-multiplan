@@ -95,13 +95,11 @@ function result(
   };
 }
 
-// GOLDEN-DERIVED SCENES: these keys' classes are fully covered by a captured sidecar frame golden
-// (sidecar/__goldens__), so their content is the golden's demuxed frame stream (src/mock/golden.ts)
-// instead of hand-built frames — one frame registry, no drift by construction. They use
-// goldenFrames (NOT goldenScene): the hand registry models a live session mid-flight, so the
-// synthesized process-termination `agent-exit` is deliberately omitted (it belongs to the
-// full-session GOLDEN_SCENES replay). Scenes further below that no golden can derive stay
-// hand-built — see the NON-GOLDEN SEAMS marker.
+// Golden-derived scenes: content is a captured sidecar golden's demuxed frame stream (one frame
+// registry, no drift by construction) rather than hand-built frames. They use goldenFrames, not
+// goldenScene: the hand registry models a live session mid-flight, so the synthesized
+// process-termination `agent-exit` is omitted (it belongs to the full-session GOLDEN_SCENES replay).
+// Scenes below that no golden can derive stay hand-built — see the non-golden-seams marker.
 
 // Assistant text bubble (.conv-text). The signature frames are the assistant_texts — removing them
 // leaves only system_init + result, so no `.conv-text` node exists (the falsifiability target).
@@ -186,20 +184,17 @@ export const resultInterrupted: SceneBuilder = () => [
 // .conv-error-fatal class. Flipping fatal to false drops the -fatal class (falsifiability target).
 export const errorFatal: SceneBuilder = () => goldenFrames("stream-abort");
 
-// A DENIED tool permission row (.conv-perm-denied — which the minimap maps to the red "danger"
-// tier). FIDELITY: the sidecar emits this as a DIRECT agent-stream frame (kind:"permission_denied"),
-// NOT as the resolution of a tool-permission-requested round-trip — the golden captures exactly
-// that: a deny verdict decided OUTSIDE the canUseTool seam, forwarded straight onto the wire with
-// tool/tool_use_id/agent_id/decision_reason_type/message, then the turn's terminal result. The
-// model emits a PermissionDeniedNode → renderTree draws .conv-perm-denied. Removing the
+// A denied tool permission row (.conv-perm-denied — the minimap's red "danger" tier). The sidecar
+// emits this as a direct agent-stream frame (kind:"permission_denied"), not as the resolution of a
+// tool-permission-requested round-trip — a deny verdict decided outside the canUseTool seam. The
+// model emits a PermissionDeniedNode → renderTree draws .conv-perm-denied; removing the
 // permission_denied frame removes the row entirely (falsifiability target).
 export const permissionDenied: SceneBuilder = () => goldenFrames("permission-denied");
 
-// NON-GOLDEN SEAMS — the interactive `tool-permission-requested` scenes below (questionCard /
-// exitPlanMode / permissionThenReply) inject the event directly onto the mock channel. The prompt
-// is driven by the sidecar's canUseTool path, which the query()-seam emulator can never produce, so
-// no golden exists and none ever will (the documented seam decision — see CONTRACT.md "frontend
-// golden replay").
+// Non-golden seams — the interactive `tool-permission-requested` scenes below (questionCard /
+// exitPlanMode / permissionThenReply) inject the event directly onto the mock channel. The prompt is
+// driven by the sidecar's canUseTool path, which the query()-seam emulator cannot produce, so no
+// golden can cover them (see CONTRACT.md "frontend golden replay").
 
 // An INTERACTIVE AskUserQuestion card (.conv-question, pending). Surfaced via a
 // tool-permission-requested frame carrying tool:"AskUserQuestion" + input.questions. The model reads
