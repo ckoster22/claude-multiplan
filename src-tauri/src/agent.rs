@@ -642,6 +642,20 @@ pub fn set_agent_permission_mode(state: DriverState<'_>, mode: String) -> Result
     driver.send_line(&serde_json::json!({ "type": "set-permission-mode", "mode": mode }))
 }
 
+/// Build the `set-model` command JSON line sent over the sidecar stdin. PURE — no
+/// I/O, no state — so the frame shape is unit-testable (mirrors `start_command_json`).
+fn set_model_command_json(model: &str) -> Value {
+    serde_json::json!({ "type": "set-model", "model": model })
+}
+
+/// Mid-session `q.setModel(model)` — the sibling of `set_agent_permission_mode`.
+#[tauri::command]
+pub fn set_agent_model(state: DriverState<'_>, model: String) -> Result<(), String> {
+    let mut guard = state.lock().map_err(|_| "driver state poisoned")?;
+    let driver = guard.as_mut().map(|(_, d)| d).ok_or("no active session")?;
+    driver.send_line(&set_model_command_json(&model))
+}
+
 /// Graceful `q.interrupt()` of the current turn.
 #[tauri::command]
 pub fn cancel_agent_run(state: DriverState<'_>) -> Result<(), String> {
@@ -861,6 +875,17 @@ mod tests {
             Value::Null,
             "None must serialize to JSON null, not be omitted"
         );
+    }
+
+    #[test]
+    fn set_model_command_json_emits_the_set_model_frame() {
+        // The mid-session model switch must emit `{"type":"set-model","model":<model>}` on the
+        // sidecar stdin — the frame the sidecar's `set-model` handler routes to `q.setModel`.
+        // Falsifiability: change the "type" to "set-permission-mode" or drop the "model" field
+        // in set_model_command_json and these assertions go RED.
+        let line = set_model_command_json("claude-opus-4-8");
+        assert_eq!(line["type"], "set-model");
+        assert_eq!(line["model"], Value::String("claude-opus-4-8".to_string()));
     }
 
     #[test]

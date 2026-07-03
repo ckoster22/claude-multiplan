@@ -12,16 +12,20 @@
 // so a drop path can never silently skip that write.
 
 import { describe, it, expect } from "vitest";
-import { decideSessionCommand, type Session } from "./session-command";
+import { decideSessionCommand, decideModelCommand, type Session } from "./session-command";
 import { hostPolicyForMode } from "./permissions";
 
-// A spy SDK query for the `live` variant — records every setPermissionMode invocation so a test can
-// assert the PURE decision never calls it itself (index.ts owns the actual SDK call).
+// A spy SDK query for the `live` variant — records every setPermissionMode/setModel invocation so a
+// test can assert the PURE decisions never call them itself (index.ts owns the actual SDK calls).
 function spyQuery() {
   const q = {
     calls: [] as string[],
+    modelCalls: [] as (string | undefined)[],
     setPermissionMode: async (m: string) => {
       q.calls.push(m);
+    },
+    setModel: async (m?: string) => {
+      q.modelCalls.push(m);
     },
   };
   return q;
@@ -94,5 +98,36 @@ describe("decideSessionCommand — hostPolicy is rewritten on EVERY path (uncond
       expect(decideSessionCommand(s, { mode: "bogus" }).hostPolicy).toBe(hostPolicyForMode("bogus"));
       expect(decideSessionCommand(s, {}).hostPolicy).toBe("plan");
     }
+  });
+});
+
+describe("decideModelCommand — q.setModel is gated to a LIVE session (mirrors set-permission-mode)", () => {
+  it("dead session → drop-ended (a late set-model must NOT reach a stale q)", () => {
+    // FALSIFY: gate `dead` → "apply" → index.ts would call q.setModel on a closed query → RED.
+    expect(decideModelCommand({ kind: "dead" }).action).toBe("drop-ended");
+  });
+
+  it("draining session → drop-ended (the graceful-shutdown drain race window — q is closing)", () => {
+    expect(decideModelCommand({ kind: "draining" }).action).toBe("drop-ended");
+  });
+
+  it("live session → apply (the ONLY path that may touch q)", () => {
+    const session: Session = { kind: "live", q: spyQuery() };
+    expect(decideModelCommand(session).action).toBe("apply");
+  });
+
+  it("idle session → drop-no-session (before any start)", () => {
+    expect(decideModelCommand({ kind: "idle" }).action).toBe("drop-no-session");
+  });
+
+  it("starting session → drop-no-session (start accepted, q not assigned yet / 529 backoff gap)", () => {
+    expect(decideModelCommand({ kind: "starting" }).action).toBe("drop-no-session");
+  });
+
+  it("the decision is PURE — it never itself invokes q.setModel (index.ts owns that call)", () => {
+    // FALSIFY: move the q.setModel call INTO decideModelCommand → spy.modelCalls grows → RED.
+    const q = spyQuery();
+    decideModelCommand({ kind: "live", q });
+    expect(q.modelCalls).toEqual([]);
   });
 });
