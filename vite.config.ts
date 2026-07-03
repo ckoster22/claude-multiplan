@@ -12,6 +12,11 @@ export default defineConfig(async () => ({
   // so it never participates in the unit-test or initial bundle graph.
   test: {
     environment: "jsdom",
+    // A hung test/hook now fails instead of running forever; hookTimeout is high
+    // for the e2e binary build in a beforeAll.
+    testTimeout: 15000,
+    hookTimeout: 60000,
+    teardownTimeout: 15000,
     // src/** = the frontend domains; sidecar/** = the Agent SDK sidecar's pure permission/status
     // helpers (permissions.ts is side-effect-free; index.ts is NOT imported by tests — it has
     // top-level side effects from the embedded-CLI import + stdin reader).
