@@ -101,8 +101,48 @@ export function goldenScene(name: string): SceneFrame[] {
   return [...goldenFrames(name), { event: "agent-exit", payload: { code } }];
 }
 
+// review-cycle is a documented HYBRID scene. The captured golden replays ExitPlanMode as an
+// already-APPROVED tool_use/tool_result round-trip (a query()-seam emulator cannot produce the
+// pending `tool_permission_requested` review prompt — see the non-golden seams note above). Replaying
+// it verbatim renders a generic completed tool row showing JSON.stringify(input) with literal "\n",
+// NOT the real review UX. So we keep the golden's streamed lead-up (system_init + the assistant_text
+// delta stream + its terminal assistant_text) and REPLACE the post-approval ExitPlanMode round-trip
+// (tool_use/tool_result) and the trailing result with an injected pending `tool_permission_requested`
+// frame carrying the SAME plan the golden's ExitPlanMode captured — reproducing the streamed text
+// followed by the pending plan-approval bar, the real ExitPlanMode review UX.
+function reviewCycleHybrid(): SceneFrame[] {
+  const golden = goldenFrames("review-cycle");
+  const lead = golden.filter((f) => {
+    const kind = (f.payload as { kind?: string }).kind;
+    return kind !== "tool_use" && kind !== "tool_result" && kind !== "result";
+  });
+  const exitUse = golden.find(
+    (f) =>
+      (f.payload as { kind?: string }).kind === "tool_use" &&
+      (f.payload as { tool?: string }).tool === "ExitPlanMode",
+  );
+  const plan = (exitUse?.payload as { input?: { plan?: string } } | undefined)?.input?.plan ?? "";
+  return [
+    ...lead,
+    {
+      event: "tool-permission-requested",
+      payload: {
+        kind: "tool_permission_requested",
+        id: "review-cycle-exit-1",
+        tool: "ExitPlanMode",
+        input: { plan },
+        agent_id: null,
+      },
+    },
+  ];
+}
+
 // Kept separate from the hand-typed SCENES registry so that one keeps its exhaustive tsc/signature
-// guarantees (scenes.test.ts couples to every SCENES key). Keyed by golden basename.
+// guarantees (scenes.test.ts couples to every SCENES key). Keyed by golden basename. review-cycle is
+// overridden with its hybrid builder (see reviewCycleHybrid).
 export const GOLDEN_SCENES: Record<string, SceneBuilder> = Object.fromEntries(
-  GOLDEN_SCENE_NAMES.map((name) => [name, () => goldenScene(name)]),
+  GOLDEN_SCENE_NAMES.map((name) => [
+    name,
+    name === "review-cycle" ? reviewCycleHybrid : () => goldenScene(name),
+  ]),
 );

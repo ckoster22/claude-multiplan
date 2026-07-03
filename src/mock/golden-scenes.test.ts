@@ -32,7 +32,7 @@ import {
   GOLDEN_SCENE_NAMES,
 } from "./golden";
 import { SCENARIO_EXIT_CODES } from "../../sidecar/exit-codes";
-import { SCENES, type SceneFrame } from "./fixtures/scenes";
+import { SCENES, systemInitFrame, type SceneFrame } from "./fixtures/scenes";
 
 function renderScene(frames: SceneFrame[]): HTMLElement {
   const model = new ConversationModel();
@@ -187,14 +187,44 @@ describe("golden-diff gate — overloaded-exhausted, structure-preserving modulo
 // One render assertion per emulated response class — each fails if its frame class is dropped or
 // mis-rendered by the replay (the same signature-selector style as scenes.test.ts).
 describe("golden scenes — per-class render through the real pipeline", () => {
-  it("happy-text: assistant text bubbles + a clean success result", () => {
+  it("happy-text: exactly ONE bubble per block_uid, each bubble equal to its terminal block text", () => {
     const container = renderScene(GOLDEN_SCENES["happy-text"]());
-    const texts = container.querySelectorAll(".conv-text");
+    const texts = Array.from(container.querySelectorAll(".conv-text"));
+    // The golden streams two blocks (block_uid 0 and 1) as a flood of assistant_text_delta tokens then
+    // a terminal assistant_text per block. On screen that MUST be exactly two bubbles (one per block —
+    // NOT one per token), each showing its full committed text. Falsifiable: scattering the deltas into
+    // separate bubbles changes the count; dropping any delta/commit changes the text.
     expect(texts.length).toBe(2);
-    expect(texts[0].textContent).toContain("Here is the first part of my answer.");
+    expect(texts[0].textContent!.trim()).toBe("Here is the first part of my answer.");
+    expect(texts[1].textContent!.trim()).toBe("And here is the conclusion.");
     const result = container.querySelector(".conv-result");
     expect(result).not.toBeNull();
     expect(result!.classList.contains("conv-result-error")).toBe(false);
+  });
+
+  it("assistant markdown renders to real elements (heading/list/code), never literal markdown text", () => {
+    // Feed an assistant bubble markdown with a heading, a list, and a fenced code block. The reading
+    // surface renders it through renderMarkdown → real <h1>/<li>/<code> elements — NOT escaped "#
+    // Heading" text or a literal "\n". This is the structural assertion that catches a raw-JSON /
+    // unrendered-markdown regression (a dumped tool input would leave the markers as visible text).
+    const md = "# Heading\n\n- item\n\n```js\nconst x = 1;\n```\n";
+    const frames: SceneFrame[] = [
+      { event: "agent-stream", payload: systemInitFrame(0) },
+      {
+        event: "agent-stream",
+        payload: { seq: 1, kind: "assistant_text", text: md, block_uid: "0", parent_tool_use_id: null },
+      },
+    ];
+    const container = renderScene(frames);
+    const bubble = container.querySelector(".conv-text")!;
+    expect(bubble).not.toBeNull();
+    expect(bubble.querySelector("h1")!.textContent).toBe("Heading");
+    expect(bubble.querySelector("li")!.textContent).toBe("item");
+    expect(bubble.querySelector("pre code")!.textContent).toContain("const x = 1;");
+    // The raw markdown markers and the literal escaped newline never survive into the rendered text.
+    expect(bubble.textContent).not.toContain("# Heading");
+    expect(bubble.textContent).not.toContain("```");
+    expect(bubble.textContent).not.toContain("\\n");
   });
 
   it("tool-call: a done tool row whose tool_use/tool_result id correlation survived the replay", () => {
@@ -233,13 +263,24 @@ describe("golden scenes — per-class render through the real pipeline", () => {
     expect(row!.querySelector(".conv-tool-input")!.textContent).toContain("/.plan-tree/prototype/");
   });
 
-  it("review-cycle: the ExitPlanMode round-trip renders as a completed tool row carrying the plan", () => {
+  it("review-cycle: the HYBRID scene shows the streamed text + the pending plan-approval marker, not a raw-JSON tool row", () => {
+    // FIX 1: review-cycle is a hybrid — the golden's ExitPlanMode arrives as an already-approved
+    // tool_use/tool_result round-trip (renders a generic tool row dumping JSON.stringify(input) with a
+    // literal "\n"); the real UX is the PENDING review prompt, which a query()-seam golden cannot
+    // capture. The hybrid keeps the streamed lead-up and injects a tool_permission_requested frame.
     const container = renderScene(GOLDEN_SCENES["review-cycle"]());
-    const rows = Array.from(container.querySelectorAll(".conv-tool"));
-    const exitRow = rows.find((r) => r.querySelector(".conv-tool-name")?.textContent === "ExitPlanMode");
-    expect(exitRow).toBeDefined();
-    expect(exitRow!.getAttribute("data-status")).toBe("done");
-    expect(exitRow!.querySelector(".conv-tool-input")!.textContent).toContain("# Plan under review");
+    // The streamed pre-plan text survived.
+    const text = container.querySelector(".conv-text");
+    expect(text).not.toBeNull();
+    expect(text!.textContent).toContain("I have a complete plan ready for your review.");
+    // The pending ExitPlanMode review affordance — the real UX — is present…
+    const marker = container.querySelector(".conv-perm-request");
+    expect(marker).not.toBeNull();
+    expect(marker!.textContent).toBe("Plan ready — reviewing in the Plan tab");
+    // …and there is NO generic completed tool row dumping the plan JSON with a literal "\n".
+    expect(container.querySelector(".conv-tool")).toBeNull();
+    expect(container.textContent).not.toContain("\\n");
+    expect(container.textContent).not.toContain("# Plan under review");
   });
 
   it("subagent-fanout: a labeled subagent group whose nested child tool correlates inside it", () => {
@@ -297,19 +338,22 @@ describe("golden scenes — per-class render through the real pipeline", () => {
     expect(err!.textContent).toContain("retried 6×");
   });
 
-  it("auth-failure: the lifted error_kind 'auth' arrives fatal and renders .conv-error-fatal", () => {
+  it("auth-failure: the lifted error_kind 'auth' arrives fatal, rendered with a SINGLE Error prefix", () => {
     const container = renderScene(GOLDEN_SCENES["auth-failure"]());
     const err = container.querySelector(".conv-error-fatal");
     expect(err).not.toBeNull();
-    expect(err!.textContent).toContain("401 Unauthorized");
+    // FIX 3: the golden's message begins with the sidecar's String(e) "Error:" prefix. The render layer
+    // strips it so it reads ONCE — "Error (auth): 401…", not the doubled "Error (auth): Error: 401…".
+    // Falsifiable: revert the strip in render.ts → the doubled prefix fails this exact-equality.
+    expect(err!.textContent).toBe("Error (auth): 401 Unauthorized: OAuth token expired");
   });
 
-  it("stream-abort: partial output survives, then the fatal transport error renders", () => {
+  it("stream-abort: partial output survives, then the fatal transport error renders with a SINGLE Error prefix", () => {
     const container = renderScene(GOLDEN_SCENES["stream-abort"]());
     expect(container.querySelector(".conv-text")!.textContent).toContain("Working on it…");
     const err = container.querySelector(".conv-error-fatal");
     expect(err).not.toBeNull();
-    expect(err!.textContent).toContain("stream disconnected");
+    expect(err!.textContent).toBe("Error (sdk): stream disconnected: ECONNRESET while reading the response body");
   });
 
   it("FALSIFY: dropping the golden's error line drops the fatal error row (stream-abort)", () => {

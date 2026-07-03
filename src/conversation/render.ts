@@ -770,7 +770,11 @@ function renderNodeInner(node: RenderNode, handlers?: RenderHandlers): HTMLEleme
       const row = document.createElement("div");
       row.className = "conv-error";
       if (node.fatal) row.classList.add("conv-error-fatal");
-      row.textContent = `Error (${node.errorKind}): ${node.message}`;
+      // The sidecar stringifies a thrown error with String(e), which prepends "Error:" (sidecar/
+      // index.ts). Our own "Error (kind): " prefix would then double it ("Error (auth): Error: 401…"),
+      // so strip a single leading "Error:" from the message before interpolating.
+      const message = node.message.replace(/^Error:\s*/, "");
+      row.textContent = `Error (${node.errorKind}): ${message}`;
       return row;
     }
     case "exit": {

@@ -166,6 +166,20 @@ export function emitQuotaResumed(): void {
   for (const o of observers) o.onQuotaResumed?.();
 }
 
+// Translate an emulated `quota_exceeded` STREAM frame into the observer callback the REAL orchestrator
+// fans for it. In production a quota_exceeded frame is inert in the reducer; the orchestrator
+// (orchestrator/core.ts ingestStream) turns it into QUOTA_PAUSED → notifyQuotaPaused when auto-resume
+// budget remains → onQuotaPaused, the WAITING banner. The mock never runs a real orchestration, so the
+// scene player calls this on the live playback path to reproduce the same banner a quota wall shows in
+// the app. resetAt + source ride the frame (golden-scenes.test.ts pins the shape); `remaining` is not
+// on the wire (the orchestrator derives it from the run's budget), so a nominal 1 renders the armed
+// WAITING banner.
+export function emitQuotaPausedFromFrame(payload: { resetAt?: unknown; source?: unknown }): void {
+  const resetAt = typeof payload.resetAt === "number" ? payload.resetAt : Date.now() + 3_600_000;
+  const source = typeof payload.source === "string" ? payload.source : "rate_limit_event";
+  for (const o of observers) o.onQuotaPaused?.({ resetAt, remaining: 1, source });
+}
+
 // TEST-ONLY: the live observer set, so a cross-boundary test can fan an EXACT quota callback (e.g. the
 // degraded resetAt:0 sentinel) that the offset-from-now emit* helpers above cannot express.
 export function __getMockObserversForTest(): OrchestratorObserver[] {
