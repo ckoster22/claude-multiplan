@@ -214,7 +214,7 @@ body {
    .conv-status chrome/dot tokens; this wrapper just gives it sidebar placement. */
 .sidebar-status { padding: 0 16px 10px; display: flex; }
 /* ---- Sidebar filter (Fix 1) ----
-   The .search container is frozen (CONTRACT.md §1); it now hosts a real interactive control:
+   The .search container is a frozen sidebar selector; it now hosts a real interactive control:
    a search icon, the #plan-filter input, and a clear (✕) button revealed only when there is
    text (.search.has-text .clear). Terracotta focus ring matches the app's accent tokens. */
 .search {
@@ -335,7 +335,7 @@ body {
 .plan-meta .when { font-weight: 500; }
 
 /* ---- live-run placeholder row (.plan.placeholder) ----
-   A running agent conversation with no plan file yet (see CONTRACT.md). Muted/italic title +
+   A running agent conversation with no plan file yet. Muted/italic title +
    a small pulsing dot reusing the .conv-working-dot token values (var(--accent) 7px dot on the
    conv-working-pulse keyframes). Tokens only — no raw colors. */
 .plan.placeholder .plan-title { color: var(--text-dim); font-style: italic; }
@@ -1000,7 +1000,7 @@ figcaption { font-size: 11px; color: var(--text-dim); text-align: center; margin
      overflow-x:hidden keeps this a vertical-only scroller. */
   min-width: 0; overflow-x: hidden;
   /* REQUIRED: minimap layout reads child offsetTop relative to this scroll
-     container (block tops/heights + click-to-scroll). See CONTRACT.md. */
+     container (block tops/heights + click-to-scroll). */
   position: relative;
 }
 

@@ -1,7 +1,7 @@
 // Tauri shell, plan list & live file-watch.
 //
 // This app never writes into `~/.claude/plans/`, so the plans watcher never fires
-// on our own writes. CONTRACT.md, the cwd_spike example, and all build artifacts live in the
+// on our own writes. The cwd_spike example and all build artifacts live in the
 // repo, not the plans dir.
 //
 // The app adds exactly TWO write surfaces under `~/.claude/` (both OUTSIDE `plans/`):
@@ -39,10 +39,10 @@ use agent::AgentDriver;
 /// this are rejected BEFORE we read their bytes, so a huge file can never blow up memory.
 const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024; // 25 MiB
 
-/// One row in the sidebar. The shape here is FROZEN as hand-off contract #2 (see CONTRACT.md);
-/// Sub-Plan 01 (nested sidebar) EXTENDS it additively — see the §"Sub-Plan 01 (nested
-/// master/sub hierarchy)" section in CONTRACT.md for the five appended fields.
-/// `cwd` and `unread` are populated by the resolver / read-state.
+/// One row in the sidebar. The wire shape is a stable contract — the
+/// `planrecord_wire_contract_is_frozen` test locks the exact key set and value types, and the
+/// frontend's `contract.test.ts` pins the same 12 keys from the consuming side; keep field
+/// names/order in sync with both. `cwd` and `unread` are populated by the resolver / read-state.
 #[derive(Serialize, Clone)]
 struct PlanRecord {
     absolute_path: String,
@@ -115,15 +115,15 @@ struct RawRow {
     h1s: Vec<String>,
 }
 
-/// Payload for the `plan-changed` event (frozen contract — see CONTRACT.md).
+/// Payload for the `plan-changed` event. The frontend `PlanChanged` type mirrors these keys.
 #[derive(Serialize, Clone)]
 struct PlanChanged {
     path: String,
     kind: String,
 }
 
-/// One persisted comment for a plan. FROZEN wire shape — exactly 6 keys (see
-/// CONTRACT.md §"Sub-Plan 02 additions" / §"Highlight + comment with quoted-text anchoring").
+/// One persisted comment for a plan. Stable 6-key wire shape — locked by the
+/// `comment_record_wire_contract_is_frozen` test; the frontend `CommentRecord` type mirrors it.
 /// `block_line` is `Option<i64>` (serde emits `null`)
 /// — it mirrors the existing `cwd: Option<String>` precedent; there is NO `-1` sentinel.
 /// `null` means the captured selection had no enclosing source block (re-find scans the whole
@@ -892,7 +892,7 @@ fn parse_marker(yaml_block: &str) -> Option<RawMarker> {
 /// top-level rendering by the frontend (no re-aggregation). Pure ⇒ unit-testable without
 /// Tauri state or real files (mirrors the `sort_newest_first` / `compute_unread` split).
 ///
-/// Rules (closed flavor set with deterministic tie-breaks — see CONTRACT.md §"Sub-Plan 01"):
+/// Rules (closed flavor set with deterministic tie-breaks):
 ///   - No marker ⇒ standalone.
 ///   - `master` marker ⇒ master; `child_count` = count of PRESENT subs sharing its tree_id.
 ///   - duplicate masters on one tree_id ⇒ newest-mtime kept (tie: lexicographic stem);
@@ -3763,7 +3763,7 @@ mod tests {
         }
     }
 
-    /// Locks the `PlanRecord` wire shape to the frozen hand-off contract (CONTRACT.md).
+    /// Locks the `PlanRecord` wire shape — the stable contract the frontend consumes.
     /// Any serde drift — a `rename`, an added/removed field, or a casing change — flips
     /// the top-level key set or the `flavor` string and turns this RED.
     #[test]

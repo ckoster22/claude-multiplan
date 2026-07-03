@@ -1,8 +1,8 @@
 // Conversation domain — wire types.
 //
 // SINGLE SOURCE OF TRUTH for the Agent SDK driver surface this domain consumes. Every field
-// here is lifted VERBATIM (snake_case) from CONTRACT.md §"Agent SDK driver (Sub-Plan 01)" —
-// the frozen command/event vocabulary. We consume ONLY fields the contract actually froze:
+// here mirrors the frozen `agent-stream` command/event vocabulary (snake_case) emitted by the
+// sidecar → Rust seam. We consume ONLY fields the contract actually froze:
 //   - no subagent-`name` field (none committed; the visible name is deferred to live smoke),
 //   - no `skill_use` kind / skill-discriminator (skills surface as ordinary `tool_use`),
 //   - the normalized error discriminator is `kind` (NOT `error_kind` — the sidecar's internal

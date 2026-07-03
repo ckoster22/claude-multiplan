@@ -7,7 +7,7 @@
 //      the DOCUMENTED error normalization. Every pass-through frame is parsed-JSON-equal to its
 //      golden line (nothing dropped, nothing reordered, seq preserved); the terminal `error` line
 //      maps to an agent-error frame equal to a HAND-WRITTEN normalized-expected shape (written from
-//      the CONTRACT.md `agent-error` wire shape, NOT reverse-engineered from adapter output — so a
+//      the public `agent-error` wire shape `{kind, message, fatal}`, NOT reverse-engineered from adapter output — so a
 //      broken error_kind lift fails it; comparing to the RAW golden line would invert
 //      falsifiability, a broken lift would move output CLOSER to the raw line and pass).
 //   3. PER-CLASS RENDER: each emulated response class, replayed through the REAL ConversationModel
@@ -151,7 +151,7 @@ describe("golden-diff gate — overloaded-exhausted, structure-preserving modulo
   });
 
   it("the terminal error line maps to the HAND-WRITTEN normalized agent-error shape (contract, not adapter output)", () => {
-    // Written from CONTRACT.md's public `agent-error` shape + the documented error_kind lift over
+    // Written from the public `agent-error` shape `{kind, message, fatal}` + the documented error_kind lift over
     // the golden's known terminal line — NOT copied from what demuxLine returns. A broken lift
     // (kind left "error", error_kind retained, fatal lost) fails this toEqual.
     const EXPECTED_NORMALIZED_ERROR = {

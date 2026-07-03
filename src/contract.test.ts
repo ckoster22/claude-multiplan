@@ -1,25 +1,29 @@
 // Wire contract-conformance test (TS side).
 //
 // HONEST SCOPE: this test locks the SHAPE the frontend EXPECTS of a `list_plans` response —
-// the exact twelve snake_case keys per record (CONTRACT.md §"PlanRecord — five appended fields"
-// + §"PlanRecord — additive `nn_path` field")
-// — and gives render coverage across all three flavors + the cwd null/real-path branches. The
-// fixture is authored AGAINST CONTRACT.md, not copied from a runtime dump, so it is a written
-// statement of the contract, not an observation of the backend.
+// the exact twelve snake_case keys per record — and gives render coverage across all three
+// flavors + the cwd null/real-path branches. The fixture is a written statement of the shape the
+// frontend depends on, not a copy of a runtime dump, so it asserts intent, not an observation of
+// the backend.
 //
 // It does NOT validate the live backend or assert how Rust serializes `PlanRecord`. The
-// authoritative Rust→JSON serialization is asserted by the Rust-side test; drift is therefore
-// caught on the PRODUCING side. This test catches drift on the CONSUMING side: if the frontend's
-// expected key set changes (a field added/dropped here), the key-set assertion goes red.
+// authoritative Rust→JSON serialization is asserted by the Rust-side test
+// (`planrecord_wire_contract_is_frozen`); drift is therefore caught on the PRODUCING side. This
+// test catches drift on the CONSUMING side: if the frontend's expected key set changes (a field
+// added/dropped here), the key-set assertion goes red.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 // Read the REAL index.html (not a hand-built copy) via Vite's `?raw` loader so deleting a
 // selector from it makes the relevant assertion go red — the property that makes this a
 // genuine contract guard. `?raw` keeps this off @types/node (no fs/process needed).
 import INDEX_HTML from "../index.html?raw";
-// Read the REAL CONTRACT.md the same way so the cmt-hl/data-c convention assertions go red if
-// the contract drops them (the highlight spans are runtime-emitted, not in static index.html).
-import CONTRACT_MD from "../CONTRACT.md?raw";
+// render/index.ts is the facade that re-exports the comment surface; reading its source makes the
+// surface assertion go red if it drops the export.
+import RENDER_FACADE_TS from "./render/index.ts?raw";
+// The cmt-hl/data-c highlight convention is EMITTED by comments.ts at runtime (not in static
+// index.html). Import the real emitter and drive it so the assertion tests the produced DOM, not
+// source text — renaming the class or dropping data-c in the executable path turns the test red.
+import { wrapRange } from "./render/comments";
 
 // main.ts pulls in Tauri APIs + the render facade at load. Mirror main.test.ts and mock them so
 // importing the module is a no-op (it only registers a DOMContentLoaded listener, never fired
@@ -105,7 +109,7 @@ beforeEach(() => {
   document.body.appendChild(listEl);
 });
 
-describe("contract — fixture sanity (authored against CONTRACT.md)", () => {
+describe("contract — fixture sanity (authored against the PlanRecord wire shape)", () => {
   it("contains exactly one master, two subs, and one standalone in pre-ordered display shape", () => {
     expect(fixture.map((r) => r.flavor)).toEqual(["master", "sub", "sub", "standalone"]);
   });
@@ -270,12 +274,27 @@ describe("contract — highlight/comment selectors present in index.html", () =>
     expect(region).not.toContain("data-tauri-drag-region");
   });
 
-  it("the cmt-hl highlight class + data-c convention are documented in the contract", () => {
-    // The highlight spans are emitted by comments.ts at runtime (not in static index.html), so
-    // the contract markdown is where the selector/attribute convention is locked. Read the real
-    // CONTRACT.md so dropping the convention turns this red.
-    expect(CONTRACT_MD).toContain(".cmt-hl");
-    expect(CONTRACT_MD).toContain('data-c="{id}"');
+  it("the emitter produces a span.cmt-hl carrying data-c=<id> around the wrapped range", () => {
+    // Drive the REAL emitter (wrapRange) over a jsdom Range and assert on the produced DOM, not on
+    // source text — so renaming the class or dropping the data-c attribute in the executable path
+    // turns this red (a source-grep would pass off the stale JSDoc comment).
+    const container = document.createElement("p");
+    container.textContent = "highlight this text";
+    document.body.appendChild(container);
+
+    const textNode = container.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, textNode.data.length);
+
+    const id = 7;
+    wrapRange(range, id);
+
+    const span = container.querySelector<HTMLElement>("span.cmt-hl");
+    expect(span).toBeTruthy();
+    expect(span!.classList.contains("cmt-hl")).toBe(true);
+    expect(span!.dataset.c).toBe(String(id));
+    expect(span!.getAttribute("data-c")).toBe(String(id));
   });
 });
 
@@ -297,8 +316,8 @@ describe("contract — Prompt Feedback button + overlay are REMOVED from index.h
     });
   }
 
-  it("the facade clearAllComments surface is documented in CONTRACT.md", () => {
-    expect(CONTRACT_MD).toContain("clearAllComments");
+  it("the render facade re-exports clearAllComments (the comment-clear surface)", () => {
+    expect(RENDER_FACADE_TS).toContain("clearAllComments");
   });
 });
 

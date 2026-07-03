@@ -1,6 +1,6 @@
 // Shared frontend types (cycle-free: imports from NEITHER main.ts NOR resolve.ts).
 //
-// `PlanRecord` mirrors the Rust `PlanRecord` wire shape (see CONTRACT.md). `SidebarCtx` is the
+// `PlanRecord` mirrors the Rust `PlanRecord` wire shape. `SidebarCtx` is the
 // pure rendering context `renderSidebar` takes. Two of `PlanRecord`'s string fields are BRANDED
 // (`AbsPath` / `Stem`) so a bare string — or the wrong branded string — cannot fill those slots:
 // the brands turn two bug classes (passing a raw path/stem, or swapping the two) into compile
@@ -35,8 +35,8 @@ export interface PlanRecord {
   h1s: string[];
 }
 
-// A single persisted comment for a plan. FROZEN 6-key wire shape (see CONTRACT.md §"Sub-Plan
-// 02 additions" / §"Highlight + comment with quoted-text anchoring"). `block_line` is
+// A single persisted comment for a plan. FROZEN 6-key wire shape, mirroring the Rust
+// `CommentRecord` (locked by `comment_record_wire_contract_is_frozen`). `block_line` is
 // `number | null` (Rust `Option<i64>`, serde `null`), mirroring
 // the existing `cwd: string | null` precedent — `null` means "no enclosing source block, re-find
 // scans the whole pane by occurrence". There is NO `-1` sentinel: "no block ancestor" is the type.
@@ -78,8 +78,8 @@ export function setCwd(map: Map<Stem, string | null>, stem: Stem, value: string 
 
 // snake_case keys MIRROR THE BACKEND'S SERIALIZED JSON exactly (same convention as `PlanRecord` /
 // `CommentRecord` above): these come straight off `invoke`/event payloads, so the TS keys must
-// equal the Rust serde keys 1:1 — no camelCase conversion. See CONTRACT.md §"Plan Review
-// (ExitPlanMode hook)" for the authoritative shapes.
+// equal the Rust serde keys 1:1 — no camelCase conversion. The Rust structs (`ReviewRequest` /
+// `ReviewResponse`) are the authoritative shapes, locked by their wire-contract cargo tests.
 
 // One parsed `requests/<review_id>.json` entry (returned by `list_pending_reviews`).
 export interface ReviewRequest {
@@ -119,7 +119,7 @@ export interface SidebarCtx {
   // Session-ONLY collapse for INTERNAL sub nodes (subs with nested children), keyed
   // tree_id + U+0000 + nn_path (see subCollapseKey in main.ts). Deliberately separate from
   // the persisted master collapse store above — internal-node collapse is never persisted
-  // (see CONTRACT.md §"Recursive sidebar nesting"). The twirl handler mutates this map
+  // (recursive sidebar nesting). The twirl handler mutates this map
   // directly (no backend call).
   subCollapse: Map<string, boolean>;
   onOpen: (path: AbsPath, stem: Stem) => void;
