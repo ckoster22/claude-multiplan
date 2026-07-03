@@ -17,7 +17,6 @@ import type { AgentStream, ToolPermissionRequested, AgentError, AgentExit } from
 import { emitMockEvent, clearMockBuffer } from "./event";
 import { SCENES, type SceneFrame, type SceneBuilder } from "./fixtures/scenes";
 import { GOLDEN_SCENES, GOLDEN_SCENE_NAMES } from "./golden";
-import { emitQuotaPausedFromFrame } from "./orchestrator";
 
 // Resolve a scene by name across both registries — hand-typed SCENES and golden-derived
 // GOLDEN_SCENES (a hand key wins on collision, though the namespaces are disjoint: camelCase vs
@@ -53,20 +52,9 @@ export function clearAgentBuffers(): void {
 // would render nothing live while its test still passed — see fixtures/scenes.ts SceneEvent note).
 function emitSceneFrame(frame: SceneFrame): void {
   switch (frame.event) {
-    case "agent-stream": {
-      const payload = frame.payload as AgentStream;
-      emitMockEvent("agent-stream", payload);
-      // The `quota_exceeded` frame is inert in the reducer by design (stream.ts) — the WAITING banner
-      // is observer-driven. In the app the orchestrator translates the frame into onQuotaPaused
-      // (orchestrator/core.ts); the mock has no live orchestration, so fan the same callback here so a
-      // played quota scene shows the banner it would in production instead of only "Session ended". This
-      // lives ONLY on the live emission path (emitSceneFrame); the pure applySceneToModel test path stays
-      // observer-free.
-      if ((payload as { kind?: string }).kind === "quota_exceeded") {
-        emitQuotaPausedFromFrame(payload as { resetAt?: unknown; source?: unknown });
-      }
+    case "agent-stream":
+      emitMockEvent("agent-stream", frame.payload as AgentStream);
       break;
-    }
     case "tool-permission-requested":
       emitMockEvent("tool-permission-requested", frame.payload as ToolPermissionRequested);
       break;
