@@ -361,11 +361,10 @@ class FirstFrameTimeout extends Error {
   }
 }
 
-/** Wrap a Query so ONLY its FIRST `.next()` is raced against `ms`; on timeout the iteration throws
- *  `FirstFrameTimeout` (the wedged-resume signal). Once the first frame arrives the timer is cleared
- *  and the remaining frames are delegated 1:1 (no further bound — a live turn may legitimately take
- *  minutes between frames). Shares the query's single underlying async iterator, so it is a drop-in
- *  for `for await (const msg of q)`. */
+/** ONLY the FIRST `.next()` is raced against `ms`; on timeout the iteration throws `FirstFrameTimeout`
+ *  (the wedged-resume signal). Once the first frame arrives the timer is cleared and the remaining
+ *  frames are delegated 1:1 (no further bound — a live turn may legitimately take minutes between
+ *  frames). Shares the query's single underlying async iterator, a drop-in for `for await (const msg of q)`. */
 function firstFrameWatchdog(q: Query, ms: number): AsyncIterable<SDKMessage> {
   return {
     async *[Symbol.asyncIterator](): AsyncIterator<SDKMessage> {

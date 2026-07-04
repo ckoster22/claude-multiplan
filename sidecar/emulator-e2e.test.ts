@@ -479,10 +479,8 @@ const SPECS: Spec[] = [
     },
   },
   {
-    // SILENT-RESUME RECOVERY (the wedged-resume fix). The transcript "exists" (scenario flag), so
-    // `resume` reaches the SDK options; attempt 0 HANGS (never yields), the first-frame watchdog
-    // fires, drops resume, and the fresh retry streams to completion. The whole point: an
-    // alive-but-zero-frames resume deterministically reaches a terminal `result`.
+    // resume-silent-recover: a wedged first-frame resume must recover to a terminal `result` (drops
+    // resume, fresh retry streams to completion). See index.ts firstFrameWatchdog.
     name: "resume-silent-recover",
     scenario: "resume-silent-recover",
     start: { resume: "emu-silent-resume-id" },
@@ -500,9 +498,8 @@ const SPECS: Spec[] = [
     },
   },
   {
-    // SILENT-RESUME EXHAUSTION. Both the resume attempt and its fresh retry hang; the sidecar
-    // recovers once (resume_fallback) then drives a loud fatal + exit 1. Proves termination even when
-    // recovery itself yields nothing.
+    // resume-silent-exhausted: when both the resume attempt and its fresh retry hang, the sidecar must
+    // still terminate — recovers once (resume_fallback) then a loud fatal + exit 1. See index.ts firstFrameWatchdog.
     name: "resume-silent-exhausted",
     scenario: "resume-silent-exhausted",
     start: { resume: "emu-silent-resume-id" },

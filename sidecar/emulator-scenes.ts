@@ -200,21 +200,37 @@ export function resultUsageLimit(text: string = SESSION_LIMIT_TEXT): SDKMessage 
 
 // `attempts[i]` is the message stream the i-th query() call replays; index >= 1 only occurs on a
 // backoff retry (the overloaded scenarios) or a resume-timeout recovery (the silent-resume
-// scenarios). An attempt is one of:
-//   - a plain message array — ends normally;
-//   - a throw-tailed shape — yield `messages` then THROW `thenThrow()`, driving index.ts's catch
-//     block (auth / thrown-quota / generic-sdk classification), which a message fixture cannot reach;
-//   - `{ hang: true }` — the query's first frame NEVER arrives (a silent, wedged resume). The only
-//     shape that exercises index.ts's first-frame watchdog; a `[]` attempt ends immediately instead.
+// scenarios). Each attempt kind: "frames" ends normally; "throw" yields `messages` then THROWS
+// `thenThrow()` (driving index.ts's catch-block classification, which a message fixture cannot
+// reach); "hang" never yields its first frame (the silent, wedged resume — the only shape that
+// exercises index.ts's first-frame watchdog; a `[]` "frames" attempt would end immediately instead).
+//
+// INVARIANT[emulator-attempt-tagged-union] (type-level): every emulator attempt carries a "kind" discriminant (frames|throw|hang); attemptMessages and the emulator generator switch on it exhaustively with an assertNever default, so no runtime shape-sniffing (Array.isArray / "in") can misclassify an attempt.
+//   prevents: a bare-array-vs-object mis-probe silently dropping a hang/throw tail or misreading frames.
+//   test: emulator.test.ts (makeEmulatorQuery attempt-advance + throw-tail cases); emulator-e2e goldens (hang/throw/frames).
 export type EmulatorAttempt =
-  | SDKMessage[]
-  | { messages: SDKMessage[]; thenThrow: () => Error }
-  | { hang: true };
+  | { kind: "frames"; messages: SDKMessage[] }
+  | { kind: "throw"; messages: SDKMessage[]; thenThrow: () => Error }
+  | { kind: "hang" };
+
+/** Ergonomic constructor for the common "frames" attempt, keeping the scene registry terse. */
+export const frames = (...messages: SDKMessage[]): EmulatorAttempt => ({ kind: "frames", messages });
+
+function assertNever(x: never): never {
+  throw new Error("unreachable EmulatorAttempt: " + JSON.stringify(x));
+}
 
 export function attemptMessages(attempt: EmulatorAttempt): SDKMessage[] {
-  if (Array.isArray(attempt)) return attempt;
-  if ("hang" in attempt) return [];
-  return attempt.messages;
+  switch (attempt.kind) {
+    case "frames":
+      return attempt.messages;
+    case "throw":
+      return attempt.messages;
+    case "hang":
+      return [];
+    default:
+      return assertNever(attempt);
+  }
 }
 
 export interface EmulatorScenario {
@@ -248,30 +264,30 @@ const SCENARIOS: EmulatorScenario[] = [
   {
     name: "happy-text",
     attempts: [
-      [
+      frames(
         sysInit(),
         ...assistantTextStreamed("Here is the first part of my answer."),
         ...assistantTextStreamed("And here is the conclusion."),
         resultSuccess("All done."),
-      ],
+      ),
     ],
   },
   {
     name: "tool-call",
     attempts: [
-      [
+      frames(
         sysInit(),
         assistantToolUse("emu-tool-1", "Bash", { command: "npm run build" }),
         userToolResult("emu-tool-1", "build succeeded"),
         ...assistantTextStreamed("The build passed."),
         resultSuccess("Build complete."),
-      ],
+      ),
     ],
   },
   {
     name: "plan-write",
     attempts: [
-      [
+      frames(
         sysInit(),
         assistantToolUse("emu-plan-1", "Write", {
           file_path: PLANS_PATH,
@@ -280,13 +296,13 @@ const SCENARIOS: EmulatorScenario[] = [
         userToolResult("emu-plan-1", "wrote " + PLANS_PATH),
         ...assistantTextStreamed("Plan written to disk."),
         resultSuccess("Plan saved."),
-      ],
+      ),
     ],
   },
   {
     name: "prototype-write",
     attempts: [
-      [
+      frames(
         sysInit(),
         assistantToolUse("emu-proto-1", "Write", {
           file_path: PROTOTYPE_PATH,
@@ -294,13 +310,13 @@ const SCENARIOS: EmulatorScenario[] = [
         }),
         userToolResult("emu-proto-1", "wrote " + PROTOTYPE_PATH),
         resultSuccess("Prototype written."),
-      ],
+      ),
     ],
   },
   {
     name: "review-cycle",
     attempts: [
-      [
+      frames(
         sysInit(),
         ...assistantTextStreamed("I have a complete plan ready for your review."),
         assistantToolUse("emu-review-1", "ExitPlanMode", {
@@ -308,13 +324,13 @@ const SCENARIOS: EmulatorScenario[] = [
         }),
         userToolResult("emu-review-1", "plan accepted"),
         resultSuccess("Review complete."),
-      ],
+      ),
     ],
   },
   {
     name: "subagent-fanout",
     attempts: [
-      [
+      frames(
         sysInit(),
         assistantToolUse("T1", "Task", {
           subagent_type: "general-purpose",
@@ -328,23 +344,23 @@ const SCENARIOS: EmulatorScenario[] = [
         userToolResult("subtool-1", "found renderInto(...)", false, "T1"),
         ...assistantTextStreamed("Investigation complete.", null),
         resultSuccess("Fanout done."),
-      ],
+      ),
     ],
   },
   {
     name: "quota-rate-limit",
     attempts: [
-      [
+      frames(
         sysInit(),
         // epoch-ms (>= 1e12) so it passes through extractResetAt unchanged.
         rateLimitRejected(FIXED_RESET_EPOCH_MS),
-      ],
+      ),
     ],
   },
   {
     name: "quota-result",
     attempts: [
-      [
+      frames(
         sysInit(),
         // The rejected event pins the reset instant: without it, decideResultQuota falls back to
         // parseClockTimeInTz on the wall string against Date.now() — a resetAt that rolls daily
@@ -353,34 +369,34 @@ const SCENARIOS: EmulatorScenario[] = [
         // by the in-process tests (which drive every message through normalize).
         rateLimitRejected(FIXED_RESET_EPOCH_MS),
         resultUsageLimit(SESSION_LIMIT_TEXT),
-      ],
+      ),
     ],
   },
   {
     name: "overloaded-retry",
     attempts: [
-      [resultOverload529()],
-      [resultOverload529()],
-      [sysInit(), assistantText("Recovered after backoff."), resultSuccess("Succeeded on retry.")],
+      frames(resultOverload529()),
+      frames(resultOverload529()),
+      frames(sysInit(), assistantText("Recovered after backoff."), resultSuccess("Succeeded on retry.")),
     ],
   },
   {
     name: "overloaded-exhausted",
     // 7 attempts of pre-output 529 — past BACKOFF_MAX_RETRIES (6) → decideBackoff exhaustion.
     attempts: [
-      [resultOverload529()],
-      [resultOverload529()],
-      [resultOverload529()],
-      [resultOverload529()],
-      [resultOverload529()],
-      [resultOverload529()],
-      [resultOverload529()],
+      frames(resultOverload529()),
+      frames(resultOverload529()),
+      frames(resultOverload529()),
+      frames(resultOverload529()),
+      frames(resultOverload529()),
+      frames(resultOverload529()),
+      frames(resultOverload529()),
     ],
   },
   {
     name: "permission-denied",
     attempts: [
-      [
+      frames(
         sysInit(),
         permissionDenied(
           "Write",
@@ -388,17 +404,17 @@ const SCENARIOS: EmulatorScenario[] = [
           "Write to /etc/hosts is outside the allowed prototype directory.",
         ),
         resultSuccess("Turn ended after a denied write."),
-      ],
+      ),
     ],
   },
   {
     name: "error-midstream",
     attempts: [
-      [
+      frames(
         sysInit(),
         assistantText("Starting the task…"),
         resultError("error_during_execution", "the tool crashed mid-turn"),
-      ],
+      ),
     ],
   },
   {
@@ -407,11 +423,11 @@ const SCENARIOS: EmulatorScenario[] = [
     // out-of-band `status` + the synthetic overloadResultFrame, NO retry (a single attempt is the
     // proof: a retry would re-query and clamp to this same attempt, duplicating frames).
     attempts: [
-      [
+      frames(
         sysInit(),
         assistantText("Partial answer before the overload hit."),
         resultOverload529(),
-      ],
+      ),
     ],
   },
   {
@@ -420,6 +436,7 @@ const SCENARIOS: EmulatorScenario[] = [
     // fatal `error` frame error_kind:"auth", exit 1.
     attempts: [
       {
+        kind: "throw",
         messages: [sysInit()],
         thenThrow: () => new Error(AUTH_ERROR_MESSAGE),
       },
@@ -432,6 +449,7 @@ const SCENARIOS: EmulatorScenario[] = [
     // graceful exit 0.
     attempts: [
       {
+        kind: "throw",
         messages: [sysInit()],
         thenThrow: () => new Error(THROWN_QUOTA_ERROR_MESSAGE),
       },
@@ -443,38 +461,32 @@ const SCENARIOS: EmulatorScenario[] = [
     // frame error_kind:"sdk", exit 1.
     attempts: [
       {
+        kind: "throw",
         messages: [sysInit(), assistantText("Working on it…")],
         thenThrow: () => new Error(STREAM_ABORT_ERROR_MESSAGE),
       },
     ],
   },
   {
-    // SILENT RESUME → RECOVERY. The transcript EXISTS (resumeTranscriptExists), so `resume` reaches
-    // the SDK options and index.ts bounds the first frame. Attempt 0 HANGS (never yields) — the wedge
-    // an incomplete-transcript resume produces; the first-frame watchdog fires, drops `resume`, and
-    // emits a resume_fallback. Attempt 1 (the fresh, no-resume retry) streams normally and completes.
-    // Proves the invariant: an alive-but-zero-frames resume cannot persist — it deterministically
-    // recovers to a terminal `result`.
+    // resume-silent-recover: a wedged first-frame resume must recover to a terminal `result` (attempt
+    // 0 hangs → first-frame watchdog → fresh no-resume retry completes). See index.ts firstFrameWatchdog.
     name: "resume-silent-recover",
     resumeTranscriptExists: true,
     attempts: [
-      { hang: true },
-      [
+      { kind: "hang" },
+      frames(
         sysInit(),
         ...assistantTextStreamed("Recovered on a fresh start after the silent resume."),
         resultSuccess("Recovered after resume timeout."),
-      ],
+      ),
     ],
   },
   {
-    // SILENT RESUME → EXHAUSTION. Both the resume attempt AND its fresh no-resume retry hang. The
-    // first watchdog recovers (resume_fallback); the SECOND (the fresh retry ALSO silent) has nowhere
-    // left to fall back to, so index.ts drives a loud fatal `error` and exits 1. Proves the OTHER half
-    // of the invariant: the sidecar ALWAYS terminates even when recovery itself yields nothing — the
-    // UI can never stick on "Working…".
+    // resume-silent-exhausted: when BOTH the resume attempt and its fresh retry hang, the sidecar must
+    // still terminate — a loud fatal `error`, exit 1. See index.ts firstFrameWatchdog.
     name: "resume-silent-exhausted",
     resumeTranscriptExists: true,
-    attempts: [{ hang: true }, { hang: true }],
+    attempts: [{ kind: "hang" }, { kind: "hang" }],
   },
 ];
 
