@@ -97,6 +97,125 @@ function assertNever(x: never): never {
   throw new Error(`unreachable discriminant: ${String(x)}`);
 }
 
+// The three outcomes of a held ExitPlanMode permission: a DENY (resolve now with a corrective
+// message), or one of the two DRAFT boundaries (write the plan + dispatch the DRAFTED event whose
+// toolUseId hands resolution to the approval gate). EVERY outcome resolves the SDK's held permission
+// — DENY immediately, DRAFT via the gate — so there is no representable outcome that consumes the
+// permission without resolving it.
+type ExitPlanModeDecision =
+  | { kind: "deny"; diag: string; message: string }
+  | { kind: "draft-decomposition"; path: NodePath; node: TreeNode; parsed: ParsedMasterPlan }
+  | { kind: "draft-leaf"; path: NodePath; node: TreeNode };
+
+// PURE, TOTAL classifier for a held ExitPlanMode. The structural guarantee lives in the return type:
+// ExitPlanModeDecision does not include `undefined`, so TypeScript (TS2366 — "function lacks ending
+// return statement…") rejects any code path that falls out without a Decision, and a bare `return;`
+// becomes a type error. The single caller then APPLIES the Decision (the sole site that
+// resolves/dispatches), so "consumed the permission but never resolved it" — the deadlock class this
+// handler kept re-introducing via silent `return;` fall-through (the recon/sizer incidents) — is
+// unrepresentable rather than something a reviewer must catch on every new branch or Awaiting tag.
+function decideExitPlanMode(args: {
+  id: string;
+  plan: string;
+  awaitingTag: string;
+  path: NodePath | null;
+  node: TreeNode | null;
+}): ExitPlanModeDecision {
+  const { id, plan, awaitingTag, path, node } = args;
+  if (path === null || node === null) {
+    // No active node to route this ExitPlanMode against (e.g. mid-`intent`, before any node is
+    // active) — deny-and-resolve rather than silently dropping: an unresolved held permission
+    // here relied solely on the "intent"-turn silence watchdog to ever unblock the turn.
+    return {
+      kind: "deny",
+      diag: `rogue ExitPlanMode DENIED (no active node): id=${id} path=${path === null ? "null" : pathKey(path)} awaiting=${awaitingTag}`,
+      message:
+        "this turn must not call ExitPlanMode — finish the current task instead of exiting plan mode",
+    };
+  }
+  // ROGUE ExitPlanMode DENY: an ExitPlanMode arriving while the active
+  // node matches NO legal drafting branch — a summary turn, the roll-up window, a parent-review
+  // window, or the EXEC window — must NOT be silently dropped (that strands the held resolver and
+  // stalls the turn) NOR fall into the leaf-draft branch below (during execution that would write a
+  // spurious duplicate plan and dispatch NODE_DRAFTED against a leaf/executing node — illegal, a
+  // non-PlanValidationError that FATALs the run). Resolve it as a DENY with a corrective message so
+  // the SDK feeds it back as the tool error and the turn finishes its work. LOUD diag either way.
+  const inReviewWindow =
+    awaitingTag === "parent-review" ||
+    (node.state.stage === "split" && node.state.phase === "reviewing");
+  const inSummaryWindow =
+    awaitingTag === "summary" || (node.state.stage === "split" && inRollupWindow(node));
+  // EXEC window is keyed on the ACTIVE NODE'S state (authoritative), NOT on `awaiting.tag ===
+  // "exec"`: `awaiting` can lag the node state (a stale "exec" tag from a prior child), so routing
+  // off the tag would wrongly DENY a legitimate next-child draft (leaf/drafting). The leaf-draft
+  // branch below also routes purely on node state — this mirrors it.
+  const inExecWindow = node.state.stage === "leaf" && node.state.phase === "executing";
+  // RECON window: subReconPrompt tells the model to "return its report verbatim... do not call
+  // any other tool" — ExitPlanMode is only ever legitimate LATER, from subDraftPrompt, sent as a
+  // FRESH turn after NODE_RECON_DONE has already flipped the node past "recon" (awaiting is reset
+  // to idle before that send — see the "recon" result-case below). A model that ignores the
+  // instruction and calls ExitPlanMode WHILE the recon turn is still in flight must be denied here
+  // — the silent catch-all below would instead never resolve the SDK's held permission, and since
+  // the recon turn's own `result` (which is what would unblock it) cannot arrive while the SDK is
+  // paused on that same unresolved permission, an un-denied premature ExitPlanMode deadlocks the
+  // run forever (no watchdog covers the "recon" tag).
+  const inReconWindow = awaitingTag === "recon";
+  if (inReviewWindow || inSummaryWindow || inExecWindow || inReconWindow) {
+    // The corrective message names the work the turn is actually doing so the model resumes it
+    // instead of re-drafting: the exec window tells it to keep implementing; recon/review/summary
+    // tell it to finish that turn's text.
+    const message = inExecWindow
+      ? "this turn must not call ExitPlanMode — finish implementing the approved plan"
+      : `this turn must not call ExitPlanMode — finish the ${inReconWindow ? "recon" : inReviewWindow ? "review" : "summary"} text`;
+    const turnLabel = inExecWindow ? "exec" : inReconWindow ? "recon" : inReviewWindow ? "review" : "summary";
+    return {
+      kind: "deny",
+      diag: `rogue ExitPlanMode DENIED: id=${id} during the ${turnLabel} window (node=${node.state.stage}/${node.state.phase}, awaiting=${awaitingTag}) — this turn must not draft`,
+      message,
+    };
+  }
+  if (
+    node.state.stage === "open" &&
+    (node.state.phase === "decomposing" || node.state.phase === "awaiting-decomposition-approval")
+  ) {
+    // VALIDATE-BEFORE-WRITE: a header-less draft, an out-of-1-99 header, or an empty children list
+    // throws a PlanValidationError — RECOVERABLE, not a crash. DENY the held ExitPlanMode with the
+    // validation message (the requestChanges mechanism) so the model redrafts; the run stays active,
+    // and because the caller only writes on a `draft-decomposition` Decision the MALFORMED MASTER IS
+    // NEVER PERSISTED. The discriminator is TYPED (`instanceof PlanValidationError`); any OTHER error
+    // propagates to the ingest queue's catch → FATAL.
+    try {
+      const parsed = parseSubPlanHeaders(plan);
+      return { kind: "draft-decomposition", path, node, parsed };
+    } catch (err) {
+      if (err instanceof PlanValidationError) {
+        return {
+          kind: "deny",
+          diag: `master-write: decomposition rejected, denying for redraft — ${err.message}`,
+          message: err.message,
+        };
+      }
+      throw err;
+    }
+  }
+  if (node.state.stage === "leaf") {
+    return { kind: "draft-leaf", path, node };
+  }
+  // DEFAULT DENY (by construction, not enumeration): any other node state (open/recon,
+  // open/sizing, split/running-children, …) — and any future `Awaiting` tag added later — is
+  // not a draft boundary the machine recognizes. Resolve it as a DENY rather than the old
+  // silent `return;` (the "sizer" incident: a growing if-chain of named "windows" missed this
+  // tag and stranded the SDK's held permission with no watchdog to recover it). Every legitimate
+  // draft boundary is handled by an earlier branch with its own explicit Decision, so nothing
+  // that reaches here is a case this deny could wrongly clobber.
+  return {
+    kind: "deny",
+    diag: `rogue ExitPlanMode DENIED (default): id=${id} node=${node.state.stage}/${node.state.phase} awaiting=${awaitingTag} — not a recognized draft boundary`,
+    message:
+      "this turn must not call ExitPlanMode — finish the current task instead of exiting plan mode",
+  };
+}
+
 // The EFFECTIVE model a node's live turn runs with: an explicit user override (model_source
 // "override") pins the node's stamped execution_model; otherwise the domain-aware phaseModel for the
 // node's current (stage, phase). Both the session-open boundaries (E1) and the per-turn model seam
@@ -1564,187 +1683,118 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       const st = requireState();
       const path = activePath();
       const node = path !== null ? nodeAtPath(st.root, path) : null;
-      if (path === null || node === null) {
-        // No active node to route this ExitPlanMode against (e.g. mid-`intent`, before any node is
-        // active) — deny-and-resolve rather than silently dropping: an unresolved held permission
-        // here relied solely on the "intent"-turn silence watchdog to ever unblock the turn.
-        diag(`rogue ExitPlanMode DENIED (no active node): id=${req.id} path=${path === null ? "null" : pathKey(path)} awaiting=${run.awaiting.tag}`);
-        await deps.resolvePermission({
-          id: req.id,
-          allow: false,
-          message: "this turn must not call ExitPlanMode — finish the current task instead of exiting plan mode",
-        });
-        return;
-      }
-      // ROGUE ExitPlanMode DENY: an ExitPlanMode arriving while the active
-      // node matches NO legal drafting branch — a summary turn, the roll-up window, a parent-review
-      // window, or the EXEC window — must NOT be silently dropped (that strands the held resolver and
-      // stalls the turn) NOR fall into the leaf-draft branch below (during execution that would write a
-      // spurious duplicate plan and dispatch NODE_DRAFTED against a leaf/executing node — illegal, a
-      // non-PlanValidationError that FATALs the run). Resolve it as a DENY with a corrective message so
-      // the SDK feeds it back as the tool error and the turn finishes its work. LOUD diag either way.
-      const inReviewWindow =
-        run.awaiting.tag === "parent-review" ||
-        (node.state.stage === "split" && node.state.phase === "reviewing");
-      const inSummaryWindow =
-        run.awaiting.tag === "summary" || (node.state.stage === "split" && inRollupWindow(node));
-      // EXEC window is keyed on the ACTIVE NODE'S state (authoritative), NOT on `awaiting.tag ===
-      // "exec"`: `awaiting` can lag the node state (a stale "exec" tag from a prior child), so routing
-      // off the tag would wrongly DENY a legitimate next-child draft (leaf/drafting). The leaf-draft
-      // branch below also routes purely on node state — this mirrors it.
-      const inExecWindow = node.state.stage === "leaf" && node.state.phase === "executing";
-      // RECON window: subReconPrompt tells the model to "return its report verbatim... do not call
-      // any other tool" — ExitPlanMode is only ever legitimate LATER, from subDraftPrompt, sent as a
-      // FRESH turn after NODE_RECON_DONE has already flipped the node past "recon" (awaiting is reset
-      // to idle before that send — see the "recon" result-case below). A model that ignores the
-      // instruction and calls ExitPlanMode WHILE the recon turn is still in flight must be denied here
-      // — the silent catch-all below would instead never resolve the SDK's held permission, and since
-      // the recon turn's own `result` (which is what would unblock it) cannot arrive while the SDK is
-      // paused on that same unresolved permission, an un-denied premature ExitPlanMode deadlocks the
-      // run forever (no watchdog covers the "recon" tag).
-      const inReconWindow = run.awaiting.tag === "recon";
-      if (inReviewWindow || inSummaryWindow || inExecWindow || inReconWindow) {
-        // The corrective message names the work the turn is actually doing so the model resumes it
-        // instead of re-drafting: the exec window tells it to keep implementing; recon/review/summary
-        // tell it to finish that turn's text.
-        const message = inExecWindow
-          ? "this turn must not call ExitPlanMode — finish implementing the approved plan"
-          : `this turn must not call ExitPlanMode — finish the ${inReconWindow ? "recon" : inReviewWindow ? "review" : "summary"} text`;
-        const turnLabel = inExecWindow ? "exec" : inReconWindow ? "recon" : inReviewWindow ? "review" : "summary";
-        diag(
-          `rogue ExitPlanMode DENIED: id=${req.id} during the ${turnLabel} window (node=${node.state.stage}/${node.state.phase}, awaiting=${run.awaiting.tag}) — this turn must not draft`,
-        );
-        await deps.resolvePermission({
-          id: req.id,
-          allow: false,
-          message,
-        });
-        return;
-      }
-      if (
-        node.state.stage === "open" &&
-        (node.state.phase === "decomposing" || node.state.phase === "awaiting-decomposition-approval")
-      ) {
-        // The DECOMPOSITION plan (root: master; non-root: the node's own nested decomposition).
-        // Parse + VALIDATE its sub-plan headers FIRST — BEFORE the live writeAgentPlan — then write the
-        // plans-dir copy for sidebar nesting (root: flavor master, nn=null; non-root: flavor sub,
-        // nn=the node's dotted PathKey), then land CHILDREN_PARSED + DECOMPOSITION_DRAFTED (the reducer
-        // sets the unified gate + notifies).
-        // VALIDATE-BEFORE-WRITE: a header-less draft, an out-of-1-99 header, or an empty
-        // children list throws a PlanValidationError — RECOVERABLE, not a crash. We DENY the held
-        // ExitPlanMode with the validation message (the requestChanges mechanism) so the model redrafts;
-        // the run stays active, and the MALFORMED MASTER IS NEVER PERSISTED (writeAgentPlan runs only
-        // after validation passes). The discriminator is TYPED (`instanceof PlanValidationError`); any
-        // OTHER error propagates to the ingest queue's catch → FATAL. On success, capture each child's
-        // Mandate (a re-draft replaces the whole map so stale sections never leak).
-        let parsed: ParsedMasterPlan;
-        try {
-          parsed = parseSubPlanHeaders(plan);
-        } catch (err) {
-          if (err instanceof PlanValidationError) {
-            diag(`master-write: decomposition rejected, denying for redraft — ${err.message}`);
-            await deps.resolvePermission({ id: req.id, allow: false, message: err.message });
-            return;
-          }
-          throw err;
-        }
-        // DIAG: log the decomposition-write decision so a live trace confirms the flavor keying
-        // (nn=null ⇒ flavor:master; dotted nn ⇒ flavor:sub under the same tree_id). After validation.
-        const decompNn = path.length === 0 ? null : pathKey(path);
-        diag(
-          `master-write: path=writeAgentPlan tree_id=${st.tree_id} nn=${decompNn ?? "null"} flavor=${decompNn === null ? "master" : "sub"} node=${node.state.stage}/${node.state.phase}`,
-        );
-        const masterPath = await deps.writeAgentPlan(plan, st.tree_id, decompNn, node.execution_model);
-        diag(`master-write: wrote -> ${masterPath}`);
-        // Child paths are minted as [...parentPath, parseNn(headerNn)] — the header NN is the PER-LEVEL
-        // segment; the full dotted id derives from nesting. The mandate map stays keyed by full
-        // PathKey: a (re-)draft REPLACES this node's descendant entries (so stale sections never leak)
-        // while every OTHER level's mandates survive. At the root the filter degenerates to a full
-        // replace (every key descends from "").
-        const parentKey = pathKey(path);
-        const childPrefix = parentKey === "" ? "" : `${parentKey}.`;
-        run.mandates = new Map([
-          ...[...run.mandates.entries()].filter(([k]) => !k.startsWith(childPrefix)),
-          ...parsed.subplans.map(
-            (s): [PathKey, Mandate] => [
-              pathKey([...path, s.nn]),
-              { title: s.title, sectionBody: s.body, masterPreamble: parsed.preamble },
-            ],
-          ),
-        ]);
-        await dispatch({
-          type: "CHILDREN_PARSED",
-          path,
-          children: parsed.subplans.map((s) => ({ nn: s.nn, title: s.title })),
-        });
-        // DRIVER-WRITE BOUNDARY: the decomposition's .plan-tree copy is a driver write — "master.md"
-        // at the root, the dotted "<pathKey>-plan.md" for a nested split (planName2). Written BETWEEN
-        // the two dispatches to preserve the gen-1 wire order: writeAgentPlan → state.json (children) →
-        // plan file → state.json (gate) → onAwaitingApproval.
-        await deps.writePlanTreeFile(run.cwd, planName2(path), plan);
-        // THE UNIFIED GATE: DECOMPOSITION_DRAFTED sets pendingApproval (kind "decomposition") and
-        // emits notifyAwaitingApproval — the reducer owns the gate surface now (no driver-side
-        // sentinel, no masterToolUseId).
-        await dispatch({
-          type: "DECOMPOSITION_DRAFTED",
-          path,
-          planPath: masterPath,
-          plansDirPath: masterPath,
-          toolUseId: req.id,
-        });
-        // ADJUST-NOTE CLEAR POINT (split child): this node's draft (its nested
-        // decomposition) has landed; both prompt injections are behind us.
-        clearAdjustNoteOnDraft(path);
-        return;
-      }
-      if (node.state.stage === "leaf") {
-        // A LEAF plan being drafted: SINGLE authoritative write here (learn the real path), then
-        // dispatch NODE_DRAFTED carrying it (gen-2 events carry no plan text — this is THE write).
-        // DIAG: log the leaf-write so a live trace confirms each node is written via nn=<pathKey> with
-        // the SAME tree_id as the master (⇒ flavor:sub, nested under the master). One write per draft —
-        // re-drafts overwrite, not duplicate. nn is the dotted PathKey STRING ("01", "02.01") — Rust
-        // rejects a bare number.
-        // ROOT-SINGLE EXCEPTION: the root single-collapse child is the ONLY plan its tree holds — no
-        // master file is written (root.planPath stays null), so a dotted nn would mint an ORPHAN
-        // flavor:sub the Rust arranger demotes to a standalone with its tree_id NULLED (and the sidebar
-        // placeholder, matched by tree_id, never cedes to the real row). Write it nn=null: Rust stamps
-        // the root-level flavor (a 0-child master renders as a flat row) and keeps its tree_id.
-        // isRootCollapseChild is the canonical predicate — the sole child of a planPath-less root split
-        // — so genuine sub-plans of split trees keep their dotted nn.
-        const nnPath = isRootCollapseChild(st.root, path) ? null : pathKey(path);
-        diag(
-          `sub-write: path=writeAgentPlan tree_id=${st.tree_id} nn=${nnPath ?? "null"} flavor=${nnPath === null ? "master (root-single)" : "sub"} node=${node.state.stage}/${node.state.phase}`,
-        );
-        const realPath = await deps.writeAgentPlan(plan, st.tree_id, nnPath, node.execution_model);
-        diag(`sub-write: wrote -> ${realPath}`);
-        await dispatch({
-          type: "NODE_DRAFTED",
-          path,
-          toolUseId: req.id,
-          planPath: realPath,
-          plansDirPath: realPath,
-        });
-        // ADJUST-NOTE CLEAR POINT (leaf child): the note was injected into this child's
-        // recon AND draft prompts; its DRAFTED dispatch ends the note's one-sibling scope.
-        clearAdjustNoteOnDraft(path);
-        return;
-      }
-      // DEFAULT DENY (by construction, not enumeration): any other node state (open/recon,
-      // open/sizing, split/running-children, …) — and any future `Awaiting` tag added later — is
-      // not a draft boundary the machine recognizes. Resolve it as a DENY rather than the old
-      // silent `return;` (the "sizer" incident: a growing if-chain of named "windows" missed this
-      // tag and stranded the SDK's held permission with no watchdog to recover it). Every legitimate
-      // draft boundary is handled by an earlier branch in this function with its own explicit
-      // resolve/dispatch, so nothing that reaches here is a case this deny could wrongly clobber.
-      diag(
-        `rogue ExitPlanMode DENIED (default): id=${req.id} node=${node.state.stage}/${node.state.phase} awaiting=${run.awaiting.tag} — not a recognized draft boundary`,
-      );
-      await deps.resolvePermission({
+      // CLASSIFY (pure, total) then APPLY (the sole resolve/dispatch site). decideExitPlanMode's
+      // non-optional return type makes "fall out of the handler without resolving the held
+      // permission" a compile error, so the deadlock class can't re-enter through a new branch.
+      const decision = decideExitPlanMode({
         id: req.id,
-        allow: false,
-        message: "this turn must not call ExitPlanMode — finish the current task instead of exiting plan mode",
+        plan,
+        awaitingTag: run.awaiting.tag,
+        path,
+        node,
       });
-      return;
+      switch (decision.kind) {
+        case "deny": {
+          diag(decision.diag);
+          await deps.resolvePermission({
+            id: req.id,
+            allow: false,
+            message: decision.message,
+          });
+          return;
+        }
+        case "draft-decomposition": {
+          const { path, node, parsed } = decision;
+          // The DECOMPOSITION plan (root: master; non-root: the node's own nested decomposition):
+          // write the plans-dir copy for sidebar nesting (root: flavor master, nn=null; non-root:
+          // flavor sub, nn=the node's dotted PathKey), then land CHILDREN_PARSED +
+          // DECOMPOSITION_DRAFTED (the reducer sets the unified gate + notifies). The draft was already
+          // parsed + VALIDATED in decideExitPlanMode, so a malformed master never reaches this write.
+          // DIAG: log the decomposition-write decision so a live trace confirms the flavor keying
+          // (nn=null ⇒ flavor:master; dotted nn ⇒ flavor:sub under the same tree_id). After validation.
+          const decompNn = path.length === 0 ? null : pathKey(path);
+          diag(
+            `master-write: path=writeAgentPlan tree_id=${st.tree_id} nn=${decompNn ?? "null"} flavor=${decompNn === null ? "master" : "sub"} node=${node.state.stage}/${node.state.phase}`,
+          );
+          const masterPath = await deps.writeAgentPlan(plan, st.tree_id, decompNn, node.execution_model);
+          diag(`master-write: wrote -> ${masterPath}`);
+          // Child paths are minted as [...parentPath, parseNn(headerNn)] — the header NN is the PER-LEVEL
+          // segment; the full dotted id derives from nesting. The mandate map stays keyed by full
+          // PathKey: a (re-)draft REPLACES this node's descendant entries (so stale sections never leak)
+          // while every OTHER level's mandates survive. At the root the filter degenerates to a full
+          // replace (every key descends from "").
+          const parentKey = pathKey(path);
+          const childPrefix = parentKey === "" ? "" : `${parentKey}.`;
+          run.mandates = new Map([
+            ...[...run.mandates.entries()].filter(([k]) => !k.startsWith(childPrefix)),
+            ...parsed.subplans.map(
+              (s): [PathKey, Mandate] => [
+                pathKey([...path, s.nn]),
+                { title: s.title, sectionBody: s.body, masterPreamble: parsed.preamble },
+              ],
+            ),
+          ]);
+          await dispatch({
+            type: "CHILDREN_PARSED",
+            path,
+            children: parsed.subplans.map((s) => ({ nn: s.nn, title: s.title })),
+          });
+          // DRIVER-WRITE BOUNDARY: the decomposition's .plan-tree copy is a driver write — "master.md"
+          // at the root, the dotted "<pathKey>-plan.md" for a nested split (planName2). Written BETWEEN
+          // the two dispatches to preserve the gen-1 wire order: writeAgentPlan → state.json (children) →
+          // plan file → state.json (gate) → onAwaitingApproval.
+          await deps.writePlanTreeFile(run.cwd, planName2(path), plan);
+          // THE UNIFIED GATE: DECOMPOSITION_DRAFTED sets pendingApproval (kind "decomposition") and
+          // emits notifyAwaitingApproval — the reducer owns the gate surface now (no driver-side
+          // sentinel, no masterToolUseId).
+          await dispatch({
+            type: "DECOMPOSITION_DRAFTED",
+            path,
+            planPath: masterPath,
+            plansDirPath: masterPath,
+            toolUseId: req.id,
+          });
+          // ADJUST-NOTE CLEAR POINT (split child): this node's draft (its nested
+          // decomposition) has landed; both prompt injections are behind us.
+          clearAdjustNoteOnDraft(path);
+          return;
+        }
+        case "draft-leaf": {
+          const { path, node } = decision;
+          // A LEAF plan being drafted: SINGLE authoritative write here (learn the real path), then
+          // dispatch NODE_DRAFTED carrying it (gen-2 events carry no plan text — this is THE write).
+          // DIAG: log the leaf-write so a live trace confirms each node is written via nn=<pathKey> with
+          // the SAME tree_id as the master (⇒ flavor:sub, nested under the master). One write per draft —
+          // re-drafts overwrite, not duplicate. nn is the dotted PathKey STRING ("01", "02.01") — Rust
+          // rejects a bare number.
+          // ROOT-SINGLE EXCEPTION: the root single-collapse child is the ONLY plan its tree holds — no
+          // master file is written (root.planPath stays null), so a dotted nn would mint an ORPHAN
+          // flavor:sub the Rust arranger demotes to a standalone with its tree_id NULLED (and the sidebar
+          // placeholder, matched by tree_id, never cedes to the real row). Write it nn=null: Rust stamps
+          // the root-level flavor (a 0-child master renders as a flat row) and keeps its tree_id.
+          // isRootCollapseChild is the canonical predicate — the sole child of a planPath-less root split
+          // — so genuine sub-plans of split trees keep their dotted nn.
+          const nnPath = isRootCollapseChild(st.root, path) ? null : pathKey(path);
+          diag(
+            `sub-write: path=writeAgentPlan tree_id=${st.tree_id} nn=${nnPath ?? "null"} flavor=${nnPath === null ? "master (root-single)" : "sub"} node=${node.state.stage}/${node.state.phase}`,
+          );
+          const realPath = await deps.writeAgentPlan(plan, st.tree_id, nnPath, node.execution_model);
+          diag(`sub-write: wrote -> ${realPath}`);
+          await dispatch({
+            type: "NODE_DRAFTED",
+            path,
+            toolUseId: req.id,
+            planPath: realPath,
+            plansDirPath: realPath,
+          });
+          // ADJUST-NOTE CLEAR POINT (leaf child): the note was injected into this child's
+          // recon AND draft prompts; its DRAFTED dispatch ends the note's one-sibling scope.
+          clearAdjustNoteOnDraft(path);
+          return;
+        }
+        default:
+          assertNever(decision);
+      }
     }
     if (req.tool === "AskUserQuestion") {
       const questions = (req.input as AskUserQuestionInput).questions;
