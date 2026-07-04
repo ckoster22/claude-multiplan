@@ -61,6 +61,7 @@ type MockCommand =
   | { cmd: "read_plan_contents"; args: { path: string } }
   | { cmd: "read_prototype_file"; args: { cwd: string; path: string } }
   | { cmd: "read_image_as_data_url"; args: { path: string } }
+  | { cmd: "capture_webview_png"; args?: undefined }
   | { cmd: "read_plan_tree_file"; args: { cwd: string; name: string } }
   | {
       cmd: "read_plan_transcript";
@@ -119,6 +120,7 @@ export const HANDLED_COMMANDS = [
   "read_plan_contents",
   "read_prototype_file",
   "read_image_as_data_url",
+  "capture_webview_png",
   "read_plan_tree_file",
   "read_plan_transcript",
   "read_review_plan",
@@ -255,6 +257,12 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
 
     case "read_image_as_data_url":
       // A real 1x1 PNG data URL so the reading pane's async image pass sets a valid <img src>.
+      return TINY_PNG_DATA_URL;
+
+    case "capture_webview_png":
+      // jsdom/mock has no WKWebView; return a valid stub PNG data URL matching the real
+      // command's full `data:image/png;base64,...` return shape (the drift canary only checks
+      // that the command is handled, not the pixels).
       return TINY_PNG_DATA_URL;
 
     case "read_plan_tree_file": {

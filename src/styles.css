@@ -1537,6 +1537,86 @@ figcaption { font-size: 11px; color: var(--text-dim); text-align: center; margin
 /* The preview card stacks: toolbar (top) · iframe/stage (grows) · gallery (bottom). The iframe grows
    to fill; the stage is absolutely positioned over it. `position:relative` anchors the stage offsets. */
 .proto-preview .modal-card > iframe { flex: 1 1 auto; height: auto; min-height: 0; }
+
+/* ---- annotate/capture chrome inside the prototype-preview modal ----
+   The stage (frozen img + SVG overlay) is absolutely positioned over the iframe at its identical rect
+   (offsets computed in JS). The toolbar + gallery live in the modal chrome, OUTSIDE the stage, so a
+   whole-webview snapshot cropped to the stage rect never picks up toolbar/gallery/backdrop pixels. */
+.proto-annotate-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 44px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-window);
+  z-index: 2;
+}
+.proto-annotate-toolbar button {
+  font: inherit; font-size: 12.5px; cursor: pointer;
+  padding: 5px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-window); color: var(--text);
+}
+.proto-annotate-toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+.proto-annotate-toggle.is-active,
+.proto-annotate-tool.is-active {
+  background: var(--accent); border-color: var(--accent); color: var(--conv-on-accent);
+}
+.proto-annotate-toggle.is-active:hover,
+.proto-annotate-tool.is-active:hover { color: var(--conv-on-accent); }
+.proto-annotate-palette { display: flex; gap: 6px; }
+.proto-annotate-palette[hidden] { display: none; }
+
+.proto-annotate-stage { position: absolute; z-index: 1; overflow: hidden; }
+.proto-annotate-frozen {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  display: block; object-fit: fill; background: #fff;
+}
+.proto-annotate-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: auto; }
+.proto-annotate-hidden { visibility: hidden; }
+.proto-annotate-textinput {
+  position: absolute; z-index: 3; min-width: 120px; min-height: 32px;
+  padding: 4px 6px; resize: none;
+  border: 1px solid var(--accent); border-radius: 6px;
+  background: var(--bg-window); color: var(--text); font: inherit; font-size: 12px;
+}
+
+.capture-gallery {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-window);
+  z-index: 2;
+}
+.capture-gallery.is-empty { display: none; }
+.capture-thumb {
+  position: relative; flex: 0 0 auto;
+  width: 88px; height: 66px; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+.capture-thumb-img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
+.capture-thumb-del {
+  position: absolute; top: 2px; right: 2px;
+  width: 18px; height: 18px; line-height: 1; padding: 0;
+  border-radius: 50%; border: 1px solid var(--border);
+  background: var(--bg-window); color: var(--text);
+  font-size: 13px; cursor: pointer;
+}
+.capture-thumb-del:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Full-size capture: a stacked modal (via openModal) sized to the image. */
+.capture-full .modal-card { width: min(90vw, 1400px); height: min(90vh, 1000px); }
+.capture-full-img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; display: block; }
+
+.capture-confirm-modal .modal-card { width: min(360px, 90vw); height: auto; }
+.capture-confirm { padding: 22px 20px 18px; display: flex; flex-direction: column; gap: 14px; }
+.capture-confirm-msg { margin: 0; font-family: var(--ui); font-size: 13.5px; color: var(--text); }
+.capture-confirm-row { display: flex; justify-content: flex-end; gap: 8px; }
+.capture-confirm-row button {
+  font: inherit; font-size: 12.5px; cursor: pointer;
+  padding: 6px 14px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-window); color: var(--text);
+}
+.capture-confirm-cancel:hover { border-color: var(--accent); color: var(--accent); }
+.capture-confirm-delete { border-color: var(--accent); background: var(--accent); color: var(--conv-on-accent); }
+
 /* ---- auth onboarding block (inside the composer) ---- */
 .conv-auth {
   border: 1px solid var(--accent); border-radius: 10px;

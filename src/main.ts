@@ -91,6 +91,7 @@ import {
   referencesExternalFiles,
 } from "./prototype";
 import { openModal, type ModalHandle } from "./modal";
+import { initAnnotate, type AnnotateHandle } from "./capture/annotate-overlay";
 import type { ToolPermissionRequested, AgentExit, AgentError, AgentStream } from "./conversation/types";
 import type {
   PlanRecord,
@@ -2870,12 +2871,25 @@ async function openPrototypePreview(gate: PrototypeGate): Promise<void> {
   iframe.tabIndex = -1;
   iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
   iframe.srcdoc = html;
+  let annotate: AnnotateHandle | null = null;
   previewModal = openModal({
     label: "HTML prototype preview",
     content: iframe,
     className: "proto-preview",
     onClose: () => {
+      annotate?.destroy();
+      annotate = null;
       previewModal = null;
+    },
+  });
+  annotate = initAnnotate({
+    card: previewModal.card,
+    iframe,
+    invoke: <T,>(cmd: string, args?: Record<string, unknown>) => invoke<T>(cmd, args),
+    now: () => performance.now(),
+    onError: (message) => {
+      setHookStatus(hookStatusEl, message, "error");
+      setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
     },
   });
   previewOpening = false;
