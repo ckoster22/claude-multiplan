@@ -24,10 +24,10 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
 | Conversation / live-session | 8 | 26 | 0 | 1 | 0 | 0 | 0 | 5 | 40 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
-| Sidecar / agent-driver | 5 | 17 | 0 | 0 | 4 | 0 | 0 | 5 | 31 |
+| Sidecar / agent-driver | 6 | 17 | 0 | 0 | 4 | 0 | 0 | 5 | 32 |
 | Rust backend (`src-tauri/`) | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | 3 |
-| Other | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 2 |
-| **Total** | 20 | 72 | 5 | 1 | 4 | 3 | 1 | 23 | 129 |
+| Other | 3 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 4 |
+| **Total** | 23 | 72 | 5 | 1 | 4 | 3 | 1 | 23 | 132 |
 
 ## Reading-pane render
 
@@ -709,6 +709,15 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `sidecar/cli-plans.ts:22` — `export const CLI_PLANS_SUBDIR = ".plan-tree/cli-plans";`
 
+### emulator-attempt-tagged-union
+**`type-level`** — every emulator attempt carries a "kind" discriminant (frames|throw|hang); attemptMessages and the emulator generator switch on it exhaustively with an assertNever default, so no runtime shape-sniffing (Array.isArray / "in") can misclassify an attempt.
+
+**Prevents:** a bare-array-vs-object mis-probe silently dropping a hang/throw tail or misreading frames.
+
+**Anchor:** `sidecar/emulator-scenes.ts:211` — `export type EmulatorAttempt =`
+
+**Tests:** `emulator.test.ts (makeEmulatorQuery attempt-advance + throw-tail cases); emulator-e2e goldens (hang/throw/frames).`
+
 ### env-override-whitelist-or-no-op
 **`runtime-guard`** — AGENT_EFFORT overrides only for a valid SDK level and AGENT_MODEL only when non-empty; invalid values produce no override.
 
@@ -728,42 +737,42 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a command mid-drain routing to apply on a query being closed.
 
-**Anchor:** `sidecar/index.ts:808` — `function currentSession(): Session {`
+**Anchor:** `sidecar/index.ts:807` — `function currentSession(): Session {`
 
 ### hostpolicy-unconditional-write
 **`runtime-guard`** — hostPolicy is a required field on every decision and applied unconditionally before the action switch.
 
 **Prevents:** a late command on a dead session leaving the host-policy backstop stale.
 
-**Anchor:** `sidecar/index.ts:928` — `hostPolicy = decision.hostPolicy;`
+**Anchor:** `sidecar/index.ts:927` — `hostPolicy = decision.hostPolicy;`
 
 ### setpermissionmode-toctou-trycatch-backstop
 **`runtime-guard`** — the await q.setPermissionMode is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
 
 **Prevents:** an unhandled rejection killing the sidecar process.
 
-**Anchor:** `sidecar/index.ts:942` — `try {`
+**Anchor:** `sidecar/index.ts:941` — `try {`
 
 ### setpermissionmode-exhaustiveness-guard
 **`type-level`** — every SessionCommandDecision.action is handled; an unhandled future variant is a compile error.
 
 **Prevents:** a new action silently falling through into the sibling case.
 
-**Anchor:** `sidecar/index.ts:961` — `const _exhaustive: never = decision.action;`
+**Anchor:** `sidecar/index.ts:960` — `const _exhaustive: never = decision.action;`
 
 ### setmodel-toctou-trycatch-backstop
 **`runtime-guard`** — the await q.setModel is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
 
 **Prevents:** an unhandled rejection killing the sidecar process.
 
-**Anchor:** `sidecar/index.ts:982` — `try {`
+**Anchor:** `sidecar/index.ts:981` — `try {`
 
 ### setmodel-exhaustiveness-guard
 **`type-level`** — every ModelCommandDecision.action is handled; an unhandled future variant is a compile error.
 
 **Prevents:** a new action silently falling through into the sibling case.
 
-**Anchor:** `sidecar/index.ts:998` — `const _exhaustive: never = decision.action;`
+**Anchor:** `sidecar/index.ts:997` — `const _exhaustive: never = decision.action;`
 
 ### plan-bash-write-blocklist-preserves-tests
 **`runtime-guard`** — under plan, write-shaped Bash is denied while read-only test runs stay allowed (best-effort blocklist, NOT a sandbox).
@@ -949,6 +958,24 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 **Tests:** `csp_production_script_src_forbids_inline_and_eval`
 
 ## Other
+
+### capture-persist-requires-path
+**`type-level`** — a capture is either "pending" (no on-disk file) or "persisted" with a non-optional `path`; the path lives ONLY on the persisted variant.
+
+**Prevents:** a persisted/attached capture that carries no real path (e.g. persistedPath === "" or undefined), or a "pending" capture masquerading as attached
+
+**Anchor:** `src/capture/gallery.ts:17` — `export type Capture =`
+
+**Tests:** `src/capture/gallery.test.ts "persistCapture" (pending has no path field; persisted always exposes a non-empty path)`
+
+### shape-discriminated-by-tool
+**`type-level`** — every annotation is exactly one of four variants keyed by `tool`, and each variant carries only its own geometry fields.
+
+**Prevents:** a nonsensical hybrid shape — e.g. a "freehand" with a `text` field or a "text" with `points`; the invalid field combination does not compile
+
+**Anchor:** `src/capture/overlay-model.ts:14` — `export type Shape =`
+
+**Tests:** `src/capture/overlay-model.test.ts "Shape discriminated union" (exhaustive switch + assertNever narrows each variant to its own fields)`
 
 ### remote-data-exhaustive-five-state
 **`type-level`** — folding a RemoteData via match() (all five states) or matchScalar() (the four reachable states) is exhaustive — the cases object requires every handler key, so a missing case is a compile error and each fold ends in assertNever; matchScalar accepts only ScalarRemoteData (zeroResults excluded by type), so a possibly-empty source cannot bypass the empty state.
