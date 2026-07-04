@@ -2877,7 +2877,14 @@ async function openPrototypePreview(gate: PrototypeGate): Promise<void> {
     content: iframe,
     className: "proto-preview",
     onClose: () => {
-      annotate?.destroy();
+      // Persist + attach any still-pending captures BEFORE teardown so closing the modal never
+      // silently drops a captured screenshot. onClose is synchronous; flushPending snapshots its
+      // pending set in its own synchronous prefix (before its first await), so firing it
+      // fire-and-forget here — then destroying, which clears `captures` synchronously — cannot race:
+      // the snapshot is already taken and each persist/attach runs against that local snapshot.
+      const handle = annotate;
+      void handle?.flushPending();
+      handle?.destroy();
       annotate = null;
       previewModal = null;
     },
@@ -3185,6 +3192,10 @@ window.addEventListener("DOMContentLoaded", () => {
       switchToPlanTab();
       void renderPrototypePreview(gate);
       refreshReviewBar();
+      // An HTML gate is directly viewable in-app, so auto-open the preview modal (self-guarding: a
+      // second call while it is already open no-ops). The #prototype-preview button remains as a
+      // manual re-open affordance. Do NOT auto-enter annotate mode.
+      if (gate.kind === "html") void openPrototypePreview(gate);
     },
     onAcceptanceReview: (gate) => {
       // The forced acceptance gate arrived: the run is built and the user must record a

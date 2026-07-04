@@ -50,7 +50,13 @@ export interface OverlayHandle {
 
 // Mount the drawing overlay into `stage`. `getSize` returns the current stage pixel size (the overlay
 // tracks resize by re-denormalizing). Text authoring mounts a transient <textarea> into `stage`.
-export function createOverlay(stage: HTMLElement, getSize: () => { w: number; h: number }): OverlayHandle {
+export function createOverlay(
+  stage: HTMLElement,
+  getSize: () => { w: number; h: number },
+  // Notified when the transient text editor opens (true) and closes (false), so a caller can react
+  // to placement mode (e.g. toggle a hint). Optional — omitting it leaves behavior unchanged.
+  onTextEditor?: (open: boolean) => void,
+): OverlayHandle {
   const root = svg("svg");
   root.classList.add("proto-annotate-svg");
   root.setAttribute("xmlns", SVG_NS);
@@ -182,6 +188,7 @@ export function createOverlay(stage: HTMLElement, getSize: () => { w: number; h:
     input.style.top = `${py}px`;
     stage.appendChild(input);
     pendingText = input;
+    onTextEditor?.(true);
     let done = false;
     const finish = (commit: boolean): void => {
       if (done) return;
@@ -190,6 +197,7 @@ export function createOverlay(stage: HTMLElement, getSize: () => { w: number; h:
       input.remove();
       pendingText = null;
       finishPendingText = null;
+      onTextEditor?.(false);
       if (commit) commitText(anchor, value);
     };
     finishPendingText = finish;

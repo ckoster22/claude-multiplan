@@ -1561,8 +1561,13 @@ figcaption { font-size: 11px; color: var(--text-dim); text-align: center; margin
 }
 .proto-annotate-toggle.is-active:hover,
 .proto-annotate-tool.is-active:hover { color: var(--conv-on-accent); }
-.proto-annotate-palette { display: flex; gap: 6px; }
+.proto-annotate-palette { display: flex; align-items: center; gap: 6px; }
 .proto-annotate-palette[hidden] { display: none; }
+.annotate-hint {
+  font: inherit; font-size: 11.5px; color: var(--text-dim);
+  padding-left: 2px; white-space: nowrap;
+}
+.annotate-hint[hidden] { display: none; }
 
 .proto-annotate-stage { position: absolute; z-index: 1; overflow: hidden; }
 .proto-annotate-frozen {
@@ -1600,16 +1605,6 @@ figcaption { font-size: 11px; color: var(--text-dim); text-align: center; margin
   font-size: 13px; cursor: pointer;
 }
 .capture-thumb-del:hover { border-color: var(--accent); color: var(--accent); }
-.capture-thumb-attach {
-  position: absolute; left: 2px; right: 2px; bottom: 2px;
-  padding: 2px 0; line-height: 1;
-  border-radius: 6px; border: 1px solid var(--border);
-  background: var(--bg-window); color: var(--text);
-  font-size: 11px; cursor: pointer;
-}
-.capture-thumb-attach:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.capture-thumb-attach:disabled { opacity: 0.6; cursor: default; }
-.capture-thumb-attach.is-attached { border-color: var(--accent); color: var(--accent); }
 
 /* Full-size capture: a stacked modal (via openModal) sized to the image. */
 .capture-full .modal-card { width: min(90vw, 1400px); height: min(90vh, 1000px); }

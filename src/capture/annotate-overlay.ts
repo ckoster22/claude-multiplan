@@ -40,6 +40,10 @@ export interface AnnotateDeps {
 }
 
 export interface AnnotateHandle {
+  // Persist + attach every still-pending capture. Call before destroy() on modal close so no
+  // captured screenshot is silently dropped. Snapshots the pending set synchronously (before the
+  // first await) so a concurrent destroy() clearing `captures` cannot race the flush.
+  flushPending(): Promise<void>;
   destroy(): void;
 }
 
@@ -113,6 +117,20 @@ export function initAnnotate(deps: AnnotateDeps): AnnotateHandle {
     palette.appendChild(b);
   }
 
+  // The "Comment" tool only arms placement mode; nothing visible happens until the user clicks the
+  // prototype. This transient hint makes that discoverable. Shown only while the text tool is armed
+  // and no bubble editor is already open (see `textEditorOpen`).
+  const hint = document.createElement("span");
+  hint.className = "annotate-hint";
+  hint.textContent = "Click the prototype to place a comment.";
+  hint.hidden = true;
+  palette.appendChild(hint);
+  let selectedTool: Tool | null = null;
+  let textEditorOpen = false;
+  const refreshHint = (): void => {
+    hint.hidden = !(selectedTool === "text") || textEditorOpen;
+  };
+
   const captureBtn = document.createElement("button");
   captureBtn.type = "button";
   captureBtn.className = "proto-annotate-capture";
@@ -133,6 +151,39 @@ export function initAnnotate(deps: AnnotateDeps): AnnotateHandle {
 
   toolbar.append(annotateBtn, palette, undoBtn, clearBtn, captureBtn);
 
+  // Persist a pending capture (write_capture_png) FIRST, then attach it to the live conversation
+  // (fail-closed: no attach unless the write succeeds). Inert without a live conversation
+  // (`cwd`/`attachImages`). Returns true when the capture was persisted+attached.
+  async function persistAndAttach(cap: Capture): Promise<boolean> {
+    if (!cwd || !attachImages) return false;
+    // Pass the FULL data URL — the Rust side strips the `data:image/png;base64,` prefix.
+    let path: string;
+    try {
+      path = await invoke<string>("write_capture_png", { cwd, id: cap.id, dataUrl: cap.dataUrl });
+    } catch (e) {
+      onError(`Could not save capture: ${String(e)}`);
+      return false;
+    }
+    captures = persistCapture(captures, cap.id, path);
+    // Build the persisted capture from the snapshot `cap` + path, NOT by re-reading the shared
+    // `captures` array: on modal close destroy() clears `captures` synchronously while this write
+    // await is in flight, so a re-find would miss it and silently drop the attach.
+    const persisted: PersistedCapture = {
+      status: "persisted",
+      id: cap.id,
+      dataUrl: cap.dataUrl,
+      w: cap.w,
+      h: cap.h,
+      createdAt: cap.createdAt,
+      path,
+    };
+    attachImages([captureToAttachedImage(persisted)]);
+    // Re-render so the strip's per-thumb handlers close over the now-persisted capture (a subsequent
+    // delete must unlink its file). Harmless when the gallery has already been torn down on close.
+    gallery.render();
+    return true;
+  }
+
   const gallery: GalleryStripHandle = createGalleryStrip({
     getCaptures: () => captures,
     onDelete: async (cap) => {
@@ -148,30 +199,6 @@ export function initAnnotate(deps: AnnotateDeps): AnnotateHandle {
       captures = deleteCapture(captures, cap.id);
       gallery.render();
     },
-    onAttach: async (cap) => {
-      if (!cwd || !attachImages) {
-        onError("Cannot attach capture: no live conversation.");
-        return false;
-      }
-      // Persist FIRST (fail-closed): only attach after write_capture_png succeeds. Pass the FULL data
-      // URL — the Rust side strips the `data:image/png;base64,` prefix.
-      let path: string;
-      try {
-        path = await invoke<string>("write_capture_png", { cwd, id: cap.id, dataUrl: cap.dataUrl });
-      } catch (e) {
-        onError(`Could not save capture: ${String(e)}`);
-        return false;
-      }
-      captures = persistCapture(captures, cap.id, path);
-      const persisted = captures.find(
-        (c): c is PersistedCapture => c.id === cap.id && c.status === "persisted",
-      );
-      if (persisted) attachImages([captureToAttachedImage(persisted)]);
-      // Success feedback is the item's own "Attached" state (persisted status → button relabel),
-      // applied by the gallery re-render the caller runs after this resolves.
-      gallery.render();
-      return true;
-    },
   });
 
   card.insertBefore(toolbar, iframe);
@@ -179,7 +206,9 @@ export function initAnnotate(deps: AnnotateDeps): AnnotateHandle {
 
   function selectTool(t: Tool): void {
     overlay?.setTool(t);
+    selectedTool = t;
     for (const [tool, b] of toolBtns) b.classList.toggle("is-active", tool === t);
+    refreshHint();
   }
 
   const iframeRect = (): DOMRect => iframe.getBoundingClientRect();
@@ -227,10 +256,17 @@ export function initAnnotate(deps: AnnotateDeps): AnnotateHandle {
     frozenImg.alt = "Frozen prototype";
     stage.appendChild(frozenImg);
 
-    overlay = createOverlay(stage, () => {
-      const rect = iframeRect();
-      return { w: rect.width, h: rect.height };
-    });
+    overlay = createOverlay(
+      stage,
+      () => {
+        const rect = iframeRect();
+        return { w: rect.width, h: rect.height };
+      },
+      (open) => {
+        textEditorOpen = open;
+        refreshHint();
+      },
+    );
     stage.appendChild(overlay.svg);
 
     card.appendChild(stage);
@@ -311,6 +347,13 @@ export function initAnnotate(deps: AnnotateDeps): AnnotateHandle {
   }
 
   return {
+    async flushPending(): Promise<void> {
+      // Snapshot the pending set into a LOCAL array FIRST — before any await. `destroy()` clears the
+      // shared `captures` synchronously and the caller's onClose is synchronous, so without this
+      // snapshot the persist loop would race teardown and drop captures.
+      const pending = captures.filter((c) => c.status === "pending");
+      for (const cap of pending) await persistAndAttach(cap);
+    },
     destroy(): void {
       window.removeEventListener("resize", onResize);
       overlay?.destroy();

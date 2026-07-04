@@ -11,10 +11,6 @@ export interface GalleryStripDeps {
   // Delete this capture: unlink any persisted file (best-effort) then drop it from the in-session
   // model. The controller owns the reducer + invoke; the strip just triggers it after confirm.
   onDelete: (cap: Capture) => void | Promise<void>;
-  // Persist + attach this capture to the live conversation. Resolves true on success (attached),
-  // false when persistence failed and nothing was attached (fail-closed). The controller owns the
-  // invoke + attach + persisted-path bookkeeping; the strip only reflects the outcome in the UI.
-  onAttach: (cap: Capture) => Promise<boolean>;
 }
 
 export interface GalleryStripHandle {
@@ -108,24 +104,7 @@ export function createGalleryStrip(deps: GalleryStripDeps): GalleryStripHandle {
         confirmDelete(cap);
       });
 
-      const attach = document.createElement("button");
-      attach.type = "button";
-      attach.className = "capture-thumb-attach";
-      attach.setAttribute("aria-label", `Attach capture ${cap.id} to message`);
-      attach.textContent = cap.status === "persisted" ? "Attached" : "Attach";
-      if (cap.status === "persisted") attach.classList.add("is-attached");
-      attach.addEventListener("click", (e) => {
-        e.stopPropagation();
-        attach.disabled = true;
-        void deps.onAttach(cap).then((ok) => {
-          // Re-render pulls the fresh capture (now "persisted") so the label/state
-          // reflect the outcome. On failure the button re-enables via the re-render.
-          render();
-          if (!ok) attach.disabled = false;
-        });
-      });
-
-      chip.append(img, x, attach);
+      chip.append(img, x);
       thumbs.push(chip);
     }
     root.replaceChildren(...thumbs);

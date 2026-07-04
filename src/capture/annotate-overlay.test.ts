@@ -60,6 +60,16 @@ async function captureOne(card: HTMLElement): Promise<void> {
   await flush();
 }
 
+// Enter annotate once, then Capture `n` times within the same session (n pending thumbnails).
+async function captureN(card: HTMLElement, n: number): Promise<void> {
+  (card.querySelector(".proto-annotate-toggle") as HTMLButtonElement).click();
+  await flush();
+  for (let i = 0; i < n; i += 1) {
+    (card.querySelector(".proto-annotate-capture") as HTMLButtonElement).click();
+    await flush();
+  }
+}
+
 async function flush(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
@@ -201,7 +211,7 @@ describe("annotate controller", () => {
     expect(card.querySelectorAll(".capture-thumb")).toHaveLength(0);
   });
 
-  it("Attach persists via write_capture_png (FULL data URL) FIRST, then attaches the shaped bare-base64 image", async () => {
+  it("flushPending persists via write_capture_png (FULL data URL) FIRST, then attaches the shaped bare-base64 image", async () => {
     const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
     const invoke = vi.fn((cmd: string, args?: Record<string, unknown>) => {
       calls.push({ cmd, args });
@@ -212,25 +222,80 @@ describe("annotate controller", () => {
     const { card } = mount(invoke as never, { cwd: "/cwd", attachImages: (imgs) => attached.push(imgs) });
     await captureOne(card);
 
-    (card.querySelector(".capture-thumb-attach") as HTMLButtonElement).click();
-    await flush();
+    await handle!.flushPending();
 
     const writeCall = calls.find((c) => c.cmd === "write_capture_png");
     expect(writeCall).toBeTruthy();
     // FULL data URL passed to the persist command (Rust strips the prefix).
     expect(writeCall!.args).toEqual({ cwd: "/cwd", id: "cap1", dataUrl: "data:image/png;base64,CROP" });
-    // Attach happened AFTER persist, with the SHAPED bare-base64 image.
-    const writeIdx = calls.findIndex((c) => c.cmd === "write_capture_png");
+    // Attach happened, with the SHAPED bare-base64 image.
     expect(attached).toHaveLength(1);
     expect(attached[0]).toEqual([{ media_type: "image/png", data: "CROP" }]);
-    // Ordering: nothing attached before the write resolved.
-    expect(writeIdx).toBeGreaterThanOrEqual(0);
-    // The item reflects the attached state.
-    const btn = card.querySelector(".capture-thumb-attach") as HTMLButtonElement;
-    expect(btn.classList.contains("is-attached")).toBe(true);
   });
 
-  it("on persist FAILURE surfaces onError and does NOT attach (fail-closed)", async () => {
+  // Pins the flush/destroy teardown race: every still-pending capture is persisted AND attached on
+  // flush/close, so closing the annotate modal never silently drops a captured screenshot.
+  it("flushPending persists AND attaches EVERY pending capture (none dropped on close)", async () => {
+    const writes: string[] = [];
+    const invoke = vi.fn((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "write_capture_png") {
+        writes.push(String(args!.id));
+        return Promise.resolve(`/cwd/captures/${String(args!.id)}.png` as never);
+      }
+      return Promise.resolve(STUB_PNG as never);
+    });
+    const attached: AttachedImage[] = [];
+    const { card } = mount(invoke as never, { cwd: "/cwd", attachImages: (imgs) => attached.push(...imgs) });
+    await captureN(card, 2);
+    expect(card.querySelectorAll(".capture-thumb")).toHaveLength(2);
+
+    await handle!.flushPending();
+
+    expect(writes).toEqual(["cap1", "cap2"]);
+    expect(attached).toHaveLength(2);
+    expect(attached.every((a) => a.media_type === "image/png" && a.data === "CROP")).toBe(true);
+  });
+
+  // Reproduces main.ts onClose EXACTLY: flush is fired WITHOUT awaiting, destroy() runs synchronously
+  // right after (clearing `captures` mid-flight), and only then does the flush settle. The pending
+  // capture must survive because flushPending snapshots the pending set before its first await and
+  // persistAndAttach builds the attached image from that local snapshot, not by re-finding the (now
+  // empty) shared array. If persistAndAttach ever re-finds post-await, destroy() races the attach away.
+  it("on-close teardown (flush fire-and-forget, then synchronous destroy) still persists+attaches the pending capture", async () => {
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+    const invoke = vi.fn((cmd: string, args?: Record<string, unknown>) => {
+      calls.push({ cmd, args });
+      if (cmd === "write_capture_png") return Promise.resolve("/cwd/captures/cap1.png" as never);
+      return Promise.resolve(STUB_PNG as never);
+    });
+    const attached: AttachedImage[] = [];
+    const { card } = mount(invoke as never, { cwd: "/cwd", attachImages: (imgs) => attached.push(...imgs) });
+    await captureOne(card);
+    expect(card.querySelectorAll(".capture-thumb")).toHaveLength(1);
+
+    const p = handle!.flushPending();
+    handle!.destroy();
+    await p;
+
+    const writeCall = calls.find((c) => c.cmd === "write_capture_png");
+    expect(writeCall).toBeTruthy();
+    expect(writeCall!.args).toMatchObject({ cwd: "/cwd", id: "cap1" });
+    expect(attached).toEqual([{ media_type: "image/png", data: "CROP" }]);
+  });
+
+  it("flushPending no-ops (no error, no persist) when there is no live conversation", async () => {
+    const invoke = vi.fn(() => Promise.resolve(STUB_PNG as never));
+    const { card, errors } = mount(invoke as never);
+    await captureN(card, 1);
+    invoke.mockClear();
+
+    await handle!.flushPending();
+
+    expect(errors).toHaveLength(0);
+    expect(invoke).not.toHaveBeenCalledWith("write_capture_png", expect.anything());
+  });
+
+  it("flushPending on persist FAILURE surfaces onError and does NOT attach (fail-closed)", async () => {
     const invoke = vi.fn((cmd: string) => {
       if (cmd === "write_capture_png") return Promise.reject(new Error("disk full"));
       return Promise.resolve(STUB_PNG as never);
@@ -239,13 +304,10 @@ describe("annotate controller", () => {
     const { card, errors } = mount(invoke as never, { cwd: "/cwd", attachImages: (imgs) => attached.push(imgs) });
     await captureOne(card);
 
-    (card.querySelector(".capture-thumb-attach") as HTMLButtonElement).click();
-    await flush();
+    await handle!.flushPending();
 
     expect(errors.some((e) => e.includes("disk full"))).toBe(true);
     expect(attached).toHaveLength(0);
-    const btn = card.querySelector(".capture-thumb-attach") as HTMLButtonElement;
-    expect(btn.classList.contains("is-attached")).toBe(false);
   });
 
   it("gallery-delete calls delete_capture_png ONLY for a persisted capture", async () => {
@@ -255,9 +317,8 @@ describe("annotate controller", () => {
     });
     const { card } = mount(invoke as never, { cwd: "/cwd", attachImages: () => {} });
     await captureOne(card);
-    // Attach it → now persisted.
-    (card.querySelector(".capture-thumb-attach") as HTMLButtonElement).click();
-    await flush();
+    // Persist it via flush → now persisted.
+    await handle!.flushPending();
     invoke.mockClear();
 
     (card.querySelector(".capture-thumb-del") as HTMLButtonElement).click();
@@ -290,8 +351,7 @@ describe("annotate controller", () => {
     });
     const { card, errors } = mount(invoke as never, { cwd: "/cwd", attachImages: () => {} });
     await captureOne(card);
-    (card.querySelector(".capture-thumb-attach") as HTMLButtonElement).click();
-    await flush();
+    await handle!.flushPending();
 
     (card.querySelector(".capture-thumb-del") as HTMLButtonElement).click();
     (document.querySelector(".capture-confirm-delete") as HTMLButtonElement).click();
@@ -299,5 +359,38 @@ describe("annotate controller", () => {
 
     expect(errors.some((e) => e.includes("gone"))).toBe(true);
     expect(card.querySelectorAll(".capture-thumb")).toHaveLength(0);
+  });
+
+  it("selecting the Comment (text) tool reveals the placement hint; other tools hide it", async () => {
+    const invoke = vi.fn(() => Promise.resolve(STUB_PNG as never));
+    const { card } = mount(invoke as never);
+    (card.querySelector(".proto-annotate-toggle") as HTMLButtonElement).click();
+    await flush();
+    const hint = () => card.querySelector(".annotate-hint") as HTMLElement;
+    // Enter selects "arrow" by default → hint hidden.
+    expect(hint().hidden).toBe(true);
+    (card.querySelector('.proto-annotate-tool[data-tool="text"]') as HTMLButtonElement).click();
+    expect(hint().hidden).toBe(false);
+    (card.querySelector('.proto-annotate-tool[data-tool="arrow"]') as HTMLButtonElement).click();
+    expect(hint().hidden).toBe(true);
+  });
+
+  it("opening a comment bubble editor hides the hint until it closes", async () => {
+    const invoke = vi.fn(() => Promise.resolve(STUB_PNG as never));
+    const { card } = mount(invoke as never);
+    (card.querySelector(".proto-annotate-toggle") as HTMLButtonElement).click();
+    await flush();
+    (card.querySelector('.proto-annotate-tool[data-tool="text"]') as HTMLButtonElement).click();
+    const hint = () => card.querySelector(".annotate-hint") as HTMLElement;
+    expect(hint().hidden).toBe(false);
+    // Click the prototype to open the bubble editor → hint hides while placing.
+    const svgEl = card.querySelector(".proto-annotate-svg") as SVGSVGElement;
+    const down = new Event("pointerdown") as PointerEvent;
+    Object.assign(down, { clientX: 30, clientY: 40, pointerId: 1 });
+    svgEl.dispatchEvent(down);
+    expect(hint().hidden).toBe(true);
+    // Commit the editor (blur) → hint returns since the text tool is still armed.
+    (card.querySelector("textarea.proto-annotate-textinput") as HTMLTextAreaElement).dispatchEvent(new Event("blur"));
+    expect(hint().hidden).toBe(false);
   });
 });
