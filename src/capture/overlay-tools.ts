@@ -13,7 +13,7 @@ import {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-export type Tool = "arrow" | "ellipse" | "freehand" | "text";
+export type Tool = Shape["tool"];
 
 export const TOOLS: readonly Tool[] = ["arrow", "ellipse", "freehand", "text"];
 
@@ -43,7 +43,7 @@ export interface OverlayHandle {
   reproject(): void;
   // Synchronously commit any open text editor so a live <textarea> can't be rasterized by Capture.
   finalizePendingText(): void;
-  // Live shape count — exposed for wiring/teardown decisions, not for tests to reach into internals.
+  // Live shape count for wiring/teardown decisions — not a hook for tests to read internals.
   shapeCount(): number;
   destroy(): void;
 }

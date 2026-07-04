@@ -4,9 +4,11 @@
 // commas (it cannot, but defensively) is preserved.
 
 import type { AttachedImage } from "../conversation/images";
-import type { Capture } from "./gallery";
+import type { PersistedCapture } from "./gallery";
 
-export function captureToAttachedImage(cap: Capture): AttachedImage {
+// Accepts only a PersistedCapture: attaching to a conversation is legal only after the capture has
+// been written to disk (fail-closed), so the pending → persisted transition is a compile-time gate.
+export function captureToAttachedImage(cap: PersistedCapture): AttachedImage {
   const comma = cap.dataUrl.indexOf(",");
   const data = comma >= 0 ? cap.dataUrl.slice(comma + 1) : cap.dataUrl;
   return { media_type: "image/png", data };

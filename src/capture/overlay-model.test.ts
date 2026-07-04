@@ -5,7 +5,60 @@ import {
   ellipseBBox,
   arrowPoints,
   cropRegion,
+  type Shape,
 } from "./overlay-model";
+
+function assertNever(x: never): never {
+  throw new Error(`unhandled shape variant: ${JSON.stringify(x)}`);
+}
+
+// Exhaustive consumer that leans on the `tool` discriminant to narrow to each variant's OWN fields.
+// It compiles ONLY because Shape is discriminated: `.text` exists solely on the text variant and
+// `.points` solely on freehand — reaching for them in the wrong branch would not type-check.
+function classifyShape(shape: Shape): string {
+  switch (shape.tool) {
+    case "arrow":
+      return `arrow:${shape.end.x}`;
+    case "ellipse":
+      return `ellipse:${shape.end.x}`;
+    case "freehand":
+      return `freehand:${shape.points.length}`;
+    case "text":
+      return `text:${shape.text}`;
+    default:
+      return assertNever(shape);
+  }
+}
+
+describe("Shape discriminated union", () => {
+  const samples: Shape[] = [
+    { tool: "arrow", start: { x: 0, y: 0 }, end: { x: 0.7, y: 0.7 } },
+    { tool: "ellipse", start: { x: 0, y: 0 }, end: { x: 0.3, y: 0.3 } },
+    { tool: "freehand", points: [{ x: 0, y: 0 }, { x: 0.5, y: 0.5 }] },
+    { tool: "text", start: { x: 0.2, y: 0.2 }, text: "note" },
+  ];
+
+  it("routes each of the 4 tools to its own exhaustive branch", () => {
+    // Falsifiability: collapse or swap any branch in classifyShape and this exact-mapping goes red.
+    expect(samples.map(classifyShape)).toEqual([
+      "arrow:0.7",
+      "ellipse:0.3",
+      "freehand:2",
+      "text:note",
+    ]);
+  });
+
+  it("each tool discriminates to a DISTINCT variant (no two tools collide)", () => {
+    const tags = samples.map((s) => classifyShape(s).split(":")[0]);
+    expect(new Set(tags).size).toBe(4);
+  });
+
+  it("assertNever rejects an out-of-union tool at runtime", () => {
+    // A forged shape that violates the union (cast through unknown) must hit the exhaustive default.
+    const forged = { tool: "polygon" } as unknown as Shape;
+    expect(() => classifyShape(forged)).toThrow(/unhandled shape variant/);
+  });
+});
 
 describe("normalizePoint / denormPoint", () => {
   it("round-trips a mid-stage point", () => {

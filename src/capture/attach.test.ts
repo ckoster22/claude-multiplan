@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { captureToAttachedImage } from "./attach";
-import type { Capture } from "./gallery";
+import type { PersistedCapture } from "./gallery";
 
-function cap(dataUrl: string): Capture {
-  return { id: "cap1", dataUrl, w: 10, h: 10, createdAt: 0 };
+function cap(dataUrl: string): PersistedCapture {
+  return { status: "persisted", id: "cap1", dataUrl, w: 10, h: 10, createdAt: 0, path: "/p/cap1.png" };
 }
 
 describe("captureToAttachedImage", () => {

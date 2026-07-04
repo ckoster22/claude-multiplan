@@ -8,7 +8,7 @@
 // so the crop yields a stub image but the FLOW (invoke called, Capture pushed) is jsdom-observable.
 
 import { cropRegion } from "./overlay-model";
-import { addCapture, deleteCapture, setPersistedPath, type Capture } from "./gallery";
+import { addCapture, deleteCapture, persistCapture, type Capture, type PersistedCapture } from "./gallery";
 import { captureToAttachedImage } from "./attach";
 import { createOverlay, TOOLS, type Tool, type OverlayHandle } from "./overlay-tools";
 import { createGalleryStrip, type GalleryStripHandle } from "./gallery-ui";
@@ -137,9 +137,8 @@ export function initAnnotate(deps: AnnotateDeps): AnnotateHandle {
     getCaptures: () => captures,
     onDelete: async (cap) => {
       // Best-effort unlink of the persisted file — a thrown unlink must NOT block the in-memory
-      // delete (fail-open). In-session-only captures (no persistedPath) never persisted, so skip the
-      // invoke entirely.
-      if (cap.persistedPath && cwd) {
+      // delete (fail-open). A "pending" capture never persisted, so skip the invoke entirely.
+      if (cap.status === "persisted" && cwd) {
         try {
           await invoke("delete_capture_png", { cwd, id: cap.id });
         } catch (e) {
@@ -163,16 +162,18 @@ export function initAnnotate(deps: AnnotateDeps): AnnotateHandle {
         onError(`Could not save capture: ${String(e)}`);
         return false;
       }
-      captures = setPersistedPath(captures, cap.id, path);
-      attachImages([captureToAttachedImage(cap)]);
-      // Success feedback is the item's own "Attached" state (persistedPath → button relabel), applied
-      // by the gallery re-render the caller runs after this resolves.
+      captures = persistCapture(captures, cap.id, path);
+      const persisted = captures.find(
+        (c): c is PersistedCapture => c.id === cap.id && c.status === "persisted",
+      );
+      if (persisted) attachImages([captureToAttachedImage(persisted)]);
+      // Success feedback is the item's own "Attached" state (persisted status → button relabel),
+      // applied by the gallery re-render the caller runs after this resolves.
       gallery.render();
       return true;
     },
   });
 
-  // Toolbar on top, gallery at the bottom; the iframe (and the stage over it) sit between them.
   card.insertBefore(toolbar, iframe);
   card.append(gallery.root);
 

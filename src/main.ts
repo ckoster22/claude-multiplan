@@ -3557,7 +3557,6 @@ window.addEventListener("DOMContentLoaded", () => {
       void openExternally("open_prototype", { cwd: gate.cwd, path: target }, "Could not open prototype");
     });
 
-    // ---- #prototype-preview (PROTOTYPE mode, kind "html" only): render in-app --------
     prototypePreviewEl?.addEventListener("click", () => {
       const gate = activePrototypeGate();
       if (!gate || gate.kind !== "html") return;

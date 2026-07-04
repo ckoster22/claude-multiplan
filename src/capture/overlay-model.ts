@@ -7,8 +7,10 @@
 export type NormPoint = { x: number; y: number };
 
 // One authored annotation. `arrow`/`ellipse` use `[start, end]`; `freehand` is a polyline through
-// all `points`; `text` anchors a comment bubble at `start` (`end` unused). Discriminated on `tool`
-// so an invalid tool is unconstructable.
+// all `points`; `text` anchors a comment bubble at `start`.
+// INVARIANT[shape-discriminated-by-tool] (type-level): every annotation is exactly one of four variants keyed by `tool`, and each variant carries only its own geometry fields.
+//   prevents: a nonsensical hybrid shape — e.g. a "freehand" with a `text` field or a "text" with `points`; the invalid field combination does not compile
+//   test: src/capture/overlay-model.test.ts "Shape discriminated union" (exhaustive switch + assertNever narrows each variant to its own fields)
 export type Shape =
   | { tool: "arrow"; start: NormPoint; end: NormPoint }
   | { tool: "ellipse"; start: NormPoint; end: NormPoint }

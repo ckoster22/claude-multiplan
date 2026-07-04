@@ -112,13 +112,13 @@ export function createGalleryStrip(deps: GalleryStripDeps): GalleryStripHandle {
       attach.type = "button";
       attach.className = "capture-thumb-attach";
       attach.setAttribute("aria-label", `Attach capture ${cap.id} to message`);
-      attach.textContent = cap.persistedPath ? "Attached" : "Attach";
-      if (cap.persistedPath) attach.classList.add("is-attached");
+      attach.textContent = cap.status === "persisted" ? "Attached" : "Attach";
+      if (cap.status === "persisted") attach.classList.add("is-attached");
       attach.addEventListener("click", (e) => {
         e.stopPropagation();
         attach.disabled = true;
         void deps.onAttach(cap).then((ok) => {
-          // Re-render pulls the fresh capture (now carrying persistedPath) so the label/state
+          // Re-render pulls the fresh capture (now "persisted") so the label/state
           // reflect the outcome. On failure the button re-enables via the re-render.
           render();
           if (!ok) attach.disabled = false;
