@@ -102,6 +102,9 @@ function assertNever(x: never): never {
 // toolUseId hands resolution to the approval gate). EVERY outcome resolves the SDK's held permission
 // — DENY immediately, DRAFT via the gate — so there is no representable outcome that consumes the
 // permission without resolving it.
+// INVARIANT[exitplanmode-decision-resolves-every-path] (type-level): a held ExitPlanMode is classified by the total decideExitPlanMode into an ExitPlanModeDecision (deny | draft-decomposition | draft-leaf — no undefined/void member) applied at one exhaustive switch ending in assertNever; every variant resolves the held permission (deny immediately, or draft via the approval gate), so a handled path that consumes the permission without resolving it does not compile (TS2366 on a missing return, exhaustiveness on a missing case).
+//   prevents: a new branch or future Awaiting tag silently `return;`-ing out of the handler and stranding the SDK's held ExitPlanMode permission — the recon/sizer deadlock class
+//   test: PHASE 5 — rogue ExitPlanMode is DENIED (never silently stranded)
 type ExitPlanModeDecision =
   | { kind: "deny"; diag: string; message: string }
   | { kind: "draft-decomposition"; path: NodePath; node: TreeNode; parsed: ParsedMasterPlan }
