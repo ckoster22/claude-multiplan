@@ -1564,7 +1564,18 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       const st = requireState();
       const path = activePath();
       const node = path !== null ? nodeAtPath(st.root, path) : null;
-      if (path === null || node === null) return;
+      if (path === null || node === null) {
+        // No active node to route this ExitPlanMode against (e.g. mid-`intent`, before any node is
+        // active) — deny-and-resolve rather than silently dropping: an unresolved held permission
+        // here relied solely on the "intent"-turn silence watchdog to ever unblock the turn.
+        diag(`rogue ExitPlanMode DENIED (no active node): id=${req.id} path=${path === null ? "null" : pathKey(path)} awaiting=${run.awaiting.tag}`);
+        await deps.resolvePermission({
+          id: req.id,
+          allow: false,
+          message: "this turn must not call ExitPlanMode — finish the current task instead of exiting plan mode",
+        });
+        return;
+      }
       // ROGUE ExitPlanMode DENY: an ExitPlanMode arriving while the active
       // node matches NO legal drafting branch — a summary turn, the roll-up window, a parent-review
       // window, or the EXEC window — must NOT be silently dropped (that strands the held resolver and
@@ -1582,14 +1593,24 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // off the tag would wrongly DENY a legitimate next-child draft (leaf/drafting). The leaf-draft
       // branch below also routes purely on node state — this mirrors it.
       const inExecWindow = node.state.stage === "leaf" && node.state.phase === "executing";
-      if (inReviewWindow || inSummaryWindow || inExecWindow) {
+      // RECON window: subReconPrompt tells the model to "return its report verbatim... do not call
+      // any other tool" — ExitPlanMode is only ever legitimate LATER, from subDraftPrompt, sent as a
+      // FRESH turn after NODE_RECON_DONE has already flipped the node past "recon" (awaiting is reset
+      // to idle before that send — see the "recon" result-case below). A model that ignores the
+      // instruction and calls ExitPlanMode WHILE the recon turn is still in flight must be denied here
+      // — the silent catch-all below would instead never resolve the SDK's held permission, and since
+      // the recon turn's own `result` (which is what would unblock it) cannot arrive while the SDK is
+      // paused on that same unresolved permission, an un-denied premature ExitPlanMode deadlocks the
+      // run forever (no watchdog covers the "recon" tag).
+      const inReconWindow = run.awaiting.tag === "recon";
+      if (inReviewWindow || inSummaryWindow || inExecWindow || inReconWindow) {
         // The corrective message names the work the turn is actually doing so the model resumes it
-        // instead of re-drafting: the exec window tells it to keep implementing; review/summary tell
-        // it to finish that turn's text.
+        // instead of re-drafting: the exec window tells it to keep implementing; recon/review/summary
+        // tell it to finish that turn's text.
         const message = inExecWindow
           ? "this turn must not call ExitPlanMode — finish implementing the approved plan"
-          : `this turn must not call ExitPlanMode — finish the ${inReviewWindow ? "review" : "summary"} text`;
-        const turnLabel = inExecWindow ? "exec" : inReviewWindow ? "review" : "summary";
+          : `this turn must not call ExitPlanMode — finish the ${inReconWindow ? "recon" : inReviewWindow ? "review" : "summary"} text`;
+        const turnLabel = inExecWindow ? "exec" : inReconWindow ? "recon" : inReviewWindow ? "review" : "summary";
         diag(
           `rogue ExitPlanMode DENIED: id=${req.id} during the ${turnLabel} window (node=${node.state.stage}/${node.state.phase}, awaiting=${run.awaiting.tag}) — this turn must not draft`,
         );
@@ -1708,8 +1729,21 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         clearAdjustNoteOnDraft(path);
         return;
       }
-      // Any other node state (open/recon, open/sizing, …): an ExitPlanMode here is not a draft
-      // boundary the machine recognizes — ignore it (gen-1 behavior for an unpointed sub).
+      // DEFAULT DENY (by construction, not enumeration): any other node state (open/recon,
+      // open/sizing, split/running-children, …) — and any future `Awaiting` tag added later — is
+      // not a draft boundary the machine recognizes. Resolve it as a DENY rather than the old
+      // silent `return;` (the "sizer" incident: a growing if-chain of named "windows" missed this
+      // tag and stranded the SDK's held permission with no watchdog to recover it). Every legitimate
+      // draft boundary is handled by an earlier branch in this function with its own explicit
+      // resolve/dispatch, so nothing that reaches here is a case this deny could wrongly clobber.
+      diag(
+        `rogue ExitPlanMode DENIED (default): id=${req.id} node=${node.state.stage}/${node.state.phase} awaiting=${run.awaiting.tag} — not a recognized draft boundary`,
+      );
+      await deps.resolvePermission({
+        id: req.id,
+        allow: false,
+        message: "this turn must not call ExitPlanMode — finish the current task instead of exiting plan mode",
+      });
       return;
     }
     if (req.tool === "AskUserQuestion") {
