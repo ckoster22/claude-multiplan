@@ -11,6 +11,7 @@ import {
   acceptanceDivergeLabel,
   acceptanceRefineLabel,
   acceptanceRefineTargets,
+  referencesExternalFiles,
   PROTOTYPE_MAX_ROUNDS,
 } from "./prototype";
 import type { PrototypeGate, AcceptanceGate, TreeNode, Nn, NonEmptyArray } from "./conversation/plan-tree";
@@ -47,7 +48,7 @@ describe("composePreviewMarkdown", () => {
     }
   });
 
-  it("html kind emits the open-in-browser notice and lists the paths (no fence)", () => {
+  it("html kind emits the preview-in-app notice and lists the paths (no fence)", () => {
     const md = composePreviewMarkdown(
       gate({
         kind: "html",
@@ -55,7 +56,8 @@ describe("composePreviewMarkdown", () => {
         paths: [".plan-tree/prototype/index.html", ".plan-tree/prototype/style.css"],
       }),
     );
-    expect(md).toContain("HTML prototype written to `.plan-tree/prototype/`");
+    expect(md).toContain("HTML prototype ready");
+    expect(md).toContain("**Preview in app**");
     expect(md).toContain("**Open in browser**");
     expect(md).toContain("- `.plan-tree/prototype/index.html`");
     expect(md).toContain("- `.plan-tree/prototype/style.css`");
@@ -245,6 +247,64 @@ describe("acceptanceRefineTargets / acceptanceRefineLabel (Phase 6 — refine ba
 
   it("the refine label is a stable, descriptive string", () => {
     expect(acceptanceRefineLabel()).toMatch(/refine/i);
+  });
+});
+
+describe("referencesExternalFiles", () => {
+  const page = (body: string) => `<!doctype html><html><head></head><body>${body}</body></html>`;
+
+  it("returns false for a fully self-contained page (inline style + inline script)", () => {
+    const html = page(
+      "<style>body{color:red}</style><script>document.title='x'</script><p>hi</p>",
+    );
+    expect(referencesExternalFiles(html)).toBe(false);
+  });
+
+  it("flags a relative <link href> stylesheet", () => {
+    expect(referencesExternalFiles('<html><head><link rel="stylesheet" href="style.css"></head></html>')).toBe(true);
+  });
+
+  it("flags a relative <script src>", () => {
+    expect(referencesExternalFiles(page('<script src="app.js"></script>'))).toBe(true);
+  });
+
+  it("flags a relative <img src>", () => {
+    expect(referencesExternalFiles(page('<img src="logo.png">'))).toBe(true);
+  });
+
+  it("flags a relative candidate in srcset", () => {
+    expect(referencesExternalFiles(page('<img srcset="small.png 1x, big.png 2x">'))).toBe(true);
+  });
+
+  it("flags a relative CSS @import inside <style>", () => {
+    expect(referencesExternalFiles(page('<style>@import "theme.css";</style>'))).toBe(true);
+  });
+
+  it("flags a relative url(...) in an inline style attribute", () => {
+    expect(referencesExternalFiles(page('<div style="background:url(bg.png)"></div>'))).toBe(true);
+  });
+
+  it("does NOT flag an absolute https CDN <link>", () => {
+    expect(
+      referencesExternalFiles('<html><head><link rel="stylesheet" href="https://cdn.example.com/a.css"></head></html>'),
+    ).toBe(false);
+  });
+
+  it("does NOT flag a data: URI image", () => {
+    expect(referencesExternalFiles(page('<img src="data:image/png;base64,iVBOR">'))).toBe(false);
+  });
+
+  it("does NOT flag in-document/protocol anchors (# and mailto:)", () => {
+    expect(referencesExternalFiles(page('<a href="#section">x</a>'))).toBe(false);
+    expect(referencesExternalFiles(page('<a href="mailto:x@y.com">x</a>'))).toBe(false);
+  });
+
+  it("flags a ROOT-RELATIVE /app.js (no base URL under srcdoc)", () => {
+    expect(referencesExternalFiles(page('<script src="/app.js"></script>'))).toBe(true);
+  });
+
+  it("flags a PROTOCOL-RELATIVE //cdn.example.com/x.js (resolves against tauri:// under srcdoc)", () => {
+    expect(referencesExternalFiles(page('<script src="//cdn.example.com/x.js"></script>'))).toBe(true);
   });
 });
 

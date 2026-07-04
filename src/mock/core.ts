@@ -59,6 +59,7 @@ type MockCommand =
   | { cmd: "get_comments"; args: { path: string } }
   | { cmd: "get_comment_count"; args: { path: string } }
   | { cmd: "read_plan_contents"; args: { path: string } }
+  | { cmd: "read_prototype_file"; args: { cwd: string; path: string } }
   | { cmd: "read_image_as_data_url"; args: { path: string } }
   | { cmd: "read_plan_tree_file"; args: { cwd: string; name: string } }
   | {
@@ -116,6 +117,7 @@ export const HANDLED_COMMANDS = [
   "get_comments",
   "get_comment_count",
   "read_plan_contents",
+  "read_prototype_file",
   "read_image_as_data_url",
   "read_plan_tree_file",
   "read_plan_transcript",
@@ -237,6 +239,19 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
       // reading pane never renders it. Frontmatter-less fixtures pass through unchanged (no-op).
       return stripFrontmatter(getMarkdown(path));
     }
+
+    case "read_prototype_file":
+      // Self-contained HTML (inline <style>, no external/relative refs) so openPrototypePreview
+      // takes the embed path (srcdoc iframe) rather than the external-ref browser fallback.
+      return [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head><meta charset=\"utf-8\">",
+        "<style>body{font:16px system-ui;margin:2rem;color:#222}h1{color:#5b21b6}</style>",
+        "</head>",
+        "<body><h1>Mock prototype</h1><p>Rendered from the mock read_prototype_file command.</p></body>",
+        "</html>",
+      ].join("\n");
 
     case "read_image_as_data_url":
       // A real 1x1 PNG data URL so the reading pane's async image pass sets a valid <img src>.

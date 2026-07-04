@@ -88,7 +88,9 @@ import {
   acceptanceDivergeLabel,
   acceptanceRefineLabel,
   acceptanceRefineTargets,
+  referencesExternalFiles,
 } from "./prototype";
+import { openModal, type ModalHandle } from "./modal";
 import type { ToolPermissionRequested, AgentExit, AgentError, AgentStream } from "./conversation/types";
 import type {
   PlanRecord,
@@ -170,6 +172,12 @@ let REVIEW_SUBMIT_EXTERNAL_LABEL = "Submit feedback";
 // visible only for kind "html"). Hidden outside PROTOTYPE mode.
 let prototypeFeedbackEl: HTMLTextAreaElement | null = null;
 let prototypeOpenEl: HTMLButtonElement | null = null;
+let prototypePreviewEl: HTMLButtonElement | null = null;
+// At most one preview modal may be open at a time. `previewModal` holds it while open;
+// `previewOpening` guards the async window before the first read_prototype_file resolves so two
+// rapid clicks cannot both reach openModal.
+let previewModal: ModalHandle | null = null;
+let previewOpening = false;
 // Working-reference checkbox: UNCHECKED = "just a sketch"; CHECKED = "working reference" →
 // approve freezes prototype/ → baseline/ and records baseline_ on the ledger.
 let prototypeWorkingRefEl: HTMLInputElement | null = null;
@@ -552,6 +560,7 @@ function refreshReviewBar(countOverride?: number): void {
   reviewBarEl.classList.remove("proto");
   prototypeFeedbackEl?.classList.add("hidden");
   prototypeOpenEl?.classList.add("hidden");
+  prototypePreviewEl?.classList.add("hidden");
   prototypeWorkingRefLabelEl?.classList.add("hidden");
   // The REFINE button + its picker are ACCEPTANCE-mode-only; hide on every other mode.
   reviewRefineEl?.classList.add("hidden");
@@ -654,6 +663,7 @@ function applyPrototypeBar(gate: PrototypeGate): void {
   // Restore the open-button's prototype label (ACCEPTANCE mode relabels it "Open baseline").
   if (prototypeOpenEl) prototypeOpenEl.textContent = "Open in browser";
   prototypeOpenEl?.classList.toggle("hidden", gate.kind !== "html");
+  prototypePreviewEl?.classList.toggle("hidden", gate.kind !== "html");
   // Working-reference checkbox: shown for EVERY prototype kind (the floor classification applies to
   // any prototype, not just HTML). Its checked state is read at approve time (applyPrototypeBar
   // never forces it — the user's choice persists across live re-derivations while the gate is held).
@@ -725,6 +735,7 @@ function applyAcceptanceBar(_gate: AcceptanceGate): void {
     prototypeFeedbackEl.placeholder = "Why does the build diverge from the baseline floor?";
   }
   prototypeWorkingRefLabelEl?.classList.add("hidden");
+  prototypePreviewEl?.classList.add("hidden");
   // Reuse #prototype-open as "Open baseline".
   if (prototypeOpenEl) {
     prototypeOpenEl.classList.remove("hidden");
@@ -2825,6 +2836,51 @@ async function openExternally(
   }
 }
 
+// Render an HTML prototype INSIDE the app. `srcdoc` has NO base URL, so a prototype referencing
+// RELATIVE assets would render silently-broken — those route to the external browser instead. The
+// iframe keeps `allow-same-origin` (not allow-scripts alone) so prototype scripts can touch `document`
+// (many prototypes read/write the DOM on load); it is kept out of the modal focus-trap (tabindex="-1")
+// because a DOM trap cannot contain focus inside a same-origin iframe.
+async function openPrototypePreview(gate: PrototypeGate): Promise<void> {
+  if (previewModal !== null || previewOpening) return;
+  const target = prototypeOpenTarget(gate);
+  if (target === null) return;
+  previewOpening = true;
+
+  let html: string;
+  try {
+    html = await invoke<string>("read_prototype_file", { cwd: gate.cwd, path: target });
+  } catch (e) {
+    previewOpening = false;
+    console.error("read_prototype_file failed", e);
+    setHookStatus(hookStatusEl, `Could not read prototype: ${String(e)}`, "error");
+    setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
+    return;
+  }
+
+  if (referencesExternalFiles(html)) {
+    previewOpening = false;
+    setHookStatus(hookStatusEl, "Prototype references external files — opening in browser…");
+    setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
+    void openExternally("open_prototype", { cwd: gate.cwd, path: target }, "Could not open prototype");
+    return;
+  }
+
+  const iframe = document.createElement("iframe");
+  iframe.tabIndex = -1;
+  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
+  iframe.srcdoc = html;
+  previewModal = openModal({
+    label: "HTML prototype preview",
+    content: iframe,
+    className: "proto-preview",
+    onClose: () => {
+      previewModal = null;
+    },
+  });
+  previewOpening = false;
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   planListEl = document.querySelector("#plan-list");
   planCountEl = document.querySelector("#plan-count");
@@ -2852,6 +2908,7 @@ window.addEventListener("DOMContentLoaded", () => {
   // PROTOTYPE-mode controls: feedback textarea + open-in-browser button.
   prototypeFeedbackEl = document.querySelector("#prototype-feedback");
   prototypeOpenEl = document.querySelector("#prototype-open");
+  prototypePreviewEl = document.querySelector("#prototype-preview");
   // Working-reference checkbox: classifies the prototype approval (sketch vs floor).
   prototypeWorkingRefEl = document.querySelector("#prototype-working-ref");
   prototypeWorkingRefLabelEl = document.querySelector("#prototype-working-ref-label");
@@ -3482,6 +3539,13 @@ window.addEventListener("DOMContentLoaded", () => {
       const target = prototypeOpenTarget(gate);
       if (target === null) return;
       void openExternally("open_prototype", { cwd: gate.cwd, path: target }, "Could not open prototype");
+    });
+
+    // ---- #prototype-preview (PROTOTYPE mode, kind "html" only): render in-app --------
+    prototypePreviewEl?.addEventListener("click", () => {
+      const gate = activePrototypeGate();
+      if (!gate || gate.kind !== "html") return;
+      void openPrototypePreview(gate);
     });
 
     // ---- #review-refine (ACCEPTANCE mode only): re-plan the picked sub-plan -----------
