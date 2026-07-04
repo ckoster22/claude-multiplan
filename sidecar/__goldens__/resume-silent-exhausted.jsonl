@@ -1,0 +1,2 @@
+{"seq":0,"kind":"resume_fallback","reason":"resumed session produced no output — retrying fresh"}
+{"seq":1,"kind":"error","error_kind":"sdk","message":"Resumed session produced no output within 100ms, and a fresh retry also stalled; giving up so the session cannot hang.","fatal":true}

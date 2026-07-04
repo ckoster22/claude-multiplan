@@ -51,7 +51,7 @@ import {
 } from "./emulator-scenes";
 import { SCENARIO_EXIT_CODES } from "./exit-codes";
 import { SECOND_START_MESSAGE } from "./session-start";
-import { RESUME_FALLBACK_REASON } from "./session-resume";
+import { RESUME_FALLBACK_REASON, RESUME_TIMEOUT_FALLBACK_REASON } from "./session-resume";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
@@ -476,6 +476,43 @@ const SPECS: Spec[] = [
     ],
     verify: (frames) => {
       expect(firstOf(frames, "resume_fallback").reason).toBe(RESUME_FALLBACK_REASON);
+    },
+  },
+  {
+    // SILENT-RESUME RECOVERY (the wedged-resume fix). The transcript "exists" (scenario flag), so
+    // `resume` reaches the SDK options; attempt 0 HANGS (never yields), the first-frame watchdog
+    // fires, drops resume, and the fresh retry streams to completion. The whole point: an
+    // alive-but-zero-frames resume deterministically reaches a terminal `result`.
+    name: "resume-silent-recover",
+    scenario: "resume-silent-recover",
+    start: { resume: "emu-silent-resume-id" },
+    kinds: [
+      "resume_fallback",
+      "system_init",
+      ...streamed("Recovered on a fresh start after the silent resume."),
+      "result",
+    ],
+    verify: (frames) => {
+      expect(firstOf(frames, "resume_fallback").reason).toBe(RESUME_TIMEOUT_FALLBACK_REASON);
+      const result = firstOf(frames, "result");
+      expect(result.is_error).toBe(false);
+      expect(result.result).toBe("Recovered after resume timeout.");
+    },
+  },
+  {
+    // SILENT-RESUME EXHAUSTION. Both the resume attempt and its fresh retry hang; the sidecar
+    // recovers once (resume_fallback) then drives a loud fatal + exit 1. Proves termination even when
+    // recovery itself yields nothing.
+    name: "resume-silent-exhausted",
+    scenario: "resume-silent-exhausted",
+    start: { resume: "emu-silent-resume-id" },
+    kinds: ["resume_fallback", "error"],
+    verify: (frames) => {
+      expect(firstOf(frames, "resume_fallback").reason).toBe(RESUME_TIMEOUT_FALLBACK_REASON);
+      const err = firstOf(frames, "error");
+      expect(err.error_kind).toBe("sdk");
+      expect(err.fatal).toBe(true);
+      expect(err.message).toContain("fresh retry also stalled");
     },
   },
 ];

@@ -199,20 +199,33 @@ export function resultUsageLimit(text: string = SESSION_LIMIT_TEXT): SDKMessage 
 }
 
 // `attempts[i]` is the message stream the i-th query() call replays; index >= 1 only occurs on a
-// backoff retry (the overloaded scenarios). An attempt is either a plain message array (ends
-// normally) or a throw-tailed shape: yield `messages` then THROW `thenThrow()`, driving index.ts's
-// catch block (auth / thrown-quota / generic-sdk classification), which a message fixture cannot reach.
+// backoff retry (the overloaded scenarios) or a resume-timeout recovery (the silent-resume
+// scenarios). An attempt is one of:
+//   - a plain message array — ends normally;
+//   - a throw-tailed shape — yield `messages` then THROW `thenThrow()`, driving index.ts's catch
+//     block (auth / thrown-quota / generic-sdk classification), which a message fixture cannot reach;
+//   - `{ hang: true }` — the query's first frame NEVER arrives (a silent, wedged resume). The only
+//     shape that exercises index.ts's first-frame watchdog; a `[]` attempt ends immediately instead.
 export type EmulatorAttempt =
   | SDKMessage[]
-  | { messages: SDKMessage[]; thenThrow: () => Error };
+  | { messages: SDKMessage[]; thenThrow: () => Error }
+  | { hang: true };
 
 export function attemptMessages(attempt: EmulatorAttempt): SDKMessage[] {
-  return Array.isArray(attempt) ? attempt : attempt.messages;
+  if (Array.isArray(attempt)) return attempt;
+  if ("hang" in attempt) return [];
+  return attempt.messages;
 }
 
 export interface EmulatorScenario {
   name: string;
   attempts: EmulatorAttempt[];
+  // Emulator seam for the resume pre-flight (index.ts `resumeTranscriptExists`, normally the real
+  // `getSessionInfo`). Set to true so a scenario's `start.resume` PASSES the pre-flight and `resume`
+  // reaches the SDK options — the only way to drive index.ts's live-resume path (and its first-frame
+  // watchdog) token-free. Absent ⇒ the real getSessionInfo runs (so `resume-fallback` still exercises
+  // the genuine transcript-missing lookup for a bogus id).
+  resumeTranscriptExists?: boolean;
 }
 
 const PLANS_PATH = "/Users/emulator/.claude/plans/emulator-plan.md";
@@ -434,6 +447,34 @@ const SCENARIOS: EmulatorScenario[] = [
         thenThrow: () => new Error(STREAM_ABORT_ERROR_MESSAGE),
       },
     ],
+  },
+  {
+    // SILENT RESUME → RECOVERY. The transcript EXISTS (resumeTranscriptExists), so `resume` reaches
+    // the SDK options and index.ts bounds the first frame. Attempt 0 HANGS (never yields) — the wedge
+    // an incomplete-transcript resume produces; the first-frame watchdog fires, drops `resume`, and
+    // emits a resume_fallback. Attempt 1 (the fresh, no-resume retry) streams normally and completes.
+    // Proves the invariant: an alive-but-zero-frames resume cannot persist — it deterministically
+    // recovers to a terminal `result`.
+    name: "resume-silent-recover",
+    resumeTranscriptExists: true,
+    attempts: [
+      { hang: true },
+      [
+        sysInit(),
+        ...assistantTextStreamed("Recovered on a fresh start after the silent resume."),
+        resultSuccess("Recovered after resume timeout."),
+      ],
+    ],
+  },
+  {
+    // SILENT RESUME → EXHAUSTION. Both the resume attempt AND its fresh no-resume retry hang. The
+    // first watchdog recovers (resume_fallback); the SECOND (the fresh retry ALSO silent) has nowhere
+    // left to fall back to, so index.ts drives a loud fatal `error` and exits 1. Proves the OTHER half
+    // of the invariant: the sidecar ALWAYS terminates even when recovery itself yields nothing — the
+    // UI can never stick on "Working…".
+    name: "resume-silent-exhausted",
+    resumeTranscriptExists: true,
+    attempts: [{ hang: true }, { hang: true }],
   },
 ];
 

@@ -16,6 +16,12 @@ import { EMULATOR_SCENARIOS, attemptMessages, type EmulatorScenario } from "./em
 // non-null `emulatorScenario`).
 export const EMU_BACKOFF_MS = 10;
 
+// Resume first-frame watchdog bound index.ts clamps its real ~30s ceiling to while the emulator is
+// active, so a scripted silent-resume (`{ hang: true }` attempt) trips the watchdog fast yet
+// genuinely. Small but non-trivial so it comfortably outlasts a healthy fresh-retry's first frame
+// (which the emulator yields synchronously) — the recovery must NEVER false-trip on its own retry.
+export const EMU_RESUME_TIMEOUT_MS = 100;
+
 /**
  * Returns the registry scenario matching `env.EMU_SCENARIO`, or `null` for unset/unknown. An unknown
  * name MUST fall through to `null` (the real `query()`), never silently activate the emulator.
@@ -53,9 +59,16 @@ export function makeEmulatorQuery(
   return function emulatorQuery(_args: QueryArgs): Query {
     const attempt = scenario.attempts[Math.min(attemptIndex++, last)];
     const messages = attemptMessages(attempt);
-    const thenThrow = Array.isArray(attempt) ? null : attempt.thenThrow;
+    // A `{ hang: true }` attempt models a SILENT resume: the query's first `.next()` NEVER resolves
+    // (no message, no result, no error, no exit) — the exact wedge a `--resume` of an incomplete
+    // transcript produces. An empty `[]` attempt would resolve `done` immediately (a natural end),
+    // which is NOT the bug; the never-settling promise below is. It registers no timer/handle, so it
+    // does not pin the event loop once index.ts abandons this iterator on its first-frame timeout.
+    const hang = !Array.isArray(attempt) && "hang" in attempt;
+    const thenThrow = !Array.isArray(attempt) && "thenThrow" in attempt ? attempt.thenThrow : null;
 
     async function* gen(): AsyncGenerator<SDKMessage> {
+      if (hang) await new Promise<never>(() => {});
       for (const msg of messages) {
         yield msg;
       }

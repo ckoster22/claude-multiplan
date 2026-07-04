@@ -14,6 +14,14 @@
 // transcript could not be found. Stable wording so the host toast is predictable.
 export const RESUME_FALLBACK_REASON = "transcript missing/expired";
 
+// The non-fatal reason surfaced on a `resume_fallback` frame when the resumed query went SILENT —
+// the transcript EXISTED (getSessionInfo found it) so we passed `resume` to the SDK, but the resumed
+// streaming query never produced its first frame within the first-frame bound (the wedged-resume
+// state a quota pause + interrupt leaves behind: an incomplete last turn the CLI resumes into but
+// never speaks on). Distinct wording from the missing-transcript case so the two recovery paths are
+// distinguishable on the wire and in the host toast.
+export const RESUME_TIMEOUT_FALLBACK_REASON = "resumed session produced no output — retrying fresh";
+
 export type ResumeDecision =
   // resume — the transcript exists; pass `resume` to the SDK.
   | { kind: "resume" }

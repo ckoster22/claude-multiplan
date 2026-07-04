@@ -927,7 +927,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // through enqueueIngest, like the resuming watchdog). The fire guard re-checks BOTH the tag and the
   // armed path so a fired-but-not-yet-run callback racing a fresh arm of the same tag can't FATAL the
   // wrong turn.
-  const armTurnWatchdog = (label: "summary" | "parent-review" | "intent", forPath: NodePath): void => {
+  const armTurnWatchdog = (
+    label: "summary" | "parent-review" | "intent" | "recon" | "sizer" | "exec",
+    forPath: NodePath,
+  ): void => {
     clearTurnWatchdog();
     const armedKey = pathKey(forPath);
     const timeoutMs = label === "intent" ? INTENT_RESULT_TIMEOUT_MS : TURN_RESULT_TIMEOUT_MS;
@@ -937,10 +940,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       void enqueueIngest(async () => {
         if (!active || run.awaiting.tag !== label) return; // the result won the race (or terminal)
         const armed =
-          run.awaiting.tag === "summary"
-            ? run.awaiting.path
-            : run.awaiting.tag === "parent-review"
-              ? run.awaiting.parentPath
+          run.awaiting.tag === "parent-review"
+            ? run.awaiting.parentPath
+            : "path" in run.awaiting
+              ? run.awaiting.path // summary / recon / sizer / exec all key on their node path
               : []; // the intent turn is the ROOT's genesis turn (no per-node path)
         if (pathKey(armed) !== armedKey) return; // a different turn of the same tag is in flight
         run.awaiting = { tag: "idle" };
@@ -1145,21 +1148,26 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       pause.awaitingVariant.tag === "resuming" || pause.awaitingVariant.tag === "idle"
         ? { tag: "idle" }
         : { ...pause.awaitingVariant, buffer: "" };
-    // RE-ARM THE TURN WATCHDOG for the watched generation tags. The resumed turn is a REAL generation
+    // RE-ARM THE TURN WATCHDOG for EVERY resumed generation tag. The resumed turn is a REAL generation
     // turn again, so a silently-stuck one must drive to a loud terminal FATAL as a never-paused turn
-    // would — fireResume previously re-armed `awaiting` but NOT its watchdog, so a resumed summary /
-    // parent-review / intent turn with no result hung the run forever. The watch path is computed PER
-    // TAG, NOT from the generic capturedPath below: capturedPath resolves to [] for a parent-review
-    // variant (it carries `parentPath`, not `path`), and armTurnWatchdog's fire guard compares against
-    // awaiting.parentPath — so a root-keyed arm is INERT for a non-root parent-review. Map: summary →
-    // .path, parent-review → .parentPath, intent → []. The other captured tags (recon/sizer/exec) carry
-    // NO watchdog at their live arming sites by design, so the resume re-arms none for them either.
-    // INVARIANT[watchdog-rearmed-per-tag-on-resume] (runtime-guard): on quota resume the watchdog is re-armed per awaited tag (summary→path, parent-review→parentPath, intent→[]).
-    //   prevents: a silently-stuck resumed turn hanging the run with no terminal
+    // would — fireResume previously re-armed `awaiting` but NOT its watchdog, so a resumed turn with no
+    // result hung the run forever. DEFENSE IN DEPTH against the sidecar's silent-resume wedge: even if
+    // the sidecar's first-frame watchdog were bypassed and the resumed SDK query produced no frame at
+    // all, this host-side watchdog still surfaces the stuck turn as a loud FATAL. The watch path is
+    // computed PER TAG, NOT from the generic capturedPath below: capturedPath resolves to [] for a
+    // parent-review variant (it carries `parentPath`, not `path`), and armTurnWatchdog's fire guard
+    // compares against awaiting.parentPath — so a root-keyed arm is INERT for a non-root parent-review.
+    // Map: parent-review → .parentPath, intent → [], and every other generation tag (summary / recon /
+    // sizer / exec) → .path.
+    // INVARIANT[watchdog-rearmed-per-tag-on-resume] (runtime-guard): on quota resume the watchdog is re-armed per awaited generation tag (parent-review→parentPath, intent→[], summary/recon/sizer/exec→path).
+    //   prevents: a silently-stuck resumed turn (including the sidecar silent-resume wedge on recon/sizer/exec) hanging the run with no terminal
     const rearmed = pause.awaitingVariant;
     if (rearmed.tag === "summary") armTurnWatchdog("summary", rearmed.path);
     else if (rearmed.tag === "parent-review") armTurnWatchdog("parent-review", rearmed.parentPath);
     else if (rearmed.tag === "intent") armTurnWatchdog("intent", []);
+    else if (rearmed.tag === "recon") armTurnWatchdog("recon", rearmed.path);
+    else if (rearmed.tag === "sizer") armTurnWatchdog("sizer", rearmed.path);
+    else if (rearmed.tag === "exec") armTurnWatchdog("exec", rearmed.path);
     const capturedPath =
       "path" in pause.awaitingVariant
         ? (pause.awaitingVariant.path as NodePath)

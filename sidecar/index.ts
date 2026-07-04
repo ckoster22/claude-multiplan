@@ -33,12 +33,13 @@ import {
   type HostPolicy,
 } from "./permissions";
 import { optionOverridesFromEnv } from "./env-overrides";
-import { selectEmulatorScenario, makeEmulatorQuery, EMU_BACKOFF_MS } from "./emulator";
+import { selectEmulatorScenario, makeEmulatorQuery, EMU_BACKOFF_MS, EMU_RESUME_TIMEOUT_MS } from "./emulator";
 import { resolveModelEffort } from "./model-effort";
 import { cliPlanRedirectSettings } from "./cli-plans";
 import { decideStart } from "./session-start";
 import { decideSessionCommand, decideModelCommand, type Session } from "./session-command";
-import { decideResume, resumeOption, RESUME_FALLBACK_REASON } from "./session-resume";
+import { decideResume, resumeOption, RESUME_FALLBACK_REASON, RESUME_TIMEOUT_FALLBACK_REASON } from "./session-resume";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseResetFromError } from "./quota";
 import { createNormalizer, isOverloadedMessage, overloadResultFrame, type SeqCounter } from "./normalize";
 import { decideBackoff, BACKOFF_MAX_RETRIES } from "./backoff";
@@ -321,6 +322,77 @@ if (emulatorScenario) {
   logErr("[emulator]", "ACTIVE scenario=" + emulatorScenario.name);
 }
 
+// RESUME FIRST-FRAME WATCHDOG.
+//
+// A resumed streaming query whose transcript's last turn is incomplete — an unanswered user turn, or
+// a partial assistant turn with a `tool_use` lacking its `tool_result` (exactly the state a quota
+// pause + `interrupt()`/`close()` leaves on disk) — can go SILENT when told to `--resume` it: the
+// `claude` CLI child yields no message, no `result`, no error, and never exits, so the SDK iterator's
+// FIRST `.next()` never resolves. The SDK streaming path has no initialize timeout, so `for await
+// (const msg of q)` parks forever with ZERO frames emitted and the UI sticks on "Working…".
+//
+// We make that alive-but-silent-forever state UNREACHABLE by bounding the FIRST frame of a RESUME
+// attempt only (a fresh, non-resume start is never wrapped — its first-frame latency is legitimate
+// and must not be clipped). Real ceiling ~30s: a healthy resume emits `system_init` within a second
+// or two, so 30s is generous headroom before we declare the resume wedged. Overridable via
+// AGENT_RESUME_TIMEOUT_MS for operational tuning; clamped to EMU_RESUME_TIMEOUT_MS under the emulator
+// so the scripted silent-resume scenes trip it fast yet genuinely.
+const RESUME_FIRST_FRAME_TIMEOUT_DEFAULT_MS = 30_000;
+
+function resolveResumeTimeoutMs(
+  env: Record<string, string | undefined>,
+  emulatorActive: boolean,
+): number {
+  const raw = env.AGENT_RESUME_TIMEOUT_MS;
+  const parsed = raw !== undefined ? Number(raw) : NaN;
+  const base = Number.isFinite(parsed) && parsed > 0 ? parsed : RESUME_FIRST_FRAME_TIMEOUT_DEFAULT_MS;
+  return emulatorActive ? Math.min(base, EMU_RESUME_TIMEOUT_MS) : base;
+}
+
+const RESUME_FIRST_FRAME_TIMEOUT_MS = resolveResumeTimeoutMs(process.env, emulatorScenario != null);
+
+/** Thrown by `firstFrameWatchdog` when a bounded resume query produces no first frame within the
+ *  timeout. A distinct type so runSession's catch can branch to resume recovery WITHOUT
+ *  misclassifying it as an auth/quota/sdk error. */
+class FirstFrameTimeout extends Error {
+  constructor() {
+    super("resume first-frame watchdog: no frame within the bound");
+    this.name = "FirstFrameTimeout";
+  }
+}
+
+/** Wrap a Query so ONLY its FIRST `.next()` is raced against `ms`; on timeout the iteration throws
+ *  `FirstFrameTimeout` (the wedged-resume signal). Once the first frame arrives the timer is cleared
+ *  and the remaining frames are delegated 1:1 (no further bound — a live turn may legitimately take
+ *  minutes between frames). Shares the query's single underlying async iterator, so it is a drop-in
+ *  for `for await (const msg of q)`. */
+function firstFrameWatchdog(q: Query, ms: number): AsyncIterable<SDKMessage> {
+  return {
+    async *[Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
+      const it = (q as AsyncIterable<SDKMessage>)[Symbol.asyncIterator]();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let first: IteratorResult<SDKMessage>;
+      try {
+        first = await Promise.race([
+          it.next(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new FirstFrameTimeout()), ms);
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      if (first.done) return;
+      yield first.value;
+      while (true) {
+        const next = await it.next();
+        if (next.done) return;
+        yield next.value;
+      }
+    },
+  };
+}
+
 function buildOptions(start: StartCmd) {
   // The bundled CLI path — extracted from the compiled binary's embedded fs.
   const cliPath = extractFromBunfs(binPath as unknown as string);
@@ -391,6 +463,14 @@ function buildOptions(start: StartCmd) {
 // a throw OR an undefined return means "transcript missing/expired" → fall back.
 // Returns true iff the transcript exists and resume should proceed. Never throws.
 async function resumeTranscriptExists(sessionId: string): Promise<boolean> {
+  // Emulator seam: a scenario declaring `resumeTranscriptExists` short-circuits the real
+  // getSessionInfo (which cannot be driven token-free for a scripted session id), so the live-resume
+  // path — and its first-frame watchdog — is reachable deterministically. Gated on the active
+  // emulator scenario; the real getSessionInfo below is byte-identical for production and for any
+  // scenario that leaves the flag unset (e.g. resume-fallback's genuine bogus-id lookup).
+  if (emulatorScenario && emulatorScenario.resumeTranscriptExists !== undefined) {
+    return emulatorScenario.resumeTranscriptExists;
+  }
   try {
     const info = await getSessionInfo(sessionId);
     return info != null;
@@ -453,6 +533,14 @@ async function runSession(start: StartCmd): Promise<void> {
   let retry = 0; // 0 → 6; PRE-incremented per backoff decision (decideBackoff is 1-based).
   let attempt = 0; // 0-based attempt index; attempt 0 is the original, >0 are 529 retries.
 
+  // RESUME FIRST-FRAME BOUNDING. Bound the first frame of THIS attempt iff a resume is in effect —
+  // initially when `effectiveStart.resume` survived the pre-flight, and kept bounded through the ONE
+  // fresh no-resume retry the recovery drives (so a still-silent fresh retry also terminates rather
+  // than re-wedging). A plain non-resume start is never bounded. `resumeFellBack` latches after the
+  // first recovery so the SECOND silent first frame drives a loud fatal instead of looping forever.
+  let boundFirstFrame = effectiveStart.resume != null;
+  let resumeFellBack = false;
+
   // eslint-disable-next-line no-constant-condition
   while (true) {
     // NOTE: the previous attempt's query+queue are drained in the retry TAIL (below), right before
@@ -485,7 +573,11 @@ async function runSession(start: StartCmd): Promise<void> {
     let overloadPreOutput = false; // retryable: overloaded with nothing emitted this attempt.
 
     try {
-      for await (const msg of q) {
+      // A RESUME attempt's first frame is bounded (firstFrameWatchdog); every other attempt iterates
+      // the query raw (byte-identical to before). The watchdog shares q's single underlying iterator,
+      // so drain/interrupt on `q` still target the same session.
+      const source = boundFirstFrame ? firstFrameWatchdog(q, RESUME_FIRST_FRAME_TIMEOUT_MS) : q;
+      for await (const msg of source) {
         // RAW-FRAME TRACE. With AGENT_TRACE set, log every raw SDK message
         // verbatim to STDERR (logErr — off the fd-1 JSON-lines `emit` channel, so it never corrupts the
         // host's frame stream). Used to capture the exact shape of a real usage-limit `result` /
@@ -551,6 +643,41 @@ async function runSession(start: StartCmd): Promise<void> {
         }
       }
     } catch (e) {
+      // RESUME FIRST-FRAME TIMEOUT — the wedged-resume recovery. Handled BEFORE the auth/quota/sdk
+      // classification below: a silent resume is not an error to surface, it is a state to recover
+      // from. Drain the silent query first (reap its CLI child), then either fall back to a fresh
+      // no-resume retry (delivering the user's turn on a clean session) or, if that fresh retry ALSO
+      // stalled, drive a loud fatal so the sidecar ALWAYS terminates and the UI can never hang.
+      if (e instanceof FirstFrameTimeout) {
+        if (q) await drainQuery({ q, userQueue, logErr });
+        q = null;
+        if (resumeFellBack) {
+          logErr("[sidecar] resume first-frame timeout again on the fresh retry — giving up.");
+          emit({
+            seq: seqCounter.value++,
+            kind: "error",
+            error_kind: "sdk",
+            message:
+              "Resumed session produced no output within " +
+              RESUME_FIRST_FRAME_TIMEOUT_MS +
+              "ms, and a fresh retry also stalled; giving up so the session cannot hang.",
+            fatal: true,
+          });
+          await gracefulExit("resume produced no output after fallback", 1);
+          return;
+        }
+        // First stall: drop `resume`, emit a non-fatal resume_fallback, and loop to a FRESH attempt.
+        // The loop head allocates a new queue (attempt > 0) and re-seeds it from `pendingTurn`, so the
+        // user's turn rides the fresh, non-resume session. Keep `boundFirstFrame` true so the fresh
+        // retry's first frame is ALSO bounded (→ the resumeFellBack branch above if it too goes silent).
+        logErr("[sidecar] resume first-frame timeout — dropping resume and retrying fresh.");
+        const { resume: _dropped, ...withoutResume } = effectiveStart;
+        effectiveStart = withoutResume;
+        options = buildOptions(effectiveStart);
+        emit({ seq: seqCounter.value++, kind: "resume_fallback", reason: RESUME_TIMEOUT_FALLBACK_REASON });
+        resumeFellBack = true;
+        continue;
+      }
       const text = String(e);
       const isAuth = /auth|token|unauthor|401|oauth/i.test(text);
       // Quota-wall backstop: the rate_limit_event may not precede the throw. If this is NOT an auth
