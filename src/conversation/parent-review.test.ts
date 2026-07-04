@@ -797,4 +797,87 @@ describe("PHASE 5 — rogue ExitPlanMode is DENIED (never silently stranded)", (
     await h.ingestStream(resultFrame());
     expect(h.snapshot().done).toBe(true);
   });
+
+  it("during the RECON window (before the node's own recon result lands): denied with a corrective message — never silently stranded", async () => {
+    // subReconPrompt instructs the model to "Return its report verbatim as your final message — do
+    // not call any other tool", so ExitPlanMode is normally sent LATER, from subDraftPrompt, in a
+    // FRESH turn AFTER NODE_RECON_DONE has already flipped the node to leaf/drafting. But nothing
+    // stops a model from ignoring that instruction and calling ExitPlanMode WHILE still mid-recon,
+    // in the SAME turn, before the recon turn's own `result` frame ever arrives — the node is still
+    // pre-leaf when the permission request lands.
+    const rec = makeDeps();
+    const h = createOrchestrator(rec.deps);
+    await driveToRootGate(h, THREE_WAY);
+    await h.approve("");
+    await h.ingestStream(resultFrame()); // boundary result → 01's recon turn is now in flight
+
+    await h.ingestPermission(exitPlanModeReq("premature-01-tu", "01 plan body"));
+
+    // FALSIFY: restore the silent `return` for this window (the pre-existing final fallback) → no
+    // resolution is recorded, the SDK's held ExitPlanMode is never answered, the recon turn's result
+    // can never arrive (NODE_RECON_DONE never dispatches to unblock it), and the run hangs forever
+    // with no watchdog covering "recon" → RED.
+    expect(rec.resolves.at(-1)).toEqual({
+      id: "premature-01-tu",
+      allow: false,
+      message: "this turn must not call ExitPlanMode — finish the recon text",
+    });
+    expect(h.orchestrationActive()).toBe(true);
+
+    // The run still completes normally: the recon turn's real result now lands (unblocked) and 01
+    // proceeds through its normal sizer → draft → approve → exec → summary → review cycle, exactly
+    // as an undisturbed leaf would.
+    await h.ingestStream(textFrame("01 recon"));
+    await h.ingestStream(resultFrame());
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
+    await h.ingestStream(resultFrame());
+    await h.ingestPermission(exitPlanModeReq("leaf-01-tu", "01 plan body"));
+    await h.approve("01");
+    await h.ingestStream(resultFrame()); // exec completion → summary prompt
+    await h.ingestStream(textFrame("## Changes\nS1\n## Findings\nf\n## Next-step inputs\nn"));
+    await h.ingestStream(resultFrame()); // summary result → the review turn (root reviews 01)
+    expect(rec.sends.at(-1)).toContain("Sub-plan 01 has completed");
+
+    await h.cancel();
+  });
+
+  it("during the SIZER window (before the node's own SIZER_DONE lands): denied with a corrective message — never silently stranded", async () => {
+    // sizerPrompt actively directs tool use (parse a SIZER: decision, no ExitPlanMode) — a rogue
+    // ExitPlanMode arriving WHILE that turn is still in flight (node is open/sizing, awaiting.tag
+    // is "sizer") must be denied-and-resolved, exactly like the recon window above, not silently
+    // dropped by the pre-fix catch-all (which would strand the SDK's held permission forever: no
+    // watchdog covers the "sizer" tag).
+    const rec = makeDeps();
+    const h = createOrchestrator(rec.deps);
+    await driveToRootGate(h, THREE_WAY);
+    await h.approve("");
+    await h.ingestStream(resultFrame()); // boundary result → 01's recon turn is now in flight
+    await h.ingestStream(textFrame("01 recon"));
+    await h.ingestStream(resultFrame()); // recon result → NODE_RECON_DONE → sizer turn now in flight
+
+    await h.ingestPermission(exitPlanModeReq("premature-sizer-01-tu", "01 plan body"));
+
+    // FALSIFY: restore the silent `return` for this window (the pre-fix catch-all) → no
+    // resolution is recorded, the SDK's held ExitPlanMode is never answered, the sizer turn's
+    // result can never arrive, and the run hangs forever with no watchdog covering "sizer" → RED.
+    expect(rec.resolves.at(-1)).toEqual({
+      id: "premature-sizer-01-tu",
+      allow: false,
+      message: "this turn must not call ExitPlanMode — finish the current task instead of exiting plan mode",
+    });
+    expect(h.orchestrationActive()).toBe(true);
+
+    // The run still completes normally: the sizer turn's real result now lands (unblocked) and 01
+    // proceeds through its normal draft → approve → exec → summary → review cycle.
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
+    await h.ingestStream(resultFrame());
+    await h.ingestPermission(exitPlanModeReq("leaf-01-tu", "01 plan body"));
+    await h.approve("01");
+    await h.ingestStream(resultFrame()); // exec completion → summary prompt
+    await h.ingestStream(textFrame("## Changes\nS1\n## Findings\nf\n## Next-step inputs\nn"));
+    await h.ingestStream(resultFrame()); // summary result → the review turn (root reviews 01)
+    expect(rec.sends.at(-1)).toContain("Sub-plan 01 has completed");
+
+    await h.cancel();
+  });
 });
