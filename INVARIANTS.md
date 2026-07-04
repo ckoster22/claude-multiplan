@@ -614,21 +614,21 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a fast double-click on Submit/Approve, or a cross-click, starting a second dispatch
 
-**Anchor:** `src/main.ts:3296` — `if (actionInFlight !== "none") return;`
+**Anchor:** `src/main.ts:3307` — `if (actionInFlight !== "none") return;`
 
 ### lock-set-after-guard-before-await
 **`runtime-guard`** — the lock is taken only after this branch's validation guard has passed, and before the branch's first await.
 
 **Prevents:** a guard-rejected click sticking the lock and freezing the bar
 
-**Anchor:** `src/main.ts:3309` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
+**Anchor:** `src/main.ts:3320` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
 
 ### lock-reset-on-every-exit
 **`runtime-guard`** — the finally returns actionInFlight to "none" on every exit path once a dispatched round-trip settles.
 
 **Prevents:** a failed dispatch leaving the lock stuck and permanently blocking actions
 
-**Anchor:** `src/main.ts:3337` — `actionInFlight = "none";`
+**Anchor:** `src/main.ts:3348` — `actionInFlight = "none";`
 
 ### prototype-loop-always-has-an-escape
 **`runtime-guard`** — from round >= PROTOTYPE_MAX_ROUNDS the approve affordance relabels to "Proceed as-is", guaranteeing a loop exit.
