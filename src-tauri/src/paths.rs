@@ -76,9 +76,7 @@ pub(crate) fn guarded_path_in(dir: Option<PathBuf>, review_id: &str) -> Result<P
 }
 
 /// True iff `candidate` lives inside `root`. Both are expected to already be canonicalized
-/// by the caller (so symlinks/`..` are resolved before this check). Extracted from
-/// `read_plan_contents` purely so the containment rule is unit-testable with an arbitrary
-/// root — it does not change the command's behavior.
+/// by the caller (so symlinks/`..` are resolved before this check).
 pub(crate) fn is_within(root: &Path, candidate: &Path) -> bool {
     candidate.starts_with(root)
 }

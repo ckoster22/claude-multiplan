@@ -30,8 +30,7 @@ pub fn get_comment_count(path: String, state: tauri::State<'_, Mutex<AppState>>)
     guard.comments.get(&path).map(|v| v.len()).unwrap_or(0)
 }
 
-/// THE pure map transition for `set_comments` (extracted so the return-after-mutation contract
-/// is unit-testable WITHOUT Tauri state). Full-array replacement: a non-empty array inserts/
+/// THE pure map transition for `set_comments`. Full-array replacement: a non-empty array inserts/
 /// replaces the key; an EMPTY array REMOVES the key (so the persisted map never accumulates
 /// empty entries). Returns the AUTHORITATIVE resulting array (what the frontend adopts as its
 /// cache) — on success this equals the post-mutation stored value for the key.
@@ -48,7 +47,7 @@ pub(crate) fn apply_set_comments(
     map.get(&path).cloned().unwrap_or_default()
 }
 
-/// THE pure map transition for `clear_comments` (extracted alongside `apply_set_comments`).
+/// THE pure map transition for `clear_comments`.
 /// Wipes all comments for a plan; returns the resulting (empty) array.
 pub(crate) fn apply_clear_comments(
     map: &mut HashMap<String, Vec<CommentRecord>>,

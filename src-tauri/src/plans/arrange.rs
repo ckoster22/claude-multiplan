@@ -9,7 +9,7 @@ use crate::plans::frontmatter::format_nn_path;
 /// THE pure, testable core of the nested-hierarchy ordering. Given the raw per-file rows and
 /// the persisted collapse map, produce the final `Vec<PlanRecord>` pre-ordered for direct
 /// top-level rendering by the frontend (no re-aggregation). Pure ⇒ unit-testable without
-/// Tauri state or real files (mirrors the `sort_newest_first` / `compute_unread` split).
+/// Tauri state or real files (same pure-function pattern as `compute_unread`).
 ///
 /// Rules (closed flavor set with deterministic tie-breaks):
 ///   - No marker ⇒ standalone.

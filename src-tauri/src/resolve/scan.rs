@@ -362,7 +362,7 @@ pub(crate) fn resolve_stem_path(
     best.map(|b| (b.path, b.cwd))
 }
 
-/// Server-side transcript line filter (extracted so it is unit-testable without Tauri). Keeps
+/// Server-side transcript line filter. Keeps
 /// ONLY records whose top-level `type` is `"user"` or `"assistant"` AND that are not flagged
 /// true on any of `isMeta`/`isVisibleInTranscriptOnly`/`isSidechain`/`isCompactSummary`. Drops
 /// every other record type (attachment/summary/last-prompt/ai-title/permission-mode/

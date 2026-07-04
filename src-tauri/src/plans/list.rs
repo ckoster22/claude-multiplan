@@ -222,14 +222,6 @@ pub(crate) fn read_head_string(path: &Path, cap: usize) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// Sort plan records newest-first (largest `mtime_ms` at index 0). Extracted from
-/// `list_plans` so the ordering invariant is unit-testable without touching the real
-/// plans dir.
-#[allow(dead_code)]
-pub(crate) fn sort_newest_first(records: &mut [PlanRecord]) {
-    records.sort_by(|a, b| b.mtime_ms.cmp(&a.mtime_ms));
-}
-
 /// Pure unread rule: a plan is unread iff its mtime is strictly newer than the effective
 /// "last viewed" time. The effective time is the per-plan `viewed` stamp when present,
 /// else the first-launch `baseline_ms`. So a pre-baseline plan with no view stamp is read;
@@ -259,65 +251,7 @@ pub(crate) fn unread_for_row(
 mod tests {
     use super::*;
     use crate::testutil::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
     use crate::model::{Flavor, RawFlavor};
-
-    #[test]
-    fn sort_puts_largest_mtime_first() {
-        let mut records = vec![
-            record_with_mtime("oldest", 100),
-            record_with_mtime("newest", 300),
-            record_with_mtime("middle", 200),
-        ];
-        sort_newest_first(&mut records);
-        let order: Vec<&str> = records.iter().map(|r| r.filename_stem.as_str()).collect();
-        assert_eq!(order, vec!["newest", "middle", "oldest"]);
-        // Explicit: index 0 carries the strictly-largest mtime.
-        assert_eq!(records[0].mtime_ms, 300);
-        assert!(records[0].mtime_ms > records[1].mtime_ms);
-        assert!(records[1].mtime_ms > records[2].mtime_ms);
-    }
-
-    #[test]
-    fn sort_newest_first_from_real_temp_file_mtimes() {
-        // Fabricate real temp files with distinct, explicitly-set mtimes and confirm the
-        // helper orders them newest-first.
-        let dir = std::env::temp_dir().join(format!(
-            "plan_reader_sort_test_{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).expect("mkdir temp");
-
-        let mut records = Vec::new();
-        for (stem, ms) in [("a", 1_000i64), ("b", 3_000), ("c", 2_000)] {
-            let p = dir.join(format!("{stem}.md"));
-            std::fs::write(&p, b"x").expect("write temp file");
-            records.push(PlanRecord {
-                absolute_path: p.to_string_lossy().to_string(),
-                filename_stem: stem.to_string(),
-                mtime_ms: ms,
-                cwd: None,
-                unread: false,
-                flavor: Flavor::Standalone,
-                tree_id: None,
-                nn: None,
-                nn_path: None,
-                child_count: None,
-                collapsed: false,
-                h1s: Vec::new(),
-                execution_model: None,
-            });
-        }
-
-        sort_newest_first(&mut records);
-        let order: Vec<&str> = records.iter().map(|r| r.filename_stem.as_str()).collect();
-        assert_eq!(order, vec!["b", "c", "a"]);
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
     #[test]
     fn unread_when_mtime_newer_than_viewed() {

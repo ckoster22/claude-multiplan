@@ -74,9 +74,8 @@ pub(crate) fn is_supported_image_ext(ext: &str) -> bool {
     mime_for_ext(ext).is_some()
 }
 
-/// True iff a file of `len` bytes is within the inline-image size cap. Pure boundary check,
-/// extracted so the 25 MiB limit is unit-testable at the exact boundary without writing a
-/// 25 MiB file. The cap is INCLUSIVE: exactly `MAX_IMAGE_BYTES` is allowed, one byte more is not.
+/// True iff a file of `len` bytes is within the inline-image size cap. The cap is INCLUSIVE:
+/// exactly `MAX_IMAGE_BYTES` is allowed, one byte more is not.
 pub(crate) fn within_size_cap(len: u64) -> bool {
     len <= MAX_IMAGE_BYTES
 }

@@ -35,9 +35,7 @@ use crate::state::persist::{atomic_write, nanos_suffix, persist_tree_cwd_index};
 
 /// Auto-capture core: given a `state.json` payload + the cwd it was written for, upsert
 /// `index[tree_id] = cwd` and persist (best-effort). A payload without a parseable `tree_id`
-/// leaves the index UNCHANGED (no write). Pulled out of the `#[tauri::command]` so the
-/// upsert-vs-skip behavior is unit-testable with a plain `State` lock + temp data dir.
-/// Returns `true` iff an entry was upserted.
+/// leaves the index UNCHANGED (no write). Returns `true` iff an entry was upserted.
 pub(crate) fn capture_tree_cwd(state: &Mutex<AppState>, cwd: &str, state_json: &str) -> bool {
     let Some(tree_id) = tree_id_from_state_json(state_json) else {
         return false; // no tree_id ⇒ leave the index untouched
