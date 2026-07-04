@@ -134,6 +134,10 @@ export interface ConversationHandle {
   // ACTIVE turn (the model-derived label wins) or with the "none" state (no session → never show).
   // Toggling triggers a rerender; setting the same value is a no-op.
   setIdleWaitingHint(on: boolean): void;
+  // Append images to the in-conversation follow-up attachment tray (paste/drop parity). Preserves
+  // existing attachments + order. No-op when the surface has no attach controller (older callers /
+  // tests). Used by the prototype-preview capture gallery's "Attach to message" action.
+  attachImages(imgs: AttachedImage[]): void;
   // Reconstruct + replay a plan's PAST conversation into the pane (silent populate on plan-select).
   // A NO-OP whenever a live session OR an orchestration owns the pane (the live model always wins);
   // otherwise it loads the plan's transcript via read_plan_transcript and renders it as history, or
@@ -1060,6 +1064,9 @@ export async function initConversation(
       // Mirror of submitQuestion's appendQuestionAnswered, for the ExitPlanMode resolve paths.
       model.appendPermissionResolved(id, synthSeq++);
       rerender();
+    },
+    attachImages: (imgs) => {
+      attachments?.setImages([...(attachments.getImages() ?? []), ...imgs]);
     },
     setIdleWaitingHint: (on) => {
       // Idle-waiting override toggle (visual-prototype gate). Idempotent: same value → no rerender.

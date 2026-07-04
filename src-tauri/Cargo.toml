@@ -63,3 +63,14 @@ base64 = "0.22"
 # tokio 1.x already (same lock entry); we ask only for the two features we use.
 tokio = { version = "1", features = ["sync", "time"] }
 
+# WKWebview snapshot capture (Sub-Plan 02) — `capture_webview_png` rasterizes the app's own
+# web content (incl. the srcdoc prototype iframe) via WKWebView.takeSnapshot. Pinned to the
+# EXACT versions wry already resolved so cargo unifies features into a single copy (a second
+# copy makes wry's WKWebView type mismatch ours and the `wv.inner()` cast fails to compile).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-web-kit = { version = "=0.3.2", features = ["WKWebView", "WKSnapshotConfiguration", "block2"] }
+objc2-app-kit = { version = "=0.3.2", features = ["NSImage", "NSBitmapImageRep"] }
+objc2-foundation = { version = "=0.3.2", features = ["NSData", "NSError", "NSValue", "NSGeometry"] }
+block2 = "=0.6.2"
+

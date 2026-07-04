@@ -104,7 +104,9 @@ type MockCommand =
   | { cmd: "reset_plan_tree_dir"; args: { cwd: string } }
   | { cmd: "ensure_prototype_dir"; args: { cwd: string } }
   | { cmd: "ensure_baseline_dir"; args: { cwd: string } }
-  | { cmd: "freeze_baseline"; args: { cwd: string } };
+  | { cmd: "freeze_baseline"; args: { cwd: string } }
+  | { cmd: "write_capture_png"; args: { cwd: string; id: string; dataUrl: string } }
+  | { cmd: "delete_capture_png"; args: { cwd: string; id: string } };
 
 // The exhaustive set of command names this mock HANDLES. Exported (and asserted in the
 // registry canary) so a new real call site without a mock handler is caught. Derived from the
@@ -153,6 +155,8 @@ export const HANDLED_COMMANDS = [
   "ensure_prototype_dir",
   "ensure_baseline_dir",
   "freeze_baseline",
+  "write_capture_png",
+  "delete_capture_png",
 ] as const satisfies readonly MockCommand["cmd"][];
 
 // A Set form for O(1) membership checks (used by the canary + the runtime dispatch guard).
@@ -331,6 +335,17 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
     case "ensure_baseline_dir":
     case "freeze_baseline":
       return "/Users/mock/.plan-tree/mock-path";
+
+    case "write_capture_png": {
+      // The real command returns the absolute path written; mirror its shape so the gallery's
+      // attach flow round-trips a plausible captures path without touching the filesystem.
+      const cwd = String(args?.cwd ?? "/Users/mock");
+      const id = String(args?.id ?? "cap0");
+      return `${cwd}/.plan-tree/prototype/captures/capture-${id}.png`;
+    }
+
+    case "delete_capture_png":
+      return undefined;
 
     // Agent / orchestrator: drive scene playback through the event bus.
 

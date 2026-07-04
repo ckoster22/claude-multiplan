@@ -360,6 +360,11 @@ export function createNormalizer(deps: NormalizerDeps): Normalizer {
           const { resetAt, source } = decideResultQuota(resultText, lastRateLimitInfo);
           return [nextFrame("quota_exceeded", { resetAt, source })];
         }
+        logErr(
+          "[sidecar] result usage:",
+          "total_cost_usd=" + String(msg.total_cost_usd ?? null),
+          JSON.stringify(msg.usage ?? null),
+        );
         return [
           nextFrame("result", {
             subtype: msg.subtype ?? null,

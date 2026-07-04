@@ -3,3 +3,4 @@
 
 pub(crate) mod comments;
 pub(crate) mod read_state;
+pub(crate) mod snapshot;

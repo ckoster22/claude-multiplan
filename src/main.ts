@@ -2891,6 +2891,8 @@ async function openPrototypePreview(gate: PrototypeGate): Promise<void> {
       setHookStatus(hookStatusEl, message, "error");
       setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
     },
+    cwd: gate.cwd,
+    attachImages: (imgs) => conversationHandle?.attachImages(imgs),
   });
   previewOpening = false;
 }
