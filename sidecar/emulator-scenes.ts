@@ -202,16 +202,20 @@ export function resultUsageLimit(text: string = SESSION_LIMIT_TEXT): SDKMessage 
 // backoff retry (the overloaded scenarios) or a resume-timeout recovery (the silent-resume
 // scenarios). Each attempt kind: "frames" ends normally; "throw" yields `messages` then THROWS
 // `thenThrow()` (driving index.ts's catch-block classification, which a message fixture cannot
-// reach); "hang" never yields its first frame (the silent, wedged resume — the only shape that
-// exercises index.ts's first-frame watchdog; a `[]` "frames" attempt would end immediately instead).
+// reach); "hang" never yields its first frame (the silent, wedged resume — exercises index.ts's
+// first-frame watchdog; a `[]` "frames" attempt would end immediately instead); "await-input" emits
+// ZERO frames until the FIRST user message reaches the streaming-input prompt, then yields `messages`
+// — the faithful model of the real CLI (which stays silent on stdin until the first user turn), used
+// to prove the watchdog arms on first input, not at query start.
 //
-// INVARIANT[emulator-attempt-tagged-union] (type-level): every emulator attempt carries a "kind" discriminant (frames|throw|hang); attemptMessages and the emulator generator switch on it exhaustively with an assertNever default, so no runtime shape-sniffing (Array.isArray / "in") can misclassify an attempt.
-//   prevents: a bare-array-vs-object mis-probe silently dropping a hang/throw tail or misreading frames.
-//   test: emulator.test.ts (makeEmulatorQuery attempt-advance + throw-tail cases); emulator-e2e goldens (hang/throw/frames).
+// INVARIANT[emulator-attempt-tagged-union] (type-level): every emulator attempt carries a "kind" discriminant (frames|throw|hang|await-input); attemptMessages switches on it exhaustively with an assertNever default, so a new variant it fails to handle is a compile error rather than a runtime shape-sniff (Array.isArray / "in") that could misclassify an attempt.
+//   prevents: a bare-array-vs-object mis-probe silently dropping a hang/throw/await-input tail or misreading frames.
+//   test: emulator.test.ts (makeEmulatorQuery attempt-advance + throw-tail cases); emulator-e2e goldens (hang/throw/frames/await-input).
 export type EmulatorAttempt =
   | { kind: "frames"; messages: SDKMessage[] }
   | { kind: "throw"; messages: SDKMessage[]; thenThrow: () => Error }
-  | { kind: "hang" };
+  | { kind: "hang" }
+  | { kind: "await-input"; messages: SDKMessage[] };
 
 /** Ergonomic constructor for the common "frames" attempt, keeping the scene registry terse. */
 export const frames = (...messages: SDKMessage[]): EmulatorAttempt => ({ kind: "frames", messages });
@@ -225,6 +229,8 @@ export function attemptMessages(attempt: EmulatorAttempt): SDKMessage[] {
     case "frames":
       return attempt.messages;
     case "throw":
+      return attempt.messages;
+    case "await-input":
       return attempt.messages;
     case "hang":
       return [];
@@ -487,6 +493,25 @@ const SCENARIOS: EmulatorScenario[] = [
     name: "resume-silent-exhausted",
     resumeTranscriptExists: true,
     attempts: [{ kind: "hang" }, { kind: "hang" }],
+  },
+  {
+    // resume-idle-until-input: a resume parked at a gate re-presentation receives NO user message for a
+    // while — the first-frame watchdog must NOT arm (an input-less resume idles indefinitely) — then a
+    // late user message drives a normal turn to a clean `result`. The `await-input` attempt emits zero
+    // frames until that message arrives, so with an arm-at-query-start watchdog the quiet window would
+    // double-fatal; with arm-on-first-input it completes cleanly. See index.ts firstFrameWatchdog.
+    name: "resume-idle-until-input",
+    resumeTranscriptExists: true,
+    attempts: [
+      {
+        kind: "await-input",
+        messages: [
+          sysInit(),
+          ...assistantTextStreamed("Handled the gate after the late message arrived."),
+          resultSuccess("Resumed and completed after idle."),
+        ],
+      },
+    ],
   },
 ];
 

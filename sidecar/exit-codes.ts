@@ -27,4 +27,5 @@ export const SCENARIO_EXIT_CODES: Record<string, number> = {
   "resume-fallback": 0,
   "resume-silent-recover": 0,
   "resume-silent-exhausted": 1,
+  "resume-idle-until-input": 0,
 };

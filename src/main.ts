@@ -802,6 +802,11 @@ let notifyPermissionResolved: ((toolUseId: string) => void) | null = null;
 // until the handle exists.
 let echoUserMessage: ((text: string) => void) | null = null;
 
+// Surface a NON-FATAL notice into the conversation stream (a `.conv-notice` row). Used by the
+// out-of-band gate handlers below to report a failed dispatch (e.g. "Request changes"/approve against a
+// dead session) instead of swallowing it silently. Null until the handle exists.
+let surfaceMessage: ((text: string) => void) | null = null;
+
 // Set once initConversation returns: reconstruct + replay a plan's PAST conversation into the
 // CONVERSATION pane (silent populate on plan-select). Fired un-awaited from openPlan; a NO-OP while a
 // live session / orchestration owns the pane (guarded inside the handle). Null until the handle exists.
@@ -3090,6 +3095,7 @@ window.addEventListener("DOMContentLoaded", () => {
       // orchestrator gate handlers).
       notifyPermissionResolved = (toolUseId) => handle.notifyPermissionResolved(toolUseId);
       echoUserMessage = (text) => handle.echoUserMessage(text);
+      surfaceMessage = (text) => handle.surfaceMessage(text);
       // Expose the silent plan-history reconstruction to openPlan (module-level). Fire-and-forget.
       loadPlanHistory = (stem) => void handle.loadHistoryForPlan(stem);
       // Wire the titlebar "+ New plan" button to open the composer modal.
@@ -3334,7 +3340,10 @@ window.addEventListener("DOMContentLoaded", () => {
               // The held ExitPlanMode was resolved (deny + feedback) — drop the waiting label NOW.
               notifyPermissionResolved?.(gate.toolUseId);
             } catch (e) {
+              // Surface the failure rather than silently no-op — the session may have ended. The return
+              // skips clearAllComments below, so the submitted comments are preserved for a retry.
               console.error("orchestrator gate: requestChanges failed", e);
+              surfaceMessage?.("Couldn't send your changes — the session may have ended. Try again.");
               return;
             }
             // Dispatch succeeded — echo a STRUCTURED, human-readable view of the comments the user
@@ -3366,7 +3375,11 @@ window.addEventListener("DOMContentLoaded", () => {
             try {
               await getOrchestrator().refinePrototype(feedback);
             } catch (e) {
+              // Surface the failure — the session may have ended, so a silent no-op would leave the
+              // user's typed feedback stranded with no signal. The textarea is deliberately NOT cleared
+              // (the return skips the clear below) so the feedback is preserved for a retry.
               console.error("prototype gate: refinePrototype failed", e);
+              surfaceMessage?.("Couldn't send your changes — the session may have ended. Try again.");
               return;
             }
             // Dispatch succeeded — echo the user's verbatim feedback as a bubble, THEN clear the
@@ -3395,7 +3408,10 @@ window.addEventListener("DOMContentLoaded", () => {
             try {
               await getOrchestrator().divergeAcceptance(reason);
             } catch (e) {
+              // Surface the failure rather than silently no-op — the session may have ended. The return
+              // skips clearing the textarea below, so the typed reason is preserved for a retry.
               console.error("acceptance gate: divergeAcceptance failed", e);
+              surfaceMessage?.("Couldn't send your acceptance — the session may have ended. Try again.");
               return;
             }
             echoUserMessage?.(`Accepted divergence from the baseline: ${reason}`);
@@ -3468,7 +3484,9 @@ window.addEventListener("DOMContentLoaded", () => {
             notifyPermissionResolved?.(gate.toolUseId);
             switchToConversationTab();
           } catch (e) {
+            // Surface the failure rather than silently no-op — the session may have ended.
             console.error("orchestrator gate: approve failed", e);
+            surfaceMessage?.("Couldn't send your approval — the session may have ended. Try again.");
           } finally {
             actionInFlight = "none";
           }
@@ -3510,7 +3528,11 @@ window.addEventListener("DOMContentLoaded", () => {
             }
             switchToConversationTab();
           } catch (e) {
+            // Consistent with the "Request changes" path: surface a dead-session failure rather than
+            // swallowing it. On the combined apply-and-approve branch the textarea was NOT yet cleared
+            // (echo/clear run only after the await resolves), so the feedback is preserved for a retry.
             console.error("prototype gate: apply-and-approve failed", e);
+            surfaceMessage?.("Couldn't send your approval — the session may have ended. Try again.");
           } finally {
             actionInFlight = "none";
           }
@@ -3529,7 +3551,9 @@ window.addEventListener("DOMContentLoaded", () => {
             await getOrchestrator().approveAcceptance();
             switchToConversationTab();
           } catch (e) {
+            // Surface the failure rather than silently no-op — the session may have ended.
             console.error("acceptance gate: approve failed", e);
+            surfaceMessage?.("Couldn't send your acceptance — the session may have ended. Try again.");
           } finally {
             actionInFlight = "none";
           }

@@ -56,10 +56,11 @@ export function makeEmulatorQuery(
   let attemptIndex = 0;
   const last = scenario.attempts.length - 1;
 
-  return function emulatorQuery(_args: QueryArgs): Query {
+  return function emulatorQuery(args: QueryArgs): Query {
     const attempt = scenario.attempts[Math.min(attemptIndex++, last)];
     const messages = attemptMessages(attempt);
     const hang = attempt.kind === "hang";
+    const awaitInput = attempt.kind === "await-input";
     const thenThrow = attempt.kind === "throw" ? attempt.thenThrow : null;
 
     async function* gen(): AsyncGenerator<SDKMessage> {
@@ -67,6 +68,14 @@ export function makeEmulatorQuery(
       // never-settling promise registers no timer/handle, so it does not pin the event loop once
       // index.ts abandons this iterator on its first-frame timeout.
       if (hang) await new Promise<never>(() => {});
+      // An "await-input" attempt models the real CLI: emit ZERO frames until the FIRST user message
+      // reaches the streaming-input prompt. Consume one item from the prompt queue (the emulator is the
+      // ONLY consumer in emulator mode — the real query() is swapped out), then proceed. A queue `end`
+      // during teardown wakes this too (done); the generator then suspends at its first `yield` with no
+      // consumer, so no frame leaks after index.ts has abandoned the iterator.
+      if (awaitInput && typeof args.prompt !== "string") {
+        await args.prompt[Symbol.asyncIterator]().next();
+      }
       for (const msg of messages) {
         yield msg;
       }

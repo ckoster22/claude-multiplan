@@ -24,10 +24,10 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 | Reading-pane render | 1 | 8 | 0 | 0 | 0 | 3 | 0 | 7 | 19 |
 | Conversation / live-session | 8 | 26 | 0 | 1 | 0 | 0 | 0 | 5 | 40 |
 | App shell — selection / review / gates | 5 | 19 | 4 | 0 | 0 | 0 | 0 | 6 | 34 |
-| Sidecar / agent-driver | 6 | 17 | 0 | 0 | 4 | 0 | 0 | 5 | 32 |
+| Sidecar / agent-driver | 6 | 18 | 0 | 0 | 4 | 0 | 0 | 5 | 33 |
 | Rust backend (`src-tauri/`) | 0 | 2 | 0 | 0 | 0 | 0 | 1 | 0 | 3 |
 | Other | 3 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 4 |
-| **Total** | 23 | 72 | 5 | 1 | 4 | 3 | 1 | 23 | 132 |
+| **Total** | 23 | 73 | 5 | 1 | 4 | 3 | 1 | 23 | 133 |
 
 ## Reading-pane render
 
@@ -514,35 +514,35 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** an out-of-band cancel leaving the resume banner stuck hidden
 
-**Anchor:** `src/main.ts:886` — `refreshAffordances();`
+**Anchor:** `src/main.ts:891` — `refreshAffordances();`
 
 ### reading-pane-affordance-precedence
 **`precedence`** — the resume banner is (re-)derived only when computeAffordance reports no higher affordance occupies the bar.
 
 **Prevents:** the resume banner showing beneath a held review / gate
 
-**Anchor:** `src/main.ts:1408` — `function refreshAffordances(): void {`
+**Anchor:** `src/main.ts:1413` — `function refreshAffordances(): void {`
 
 ### selection-collapse-only-on-genuine-vanish
 **`runtime-guard`** — a `plan` selection collapses to none only when it was in the prior list AND is absent from the new one.
 
 **Prevents:** blanking a freshly-opened / not-yet-indexed plan that was simply never listed
 
-**Anchor:** `src/main.ts:1783` — `function resolveSelection(`
+**Anchor:** `src/main.ts:1788` — `function resolveSelection(`
 
 ### held-gate-plan-exempt-from-collapse
 **`runtime-guard`** — the held orchestrator gate's plan is returned unchanged even if its row drops from list_plans mid-hold.
 
 **Prevents:** a churning gate row collapsing the selection and vanishing the in-process Approve bar
 
-**Anchor:** `src/main.ts:1792` — `if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;`
+**Anchor:** `src/main.ts:1797` — `if (heldGatePlan !== null && prev.path === heldGatePlan) return prev;`
 
 ### list-refresh-no-fetching-flash
 **`runtime-guard`** — only the INITIAL load (listState `initial`) transitions to `fetching`; an in-place refresh of an already-loaded list leaves the rendered list untouched while the next read is in flight.
 
 **Prevents:** a watcher tick blanking a populated sidebar to the empty `fetching` render mid-fetch.
 
-**Anchor:** `src/main.ts:1810` — `if (isInitial(listState)) {`
+**Anchor:** `src/main.ts:1815` — `if (isInitial(listState)) {`
 
 **Tests:** `list-refresh-never-renders-fetching-in-place`
 
@@ -551,84 +551,84 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Prevents:** a transient IPC failure collapsing the open plan (empty list → resolveSelection "vanish" → blanked pane)
 
-**Anchor:** `src/main.ts:1831` — `console.error("list_plans failed — leaving the sidebar/selection intact", e);`
+**Anchor:** `src/main.ts:1836` — `console.error("list_plans failed — leaving the sidebar/selection intact", e);`
 
 ### selection-set-synchronously-before-await-in-openPlan
 **`runtime-guard`** — openPlan assigns `selection` synchronously at the top, before any await, so openPath() reflects the new target throughout.
 
 **Prevents:** a post-await derivation reading a stale selection mid-open
 
-**Anchor:** `src/main.ts:2382` — `selection = isResumeSentinel(path)`
+**Anchor:** `src/main.ts:2387` — `selection = isResumeSentinel(path)`
 
 ### popover-draft-discarded-on-plan-switch-preserved-on-reopen
 **`runtime-guard`** — invalidatePopover compares the draft's planPath against the just-set openPath() — a genuine switch discards the draft, a same-plan reopen re-anchors it.
 
 **Prevents:** a cross-plan draft surviving a switch and re-anchoring against the wrong document
 
-**Anchor:** `src/main.ts:2540` — `invalidatePopover(readingPaneEl);`
+**Anchor:** `src/main.ts:2545` — `invalidatePopover(readingPaneEl);`
 
 ### render-generation-guard-cancels-superseded-settles
 **`runtime-guard`** — settle is handed `() => renderGuard.isCurrent(gen)`, so a superseded render's settle is cancelled the moment a newer render takes the generation.
 
 **Prevents:** a late settle from a stale render mutating the pane after a newer plan opened
 
-**Anchor:** `src/main.ts:2544` — `await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));`
+**Anchor:** `src/main.ts:2549` — `await settle(readingPaneEl, undefined, () => renderGuard.isCurrent(gen));`
 
 ### openGatePlanFile-shared-by-both-gate-paths
 **`convention`** — the gate observer and the Resume path both re-open a held gate's plan through this one sequence.
 
 **Prevents:** the two gate-open paths diverging
 
-**Anchor:** `src/main.ts:2739` — `async function openGatePlanFile(planPath: string): Promise<void> {`
+**Anchor:** `src/main.ts:2744` — `async function openGatePlanFile(planPath: string): Promise<void> {`
 
 ### gate-preferred-over-newer-external-review
 **`precedence`** — a held orchestrator gate is found first among the pending surfaces, so Resume re-opens it regardless of a newer external review.
 
 **Prevents:** a newer external review opening instead of the live held gate
 
-**Anchor:** `src/main.ts:2760` — `const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");`
+**Anchor:** `src/main.ts:2765` — `const gateSurface = surfaces.find((s) => s.kind === "orchestrator-gate");`
 
 ### sentinel-touches-no-file-io
 **`runtime-guard`** — a synthetic resume sentinel is guarded out of every file-backed IPC (set_open_plan / mark_viewed) in this handler.
 
 **Prevents:** backend rejections / "reload failed" logs for a row with no real file
 
-**Anchor:** `src/main.ts:2778` — `const op = openPath();`
+**Anchor:** `src/main.ts:2783` — `const op = openPath();`
 
 ### open-plan-stamped-viewed-before-relist
 **`runtime-guard`** — when the open plan is the changed file, markViewed runs before refreshList / list_plans.
 
 **Prevents:** the sidebar momentarily bolding the plan the user is actively watching
 
-**Anchor:** `src/main.ts:2792` — `if (op !== null && changedPath === op && !isResumeSentinel(op)) {`
+**Anchor:** `src/main.ts:2797` — `if (op !== null && changedPath === op && !isResumeSentinel(op)) {`
 
 ### reload-target-re-read-after-relist
 **`runtime-guard`** — the reload target is re-read from openPath() AFTER refreshList, so a collapsed selection yields nothing to reload.
 
 **Prevents:** a reload firing against a path the same refresh just collapsed
 
-**Anchor:** `src/main.ts:2802` — `const opAfter = openPath();`
+**Anchor:** `src/main.ts:2807` — `const opAfter = openPath();`
 
 ### exactly-once-action-dispatch
 **`runtime-guard`** — the top-of-handler early-return bails whenever a sibling action is already dispatching, before any branch runs.
 
 **Prevents:** a fast double-click on Submit/Approve, or a cross-click, starting a second dispatch
 
-**Anchor:** `src/main.ts:3307` — `if (actionInFlight !== "none") return;`
+**Anchor:** `src/main.ts:3313` — `if (actionInFlight !== "none") return;`
 
 ### lock-set-after-guard-before-await
 **`runtime-guard`** — the lock is taken only after this branch's validation guard has passed, and before the branch's first await.
 
 **Prevents:** a guard-rejected click sticking the lock and freezing the bar
 
-**Anchor:** `src/main.ts:3320` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
+**Anchor:** `src/main.ts:3326` — `actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.`
 
 ### lock-reset-on-every-exit
 **`runtime-guard`** — the finally returns actionInFlight to "none" on every exit path once a dispatched round-trip settles.
 
 **Prevents:** a failed dispatch leaving the lock stuck and permanently blocking actions
 
-**Anchor:** `src/main.ts:3348` — `actionInFlight = "none";`
+**Anchor:** `src/main.ts:3357` — `actionInFlight = "none";`
 
 ### prototype-loop-always-has-an-escape
 **`runtime-guard`** — from round >= PROTOTYPE_MAX_ROUNDS the approve affordance relabels to "Proceed as-is", guaranteeing a loop exit.
@@ -710,13 +710,13 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 **Anchor:** `sidecar/cli-plans.ts:22` — `export const CLI_PLANS_SUBDIR = ".plan-tree/cli-plans";`
 
 ### emulator-attempt-tagged-union
-**`type-level`** — every emulator attempt carries a "kind" discriminant (frames|throw|hang); attemptMessages and the emulator generator switch on it exhaustively with an assertNever default, so no runtime shape-sniffing (Array.isArray / "in") can misclassify an attempt.
+**`type-level`** — every emulator attempt carries a "kind" discriminant (frames|throw|hang|await-input); attemptMessages switches on it exhaustively with an assertNever default, so a new variant it fails to handle is a compile error rather than a runtime shape-sniff (Array.isArray / "in") that could misclassify an attempt.
 
-**Prevents:** a bare-array-vs-object mis-probe silently dropping a hang/throw tail or misreading frames.
+**Prevents:** a bare-array-vs-object mis-probe silently dropping a hang/throw/await-input tail or misreading frames.
 
-**Anchor:** `sidecar/emulator-scenes.ts:211` — `export type EmulatorAttempt =`
+**Anchor:** `sidecar/emulator-scenes.ts:214` — `export type EmulatorAttempt =`
 
-**Tests:** `emulator.test.ts (makeEmulatorQuery attempt-advance + throw-tail cases); emulator-e2e goldens (hang/throw/frames).`
+**Tests:** `emulator.test.ts (makeEmulatorQuery attempt-advance + throw-tail cases); emulator-e2e goldens (hang/throw/frames/await-input).`
 
 ### env-override-whitelist-or-no-op
 **`runtime-guard`** — AGENT_EFFORT overrides only for a valid SDK level and AGENT_MODEL only when non-empty; invalid values produce no override.
@@ -732,47 +732,56 @@ Ranked strongest → weakest (how hard the invariant is to violate):
 
 **Anchor:** `sidecar/index.ts:175` — `let hostPolicy: HostPolicy = "plan";`
 
+### resume-watchdog-arms-on-first-input
+**`runtime-guard`** — the resume first-frame timeout arms only after `armed` (the first user message delivered) resolves, so a resume that has received no user input idles indefinitely rather than timing out.
+
+**Prevents:** a gate-re-presentation resume (prototype/approval/acceptance — no message queued) tripping the watchdog and driving a spurious fresh-retry double-fatal on every such Resume.
+
+**Anchor:** `sidecar/index.ts:392` — `function firstFrameWatchdog(q: Query, ms: number, armed: Promise<void>): AsyncIterable<SDKMessage> {`
+
+**Tests:** `sidecar/emulator-e2e.test.ts resume-idle-until-input (quiet period several timeouts long, then a late message completes to a clean result).`
+
 ### draining-flag-precedes-drain-await
 **`runtime-guard`** — sessionDraining is set before the drain await, and currentSession checks draining/dead first.
 
 **Prevents:** a command mid-drain routing to apply on a query being closed.
 
-**Anchor:** `sidecar/index.ts:807` — `function currentSession(): Session {`
+**Anchor:** `sidecar/index.ts:841` — `function currentSession(): Session {`
 
 ### hostpolicy-unconditional-write
 **`runtime-guard`** — hostPolicy is a required field on every decision and applied unconditionally before the action switch.
 
 **Prevents:** a late command on a dead session leaving the host-policy backstop stale.
 
-**Anchor:** `sidecar/index.ts:927` — `hostPolicy = decision.hostPolicy;`
+**Anchor:** `sidecar/index.ts:964` — `hostPolicy = decision.hostPolicy;`
 
 ### setpermissionmode-toctou-trycatch-backstop
 **`runtime-guard`** — the await q.setPermissionMode is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
 
 **Prevents:** an unhandled rejection killing the sidecar process.
 
-**Anchor:** `sidecar/index.ts:941` — `try {`
+**Anchor:** `sidecar/index.ts:978` — `try {`
 
 ### setpermissionmode-exhaustiveness-guard
 **`type-level`** — every SessionCommandDecision.action is handled; an unhandled future variant is a compile error.
 
 **Prevents:** a new action silently falling through into the sibling case.
 
-**Anchor:** `sidecar/index.ts:960` — `const _exhaustive: never = decision.action;`
+**Anchor:** `sidecar/index.ts:997` — `const _exhaustive: never = decision.action;`
 
 ### setmodel-toctou-trycatch-backstop
 **`runtime-guard`** — the await q.setModel is wrapped in try/catch, so a query that ends in the TOCTOU window rejects without crashing.
 
 **Prevents:** an unhandled rejection killing the sidecar process.
 
-**Anchor:** `sidecar/index.ts:981` — `try {`
+**Anchor:** `sidecar/index.ts:1018` — `try {`
 
 ### setmodel-exhaustiveness-guard
 **`type-level`** — every ModelCommandDecision.action is handled; an unhandled future variant is a compile error.
 
 **Prevents:** a new action silently falling through into the sibling case.
 
-**Anchor:** `sidecar/index.ts:997` — `const _exhaustive: never = decision.action;`
+**Anchor:** `sidecar/index.ts:1034` — `const _exhaustive: never = decision.action;`
 
 ### plan-bash-write-blocklist-preserves-tests
 **`runtime-guard`** — under plan, write-shaped Bash is denied while read-only test runs stay allowed (best-effort blocklist, NOT a sandbox).
