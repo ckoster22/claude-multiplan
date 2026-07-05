@@ -55,6 +55,7 @@ import {
 } from "../plan-tree";
 import { phaseModel } from "../plan-tree/triage";
 import type { ModelOptions } from "../../model-picker";
+import type { AttachedImage } from "../images";
 import type {
   AgentStream,
   AskUserQuestionAnswers,
@@ -549,7 +550,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // policy and asserts setMode("plan") BEFORE the recon send — the INTENT_CLARIFIED continuation's
   // ordering). Called by approvePrototype() and the intent-ingestion auto-approve branch. The session
   // is IDLE at both call sites, so the recon prompt opens a fresh turn — no resuming hold, no interrupt.
-  const resolveApprove = async (gate: PrototypeGate, asWorkingReference = false): Promise<void> => {
+  const resolveApprove = async (
+    gate: PrototypeGate,
+    asWorkingReference = false,
+    images?: AttachedImage[],
+  ): Promise<void> => {
     const intentContents = composeIntentMd(run.pendingIntentText ?? "", gate, run.cwd);
     // when the user marked the prototype a working reference,
     // freeze .plan-tree/prototype/ → .plan-tree/baseline/ BEFORE dispatching, so the on-disk copy
@@ -579,7 +584,12 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // Arm BEFORE sending (the result may arrive as this sendMessage resolves — see start()).
     run.awaiting = { tag: "recon", path: [], buffer: "" };
     diag("resolveApprove: INTENT.md written, armed recon, sending reconPrompt");
-    await deps.sendMessage(reconPrompt(run.request, run.confirmedIntent));
+    // The user's annotated captures (if any) ride this recon send; omit-when-empty keeps every
+    // image-less approval byte-identical to the pre-attach send.
+    await deps.sendMessage(
+      reconPrompt(run.request, run.confirmedIntent),
+      images && images.length ? images : undefined,
+    );
   };
 
   // Execute a single effect against the injected deps. Persist writes the schema-2 ledger to
@@ -2736,7 +2746,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // INTENT.md, dispatches PROTOTYPE_APPROVED (legal from prototype-review), arms recon and
       // sends the recon prompt. `asWorkingReference` (DEFAULT false — "just a sketch") additionally
       // freezes .plan-tree/prototype/ → .plan-tree/baseline/ and records baseline_ on the ledger.
-      await resolveApprove(gate, opts?.asWorkingReference === true);
+      // `opts.images` (annotated captures) ride the recon send resolveApprove dispatches.
+      await resolveApprove(gate, opts?.asWorkingReference === true, opts?.images);
     },
 
     refinePrototype: async (feedback, opts) => {
@@ -2762,7 +2773,12 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       diag(
         `refinePrototype: round=${run.prototypeRound}, autoApprove=${opts?.autoApprove === true}, re-armed intent, sending refine prompt`,
       );
-      await deps.sendMessage(refinePrototypePrompt(feedback));
+      // The user's annotated captures (if any) ride this refine send; omit-when-empty keeps every
+      // image-less refine byte-identical to the pre-attach send.
+      await deps.sendMessage(
+        refinePrototypePrompt(feedback),
+        opts?.images && opts.images.length ? opts.images : undefined,
+      );
     },
 
     approveAcceptance: async () => {

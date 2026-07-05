@@ -205,6 +205,12 @@
                 <textarea class="proto-feedback hidden" id="prototype-feedback" rows="5"
                           placeholder="Describe what to change in the visual…"
                           aria-label="Prototype change feedback"></textarea>
+                <!-- Staged prototype captures — PROTOTYPE mode only; ships hidden. Screenshots the user
+                     annotated + captured in the preview modal are staged HERE (not the composer tray)
+                     and ride the next gate send ("Request changes"/"Approve visual"). Removable chips;
+                     renderStagedGateChips() is the sole writer of its children + .hidden. -->
+                <div class="conv-attach-strip proto-attachments hidden" id="prototype-attachments"
+                     aria-label="Staged prototype captures"></div>
                 <!-- Working-reference classification (Phase 3) — PROTOTYPE mode only; ships hidden.
                      UNCHECKED (default) = "just a sketch" → approve is today's behavior (nothing
                      frozen). CHECKED = "working reference" → on approve the driver freezes

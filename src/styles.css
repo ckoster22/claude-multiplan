@@ -630,6 +630,12 @@ body {
   font-family: var(--ui); font-size: 11px; color: var(--text); cursor: pointer;
 }
 .review-bar.proto .proto-workingref input { cursor: pointer; margin: 0; }
+/* Staged prototype captures (#prototype-attachments) claim their OWN full-width row inside the
+   wrapping actions strip (flex-basis:100% forces a wrap) so the chips sit on their own line beneath
+   the textarea/buttons instead of crowding the button row. The chip tiles themselves inherit the
+   shared .conv-attach-strip flex layout. */
+.review-bar.proto .proto-attachments { flex: 0 0 100%; margin-top: 2px; }
+.review-bar-actions .proto-attachments.hidden { display: none; }
 
 /* rich markdown typography (used for real in Sub-Plan 02) */
 .md { font-size: var(--reading-font-size); line-height: 1.62; color: var(--text); }

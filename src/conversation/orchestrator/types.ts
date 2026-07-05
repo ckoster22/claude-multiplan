@@ -107,7 +107,10 @@ export interface OrchestratorHandle {
   // WORKING-REFERENCE: { asWorkingReference: true } marks the prototype a FLOOR on the
   // outcome dimensions (not a match-target); the driver freezes .plan-tree/prototype/ →
   // .plan-tree/baseline/ and records the baseline. Default (omitted/false) freezes nothing.
-  approvePrototype(opts?: { asWorkingReference?: boolean }): Promise<void>;
+  //
+  // `images` (the user's annotated prototype captures) ride the recon send this approval dispatches —
+  // annotations are feedback even on approval. Omitted/empty ⇒ the send stays text-only (byte-identical).
+  approvePrototype(opts?: { asWorkingReference?: boolean; images?: AttachedImage[] }): Promise<void>;
   // Send the held prototype back for another round with the user's feedback: dispatches
   // PROTOTYPE_REFINED (root loops to clarifying-intent), re-arms the intent turn, sends the refine
   // prompt. Session is idle — no interrupt. Throws when no prototype gate is pending.
@@ -115,7 +118,9 @@ export interface OrchestratorHandle {
   // COMBINED apply-and-approve: { autoApprove: true } (user typed feedback AND clicked approve) loops
   // one round applying the feedback but arms an internal latch so the revised prototype auto-resolves
   // the gate forward to recon without another review round. Driver-owned — never model-controlled.
-  refinePrototype(feedback: string, opts?: { autoApprove?: boolean }): Promise<void>;
+  //
+  // `images` (the user's annotated prototype captures) ride the refine send. Omitted/empty ⇒ text-only.
+  refinePrototype(feedback: string, opts?: { autoApprove?: boolean; images?: AttachedImage[] }): Promise<void>;
   // RESOLVE THE FORCED ACCEPTANCE GATE (baseline-bearing runs only). Both perform the
   // deferred finalize (root → summarized + notifyDone) and clear the gate; the verdict is recorded on
   // the ledger (acceptance_). Throw loudly when no acceptance gate is pending.
