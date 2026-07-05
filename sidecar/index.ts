@@ -324,24 +324,17 @@ if (emulatorScenario) {
 
 // RESUME FIRST-FRAME WATCHDOG.
 //
-// A resumed streaming query whose transcript's last turn is incomplete — an unanswered user turn, or
-// a partial assistant turn with a `tool_use` lacking its `tool_result` (exactly the state a quota
-// pause + `interrupt()`/`close()` leaves on disk) — can go SILENT when told to `--resume` it: the
-// `claude` CLI child yields no message, no `result`, no error, and never exits, so the SDK iterator's
-// FIRST `.next()` never resolves. The SDK streaming path has no initialize timeout, so `for await
-// (const msg of q)` parks forever with ZERO frames emitted and the UI sticks on "Working…".
+// A `--resume` into a transcript whose last turn is incomplete — an unanswered user turn, or a partial
+// assistant turn with a `tool_use` missing its `tool_result` (the state a quota pause + interrupt
+// leaves on disk) — can leave the `claude` child alive but silent: no message, no result, no error, no
+// exit. The SDK streaming path has no initialize timeout, so `for await (const msg of q)` parks forever
+// and the UI sticks on "Working…". We make that state unreachable by bounding ONLY the first frame of a
+// RESUME attempt; a fresh start's first-frame latency is legitimate and left unbounded.
 //
-// We make that alive-but-silent-forever state UNREACHABLE by bounding the FIRST frame of a RESUME
-// attempt only (a fresh, non-resume start is never wrapped — its first-frame latency is legitimate
-// and must not be clipped). The bound is measured FROM THE FIRST USER MESSAGE delivered to the query,
-// not from query start: an empirically-verified CLI property is that a resumed child emits ZERO
-// stdout frames until the first user message reaches its stdin, so a resume parked at a gate
-// re-presentation (prototype/approval/acceptance, which deliberately queue NO message and wait for the
-// user's approve/refine) is silent-but-healthy and must idle indefinitely, never trip the watchdog.
-// See `firstUserInputDelivered`. Real ceiling ~30s: once a message is delivered a healthy resume emits
-// `system_init` within a second or two, so 30s is generous headroom before we declare it wedged.
-// Overridable via AGENT_RESUME_TIMEOUT_MS for operational tuning; clamped to EMU_RESUME_TIMEOUT_MS
-// under the emulator so the scripted silent-resume scenes trip it fast yet genuinely.
+// The bound is measured from the first user message reaching the query, not from query start: a resumed
+// child emits ZERO stdout until a user message hits its stdin, so a resume parked at a gate
+// re-presentation (which queues no message) is silent-but-healthy and must idle forever. See
+// `firstUserInputDelivered`.
 const RESUME_FIRST_FRAME_TIMEOUT_DEFAULT_MS = 30_000;
 
 function resolveResumeTimeoutMs(
@@ -356,23 +349,16 @@ function resolveResumeTimeoutMs(
 
 const RESUME_FIRST_FRAME_TIMEOUT_MS = resolveResumeTimeoutMs(process.env, emulatorScenario != null);
 
-// FIRST-USER-INPUT LATCH. Resolved ONCE, when the first `user` message of the session is enqueued
-// (handleCommand `case "user"`). The resume first-frame watchdog arms its timeout only AFTER this
-// resolves — an input-less resume idles indefinitely (see the watchdog block above). `pendingTurn` is
-// pushed at the SAME site, so pendingTurn-non-empty ⇒ the latch is resolved (the converse does NOT
-// hold — a completed turn's `result` clears `pendingTurn` while the latch stays resolved). That one
-// direction is all the fallback relies on: a fresh retry re-seeds from a NON-empty `pendingTurn`, so it
-// always finds the latch already resolved and arms immediately, byte-identical to any message-carrying
-// resume. One session per process ⇒ one latch, created once at module load. Resolving is idempotent
-// (later user messages are no-ops).
+// Resolved once, when the first `user` message is enqueued (handleCommand `case "user"`). The resume
+// watchdog arms only after this resolves, so an input-less resume idles indefinitely. Resolving is
+// idempotent; later user messages are no-ops.
 let signalFirstUserInput!: () => void;
 const firstUserInputDelivered: Promise<void> = new Promise<void>((resolve) => {
   signalFirstUserInput = resolve;
 });
 
-/** Thrown by `firstFrameWatchdog` when a bounded resume query produces no first frame within the
- *  timeout. A distinct type so runSession's catch can branch to resume recovery WITHOUT
- *  misclassifying it as an auth/quota/sdk error. */
+/** A distinct error type so runSession's catch can branch to resume recovery without misclassifying
+ *  the silent-resume timeout as an auth/quota/sdk error. */
 class FirstFrameTimeout extends Error {
   constructor() {
     super("resume first-frame watchdog: no frame within the bound");
@@ -380,12 +366,9 @@ class FirstFrameTimeout extends Error {
   }
 }
 
-/** ONLY the FIRST `.next()` is bounded; on timeout the iteration throws `FirstFrameTimeout` (the
- *  wedged-resume signal). The timer arms only AFTER `armed` resolves (the first user message was
- *  delivered) — before that the first `.next()` races against nothing, so an input-less resume parks
- *  silently forever without ever tripping. Once the first frame arrives the timer is cleared and the
- *  remaining frames are delegated 1:1 (no further bound — a live turn may legitimately take minutes
- *  between frames). Shares the query's single underlying async iterator, a drop-in for `for await`. */
+/** Bounds ONLY the first `.next()`; once the first frame arrives the remaining frames are delegated
+ *  1:1 with no further bound. Shares the query's single underlying async iterator, a drop-in for
+ *  `for await`. */
 // INVARIANT[resume-watchdog-arms-on-first-input] (runtime-guard): the resume first-frame timeout arms only after `armed` (the first user message delivered) resolves, so a resume that has received no user input idles indefinitely rather than timing out.
 //   prevents: a gate-re-presentation resume (prototype/approval/acceptance — no message queued) tripping the watchdog and driving a spurious fresh-retry double-fatal on every such Resume.
 //   test: sidecar/emulator-e2e.test.ts resume-idle-until-input (quiet period several timeouts long, then a late message completes to a clean result).
@@ -394,13 +377,13 @@ function firstFrameWatchdog(q: Query, ms: number, armed: Promise<void>): AsyncIt
     async *[Symbol.asyncIterator](): AsyncIterator<SDKMessage> {
       const it = (q as AsyncIterable<SDKMessage>)[Symbol.asyncIterator]();
       let timer: ReturnType<typeof setTimeout> | undefined;
-      let settled = false; // set once the first-frame race resolves; suppresses a stale timer arm.
+      let settled = false;
       let first: IteratorResult<SDKMessage>;
       try {
         first = await Promise.race([
           it.next(),
-          // Arm the timeout only once `armed` resolves. If the first frame already won the race by
-          // then, `settled` blocks the (now-stale) timer so it can never fire under a live iterator.
+          // Arm the timeout only after `armed` resolves; `settled` blocks a timer that would arm after
+          // the first frame already won the race, so it can never fire under a live iterator.
           armed.then(
             () =>
               new Promise<never>((_, reject) => {
@@ -494,11 +477,9 @@ function buildOptions(start: StartCmd) {
 // a throw OR an undefined return means "transcript missing/expired" → fall back.
 // Returns true iff the transcript exists and resume should proceed. Never throws.
 async function resumeTranscriptExists(sessionId: string): Promise<boolean> {
-  // Emulator seam: a scenario declaring `resumeTranscriptExists` short-circuits the real
-  // getSessionInfo (which cannot be driven token-free for a scripted session id), so the live-resume
-  // path — and its first-frame watchdog — is reachable deterministically. Gated on the active
-  // emulator scenario; the real getSessionInfo below is byte-identical for production and for any
-  // scenario that leaves the flag unset (e.g. resume-fallback's genuine bogus-id lookup).
+  // Emulator seam: a scenario setting `resumeTranscriptExists` short-circuits the real getSessionInfo
+  // (which can't be driven token-free for a scripted id), making the live-resume path reachable
+  // deterministically. Unset ⇒ the real lookup runs (production, and resume-fallback's bogus-id probe).
   if (emulatorScenario && emulatorScenario.resumeTranscriptExists !== undefined) {
     return emulatorScenario.resumeTranscriptExists;
   }
@@ -564,11 +545,9 @@ async function runSession(start: StartCmd): Promise<void> {
   let retry = 0; // 0 → 6; PRE-incremented per backoff decision (decideBackoff is 1-based).
   let attempt = 0; // 0-based attempt index; attempt 0 is the original, >0 are 529 retries.
 
-  // RESUME FIRST-FRAME BOUNDING. Bound the first frame of THIS attempt iff a resume is in effect —
-  // initially when `effectiveStart.resume` survived the pre-flight, and kept bounded through the ONE
-  // fresh no-resume retry the recovery drives (so a still-silent fresh retry also terminates rather
-  // than re-wedging). A plain non-resume start is never bounded. `resumeFellBack` latches after the
-  // first recovery so the SECOND silent first frame drives a loud fatal instead of looping forever.
+  // Bound the first frame while a resume is in effect — and keep it bounded through the one fresh
+  // no-resume retry the recovery drives, so a still-silent retry also terminates. `resumeFellBack`
+  // latches after that first recovery so a second silent first frame is fatal, not another loop.
   let boundFirstFrame = effectiveStart.resume != null;
   let resumeFellBack = false;
 
@@ -604,9 +583,8 @@ async function runSession(start: StartCmd): Promise<void> {
     let overloadPreOutput = false; // retryable: overloaded with nothing emitted this attempt.
 
     try {
-      // A RESUME attempt's first frame is bounded (firstFrameWatchdog); every other attempt iterates
-      // the query raw (byte-identical to before). The watchdog shares q's single underlying iterator,
-      // so drain/interrupt on `q` still target the same session.
+      // A resume attempt's first frame is bounded; every other attempt iterates raw. The watchdog
+      // shares q's single underlying iterator, so drain/interrupt on `q` still target the same session.
       const source = boundFirstFrame
         ? firstFrameWatchdog(q, RESUME_FIRST_FRAME_TIMEOUT_MS, firstUserInputDelivered)
         : q;
@@ -676,11 +654,9 @@ async function runSession(start: StartCmd): Promise<void> {
         }
       }
     } catch (e) {
-      // RESUME FIRST-FRAME TIMEOUT — the wedged-resume recovery. Handled BEFORE the auth/quota/sdk
-      // classification below: a silent resume is not an error to surface, it is a state to recover
-      // from. Drain the silent query first (reap its CLI child), then either fall back to a fresh
-      // no-resume retry (delivering the user's turn on a clean session) or, if that fresh retry ALSO
-      // stalled, drive a loud fatal so the sidecar ALWAYS terminates and the UI can never hang.
+      // Silent-resume recovery, handled BEFORE the auth/quota/sdk classification below: a wedged resume
+      // is a state to recover from, not an error to surface. Drain the silent query, then fall back to
+      // a fresh no-resume retry — or, if that retry also stalled, fatal so the sidecar always terminates.
       if (e instanceof FirstFrameTimeout) {
         if (q) await drainQuery({ q, userQueue, logErr });
         q = null;
@@ -699,10 +675,8 @@ async function runSession(start: StartCmd): Promise<void> {
           await gracefulExit("resume produced no output after fallback", 1);
           return;
         }
-        // First stall: drop `resume`, emit a non-fatal resume_fallback, and loop to a FRESH attempt.
-        // The loop head allocates a new queue (attempt > 0) and re-seeds it from `pendingTurn`, so the
-        // user's turn rides the fresh, non-resume session. Keep `boundFirstFrame` true so the fresh
-        // retry's first frame is ALSO bounded (→ the resumeFellBack branch above if it too goes silent).
+        // First stall: drop `resume` and loop to a fresh attempt (the loop head re-seeds the queue from
+        // `pendingTurn`). Keep `boundFirstFrame` true so the fresh retry's first frame is bounded too.
         logErr("[sidecar] resume first-frame timeout — dropping resume and retrying fresh.");
         const { resume: _dropped, ...withoutResume } = effectiveStart;
         effectiveStart = withoutResume;
@@ -920,8 +894,7 @@ async function handleCommand(line: string): Promise<void> {
       // this only ever accumulates the CURRENT turn's message(s).
       pendingTurn.push(lifted);
       userQueue.push(lifted);
-      // Arm the resume first-frame watchdog: the first user message has now been delivered. Idempotent
-      // — later messages re-resolve the already-settled latch (a no-op). See firstUserInputDelivered.
+      // First user message delivered — arm the resume watchdog (idempotent). See firstUserInputDelivered.
       signalFirstUserInput();
       return;
     }

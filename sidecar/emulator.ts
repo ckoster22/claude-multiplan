@@ -68,11 +68,10 @@ export function makeEmulatorQuery(
       // never-settling promise registers no timer/handle, so it does not pin the event loop once
       // index.ts abandons this iterator on its first-frame timeout.
       if (hang) await new Promise<never>(() => {});
-      // An "await-input" attempt models the real CLI: emit ZERO frames until the FIRST user message
-      // reaches the streaming-input prompt. Consume one item from the prompt queue (the emulator is the
-      // ONLY consumer in emulator mode — the real query() is swapped out), then proceed. A queue `end`
-      // during teardown wakes this too (done); the generator then suspends at its first `yield` with no
-      // consumer, so no frame leaks after index.ts has abandoned the iterator.
+      // "await-input" models the real CLI: emit ZERO frames until the first user message reaches the
+      // streaming-input prompt. Consume one item from the prompt queue (the emulator is the only
+      // consumer in emulator mode). A queue `end` during teardown also wakes this; the generator then
+      // suspends at its first `yield` with no consumer, so no frame leaks after the iterator is abandoned.
       if (awaitInput && typeof args.prompt !== "string") {
         await args.prompt[Symbol.asyncIterator]().next();
       }

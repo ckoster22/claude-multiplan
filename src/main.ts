@@ -176,12 +176,10 @@ let REVIEW_SUBMIT_EXTERNAL_LABEL = "Submit feedback";
 let prototypeFeedbackEl: HTMLTextAreaElement | null = null;
 let prototypeOpenEl: HTMLButtonElement | null = null;
 let prototypePreviewEl: HTMLButtonElement | null = null;
-// The removable thumbnail strip for captures staged on the held prototype gate (see stagedGateCaptures).
 let prototypeAttachmentsEl: HTMLElement | null = null;
-// Captures flushed when the prototype-preview modal closes are staged HERE — on the held prototype
-// gate, NOT the composer tray — so they ride the NEXT gate send ("Request changes" / "Approve visual").
-// Gate feedback is otherwise text-only, which would strand these. Cleared ONLY on a successful gate
-// send (a failed send preserves them for retry) or when the run ends.
+// Captures flushed when the prototype-preview modal closes are staged on the held prototype gate (not
+// the composer tray) so they ride the next gate send; gate feedback is otherwise text-only. Cleared on
+// a successful send (a failed send keeps them for retry) or when the run ends.
 let stagedGateCaptures: AttachedImage[] = [];
 // At most one preview modal may be open at a time. `previewModal` holds it while open;
 // `previewOpening` guards the async window before the first read_prototype_file resolves so two
@@ -363,9 +361,9 @@ function activePrototypeGate(): PrototypeGate | null {
   return prototypeGateActive(orchSnapshot, isOrchestrationActive());
 }
 
-// Route captures flushed on prototype-preview modal close. A held prototype gate is the normal case —
-// stage them so they ride the gate send. With NO gate active (defensive: captures only exist during a
-// gate) fall back to the composer tray so a stray flush is never silently dropped.
+// Route captures flushed on modal close: stage them on the held prototype gate (the normal case) so
+// they ride the gate send. With no gate active they only exist defensively, so fall back to the
+// composer tray rather than dropping them.
 function stageOrAttachCaptures(imgs: AttachedImage[]): void {
   if (activePrototypeGate() !== null) {
     stagedGateCaptures.push(...imgs);
@@ -375,9 +373,8 @@ function stageOrAttachCaptures(imgs: AttachedImage[]): void {
   }
 }
 
-// Render the staged captures as removable chips in the review bar (PROTOTYPE mode only). Reuses the
-// composer tray's chip markup/CSS (renderAttachmentChips) so the two strips read identically. The
-// container hides when not in PROTOTYPE mode or when nothing is staged.
+// Render the staged captures as removable chips (PROTOTYPE mode only), reusing the composer tray's
+// chip markup (renderAttachmentChips) so the two strips read identically.
 function renderStagedGateChips(): void {
   const el = prototypeAttachmentsEl;
   if (!el) return;
@@ -393,10 +390,9 @@ function renderStagedGateChips(): void {
   });
 }
 
-// Remove exactly the captures that were SENT (identity match on the snapshot the handler passed to
-// the gate send), leaving any capture staged mid-flight untouched. Called only after a successful
-// send. Splicing the sent slice (rather than clearing wholesale) means a capture staged between the
-// send's snapshot and its resolution is not silently dropped unsent.
+// Remove exactly the captures that were SENT (identity match on the handler's snapshot), leaving any
+// capture staged mid-flight untouched. Splicing the sent slice rather than clearing wholesale keeps a
+// capture staged between the snapshot and its resolution from being dropped unsent.
 function removeStagedGateCaptures(sent: readonly AttachedImage[]): void {
   if (sent.length === 0) return;
   const sentRefs = new Set(sent);
@@ -622,8 +618,8 @@ function refreshReviewBar(countOverride?: number): void {
   prototypeOpenEl?.classList.add("hidden");
   prototypePreviewEl?.classList.add("hidden");
   prototypeWorkingRefLabelEl?.classList.add("hidden");
-  // The staged-capture strip belongs to PROTOTYPE mode only. Hide it WITHOUT clearing the stage —
-  // the array's lifecycle is send-success / run-end, mirroring the feedback textarea's preservation.
+  // Staged-capture strip is PROTOTYPE-mode only. Hide WITHOUT clearing the stage — its lifecycle is
+  // send-success / run-end, mirroring the feedback textarea's preservation.
   prototypeAttachmentsEl?.classList.add("hidden");
   // The REFINE button + its picker are ACCEPTANCE-mode-only; hide on every other mode.
   reviewRefineEl?.classList.add("hidden");
@@ -731,7 +727,6 @@ function applyPrototypeBar(gate: PrototypeGate): void {
   // any prototype, not just HTML). Its checked state is read at approve time (applyPrototypeBar
   // never forces it — the user's choice persists across live re-derivations while the gate is held).
   prototypeWorkingRefLabelEl?.classList.remove("hidden");
-  // Staged-capture chips: show the strip (renderStagedGateChips hides it when the stage is empty).
   renderStagedGateChips();
 }
 
@@ -868,9 +863,8 @@ let notifyPermissionResolved: ((toolUseId: string) => void) | null = null;
 // until the handle exists.
 let echoUserMessage: ((text: string) => void) | null = null;
 
-// Surface a NON-FATAL notice into the conversation stream (a `.conv-notice` row). Used by the
-// out-of-band gate handlers below to report a failed dispatch (e.g. "Request changes"/approve against a
-// dead session) instead of swallowing it silently. Null until the handle exists.
+// Surface a NON-FATAL notice into the conversation stream (a `.conv-notice` row) — used by the gate
+// handlers to report a failed dispatch instead of swallowing it. Null until the handle exists.
 let surfaceMessage: ((text: string) => void) | null = null;
 
 // Set once initConversation returns: reconstruct + replay a plan's PAST conversation into the
@@ -2948,11 +2942,9 @@ async function openPrototypePreview(gate: PrototypeGate): Promise<void> {
     content: iframe,
     className: "proto-preview",
     onClose: () => {
-      // Persist + attach any still-pending captures BEFORE teardown so closing the modal never
-      // silently drops a captured screenshot. onClose is synchronous; flushPending snapshots its
-      // pending set in its own synchronous prefix (before its first await), so firing it
-      // fire-and-forget here — then destroying, which clears `captures` synchronously — cannot race:
-      // the snapshot is already taken and each persist/attach runs against that local snapshot.
+      // Persist + attach any still-pending captures BEFORE teardown so closing never drops a capture.
+      // flushPending snapshots its pending set synchronously (before its first await), so firing it
+      // fire-and-forget here and then destroying (which clears `captures` synchronously) cannot race.
       const handle = annotate;
       void handle?.flushPending();
       handle?.destroy();
@@ -2970,8 +2962,6 @@ async function openPrototypePreview(gate: PrototypeGate): Promise<void> {
       setTimeout(() => setHookStatus(hookStatusEl, ""), HOOK_STATUS_MS);
     },
     cwd: gate.cwd,
-    // Route captures to the held prototype gate's staging strip (not the composer tray) so they ride
-    // the gate send. Falls back to the composer only when no gate is active (defensive).
     attachImages: (imgs) => stageOrAttachCaptures(imgs),
   });
   previewOpening = false;
@@ -3203,10 +3193,9 @@ window.addEventListener("DOMContentLoaded", () => {
         !snap.done &&
         runPlaceholder?.treeId !== snap.treeId
       ) {
-        // A NEW run is beginning (fresh treeId). Discard any captures a PRIOR run left staged — a bare
-        // cancel() ends a run without firing onDone/onFatal, so without this a cancelled run's captures
-        // would surface on the next run's prototype gate. Fires once per run (subsequent same-treeId
-        // snapshots do not re-enter this block).
+        // A NEW run is beginning (fresh treeId). Discard any captures a prior run left staged: a bare
+        // cancel() ends a run without firing onDone/onFatal, so otherwise they'd surface on the next
+        // run's prototype gate. Fires once per run (later same-treeId snapshots skip this block).
         clearStagedGateCaptures();
         runPlaceholder = { treeId: snap.treeId, label: "New plan — drafting…" };
         // Make the placeholder the ACTIVE selection ONLY when nothing real is open. It must NOT clobber
@@ -3272,9 +3261,8 @@ window.addEventListener("DOMContentLoaded", () => {
       switchToPlanTab();
       void renderPrototypePreview(gate);
       refreshReviewBar();
-      // An HTML gate is directly viewable in-app, so auto-open the preview modal (self-guarding: a
-      // second call while it is already open no-ops). The #prototype-preview button remains as a
-      // manual re-open affordance. Do NOT auto-enter annotate mode.
+      // An HTML gate is viewable in-app, so auto-open the preview modal (self-guarding: a second call
+      // while open no-ops). The #prototype-preview button stays as a manual re-open. Don't auto-annotate.
       if (gate.kind === "html") void openPrototypePreview(gate);
     },
     onAcceptanceReview: (gate) => {
@@ -3418,8 +3406,8 @@ window.addEventListener("DOMContentLoaded", () => {
               // The held ExitPlanMode was resolved (deny + feedback) — drop the waiting label NOW.
               notifyPermissionResolved?.(gate.toolUseId);
             } catch (e) {
-              // Surface the failure rather than silently no-op — the session may have ended. The return
-              // skips clearAllComments below, so the submitted comments are preserved for a retry.
+              // Surface the failure — the session may have ended. The return skips clearAllComments
+              // below, so the submitted comments are preserved for a retry.
               console.error("orchestrator gate: requestChanges failed", e);
               surfaceMessage?.("Couldn't send your changes — the session may have ended. Try again.");
               return;
@@ -3446,11 +3434,10 @@ window.addEventListener("DOMContentLoaded", () => {
       if (protoGate) {
         const feedback = prototypeFeedbackEl?.value.trim() ?? "";
         if (reviewSubmitEl?.disabled || feedback === "") return;
-        // Snapshot the staged captures NOW (before the async gap) so a mid-flight stage edit cannot
-        // change what rides this send. On success exactly this slice is spliced out (below); on failure
-        // it is left in place (refinePrototype dispatches PROTOTYPE_REFINED — consuming the gate — BEFORE
-        // the send, so a rejected send leaves the gate already gone and the snapshot lingers hidden until
-        // the run ends (onDone/onFatal) or the next run begins).
+        // Snapshot the staged captures NOW (before the async gap) so a mid-flight edit can't change
+        // what rides this send. On success exactly this slice is spliced out (below); on failure it's
+        // left in place — refinePrototype consumes the gate before the send, so a rejected send leaves
+        // the snapshot lingering hidden until the run ends or the next begins.
         const images = stagedGateCaptures.slice();
         actionInFlight = "submit"; // lock BEFORE the first await; reset in finally on EVERY exit.
         refreshReviewBar();
@@ -3460,18 +3447,15 @@ window.addEventListener("DOMContentLoaded", () => {
               if (images.length) await getOrchestrator().refinePrototype(feedback, { images });
               else await getOrchestrator().refinePrototype(feedback);
             } catch (e) {
-              // Surface the failure — the session may have ended, so a silent no-op would leave the
-              // user with no signal. The textarea is deliberately NOT cleared (the return skips the clear
-              // below) so the typed feedback survives; the staged snapshot is not spliced here — the gate
-              // was already consumed by the dispatch, so it lingers hidden until the run ends or the next
-              // run begins (see clearStagedGateCaptures call sites).
+              // Surface the failure — the session may have ended. The textarea is NOT cleared (the
+              // return skips the clear below) so the typed feedback survives; the snapshot is not
+              // spliced here — the gate was already consumed, so it lingers hidden until run-end.
               console.error("prototype gate: refinePrototype failed", e);
               surfaceMessage?.("Couldn't send your changes — the session may have ended. Try again.");
               return;
             }
-            // Dispatch succeeded — echo the user's verbatim feedback as a bubble, clear the textarea,
-            // and splice out exactly the captures that rode this send. (On the failure path above we
-            // returned without clearing.)
+            // Success path only (the catch above returned): echo the feedback, clear the textarea, and
+            // splice out exactly the captures that rode this send.
             echoUserMessage?.(feedback);
             if (prototypeFeedbackEl) prototypeFeedbackEl.value = "";
             removeStagedGateCaptures(images);
@@ -3497,8 +3481,8 @@ window.addEventListener("DOMContentLoaded", () => {
             try {
               await getOrchestrator().divergeAcceptance(reason);
             } catch (e) {
-              // Surface the failure rather than silently no-op — the session may have ended. The return
-              // skips clearing the textarea below, so the typed reason is preserved for a retry.
+              // Surface the failure — the session may have ended. The return skips clearing the
+              // textarea below, so the typed reason is preserved for a retry.
               console.error("acceptance gate: divergeAcceptance failed", e);
               surfaceMessage?.("Couldn't send your acceptance — the session may have ended. Try again.");
               return;
@@ -3573,7 +3557,7 @@ window.addEventListener("DOMContentLoaded", () => {
             notifyPermissionResolved?.(gate.toolUseId);
             switchToConversationTab();
           } catch (e) {
-            // Surface the failure rather than silently no-op — the session may have ended.
+            // Surface the failure — the session may have ended.
             console.error("orchestrator gate: approve failed", e);
             surfaceMessage?.("Couldn't send your approval — the session may have ended. Try again.");
           } finally {
@@ -3600,18 +3584,17 @@ window.addEventListener("DOMContentLoaded", () => {
         // there; the user re-checks it on the round they actually approve as-is.
         const asWorkingReference = prototypeWorkingRefEl?.checked === true;
         // Snapshot the staged captures NOW (before the async gap). Annotations are feedback even on
-        // approval, so they ride BOTH the combined apply-and-approve refine send and the plain approve's
-        // recon send. On success exactly this slice is spliced out (below); on failure it is left in
-        // place (the dispatch consumes the gate before the send, so run-end clears it).
+        // approval, so they ride both the combined apply-and-approve refine send and the plain approve's
+        // recon send. On success this slice is spliced out (below); on failure it's left in place (the
+        // dispatch consumes the gate before the send, so run-end clears it).
         const images = stagedGateCaptures.slice();
         actionInFlight = "approve"; // lock BEFORE the first await; reset in finally on EVERY exit.
         void (async () => {
           try {
             if (feedback !== "") {
               await getOrchestrator().refinePrototype(feedback, images.length ? { autoApprove: true, images } : { autoApprove: true });
-              // Dispatch succeeded — echo the verbatim feedback as a bubble, clear the textarea, and
-              // splice out exactly the captures that rode this send (mirrors the Request-changes
-              // success-only ordering; on the failure path below we returned without clearing).
+              // Success path only: echo the feedback, clear the textarea, and splice out exactly the
+              // captures that rode this send.
               echoUserMessage?.(feedback);
               if (prototypeFeedbackEl) prototypeFeedbackEl.value = "";
               removeStagedGateCaptures(images);
@@ -3624,10 +3607,9 @@ window.addEventListener("DOMContentLoaded", () => {
             }
             switchToConversationTab();
           } catch (e) {
-            // Consistent with the "Request changes" path: surface a dead-session failure rather than
-            // swallowing it. On the combined apply-and-approve branch the textarea was NOT yet cleared
-            // (echo/clear run only after the await resolves), so the typed feedback survives; the staged
-            // snapshot is left in place (the gate is already consumed, so run-end clears it).
+            // Surface the failure — the session may have ended. On the combined apply-and-approve branch
+            // the textarea was NOT yet cleared (echo/clear run only after the await resolves), so the
+            // typed feedback survives; the snapshot is left in place (the gate is already consumed).
             console.error("prototype gate: apply-and-approve failed", e);
             surfaceMessage?.("Couldn't send your approval — the session may have ended. Try again.");
           } finally {
@@ -3648,7 +3630,7 @@ window.addEventListener("DOMContentLoaded", () => {
             await getOrchestrator().approveAcceptance();
             switchToConversationTab();
           } catch (e) {
-            // Surface the failure rather than silently no-op — the session may have ended.
+            // Surface the failure — the session may have ended.
             console.error("acceptance gate: approve failed", e);
             surfaceMessage?.("Couldn't send your acceptance — the session may have ended. Try again.");
           } finally {

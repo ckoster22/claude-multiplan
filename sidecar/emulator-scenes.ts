@@ -198,15 +198,13 @@ export function resultUsageLimit(text: string = SESSION_LIMIT_TEXT): SDKMessage 
   } as unknown as SDKMessage;
 }
 
-// `attempts[i]` is the message stream the i-th query() call replays; index >= 1 only occurs on a
-// backoff retry (the overloaded scenarios) or a resume-timeout recovery (the silent-resume
-// scenarios). Each attempt kind: "frames" ends normally; "throw" yields `messages` then THROWS
-// `thenThrow()` (driving index.ts's catch-block classification, which a message fixture cannot
-// reach); "hang" never yields its first frame (the silent, wedged resume — exercises index.ts's
-// first-frame watchdog; a `[]` "frames" attempt would end immediately instead); "await-input" emits
-// ZERO frames until the FIRST user message reaches the streaming-input prompt, then yields `messages`
-// — the faithful model of the real CLI (which stays silent on stdin until the first user turn), used
-// to prove the watchdog arms on first input, not at query start.
+// `attempts[i]` is the message stream the i-th query() call replays; index >= 1 occurs only on a
+// backoff retry (overloaded scenarios) or a resume-timeout recovery (silent-resume scenarios). Each
+// attempt kind: "frames" ends normally; "throw" yields `messages` then throws `thenThrow()` (driving
+// index.ts's catch classification); "hang" never yields its first frame — the wedged resume, distinct
+// from a `[]` "frames" attempt that would end immediately; "await-input" stays silent until the first
+// user message reaches the streaming-input prompt, then yields `messages`, modelling the real CLI
+// (silent on stdin until the first user turn).
 //
 // INVARIANT[emulator-attempt-tagged-union] (type-level): every emulator attempt carries a "kind" discriminant (frames|throw|hang|await-input); attemptMessages switches on it exhaustively with an assertNever default, so a new variant it fails to handle is a compile error rather than a runtime shape-sniff (Array.isArray / "in") that could misclassify an attempt.
 //   prevents: a bare-array-vs-object mis-probe silently dropping a hang/throw/await-input tail or misreading frames.
@@ -217,7 +215,6 @@ export type EmulatorAttempt =
   | { kind: "hang" }
   | { kind: "await-input"; messages: SDKMessage[] };
 
-/** Ergonomic constructor for the common "frames" attempt, keeping the scene registry terse. */
 export const frames = (...messages: SDKMessage[]): EmulatorAttempt => ({ kind: "frames", messages });
 
 function assertNever(x: never): never {
@@ -242,11 +239,9 @@ export function attemptMessages(attempt: EmulatorAttempt): SDKMessage[] {
 export interface EmulatorScenario {
   name: string;
   attempts: EmulatorAttempt[];
-  // Emulator seam for the resume pre-flight (index.ts `resumeTranscriptExists`, normally the real
-  // `getSessionInfo`). Set to true so a scenario's `start.resume` PASSES the pre-flight and `resume`
-  // reaches the SDK options — the only way to drive index.ts's live-resume path (and its first-frame
-  // watchdog) token-free. Absent ⇒ the real getSessionInfo runs (so `resume-fallback` still exercises
-  // the genuine transcript-missing lookup for a bogus id).
+  // Emulator seam for the resume pre-flight (index.ts `resumeTranscriptExists`). Set true so a
+  // scenario's `start.resume` passes the pre-flight and reaches the SDK — the only way to drive the
+  // live-resume path token-free. Absent ⇒ the real getSessionInfo runs (resume-fallback's bogus-id probe).
   resumeTranscriptExists?: boolean;
 }
 
@@ -495,11 +490,10 @@ const SCENARIOS: EmulatorScenario[] = [
     attempts: [{ kind: "hang" }, { kind: "hang" }],
   },
   {
-    // resume-idle-until-input: a resume parked at a gate re-presentation receives NO user message for a
-    // while — the first-frame watchdog must NOT arm (an input-less resume idles indefinitely) — then a
-    // late user message drives a normal turn to a clean `result`. The `await-input` attempt emits zero
-    // frames until that message arrives, so with an arm-at-query-start watchdog the quiet window would
-    // double-fatal; with arm-on-first-input it completes cleanly. See index.ts firstFrameWatchdog.
+    // resume-idle-until-input: a resume parked at a gate re-presentation gets NO user message for a
+    // while — the watchdog must NOT arm — then a late message completes to a clean `result`. The
+    // `await-input` attempt is silent until that message, so an arm-at-query-start watchdog would
+    // double-fatal in the quiet window; arm-on-first-input completes cleanly. See index.ts firstFrameWatchdog.
     name: "resume-idle-until-input",
     resumeTranscriptExists: true,
     attempts: [

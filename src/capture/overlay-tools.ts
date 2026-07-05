@@ -43,7 +43,7 @@ export interface OverlayHandle {
   reproject(): void;
   // Synchronously commit any open text editor so a live <textarea> can't be rasterized by Capture.
   finalizePendingText(): void;
-  // Live shape count for wiring/teardown decisions — not a hook for tests to read internals.
+  // Live shape count for wiring/teardown decisions.
   shapeCount(): number;
   destroy(): void;
 }

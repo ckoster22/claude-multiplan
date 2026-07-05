@@ -32,7 +32,6 @@ describe("addCapture", () => {
     state = addCapture(state, cap());
     state = addCapture(state, cap());
     expect(state.map((c) => c.id)).toEqual(["cap1", "cap2", "cap3"]);
-    // Ids are unique.
     expect(new Set(state.map((c) => c.id)).size).toBe(3);
   });
 
