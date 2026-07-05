@@ -121,6 +121,29 @@ describe("overlay tools", () => {
     expect(overlay.shapeCount()).toBe(1);
   });
 
+  it("real click (pointerdown + trailing mousedown) keeps the text editor placed and focusable", () => {
+    overlay.setTool("text");
+    const down = new Event("pointerdown") as PointerEvent;
+    Object.assign(down, { clientX: 40, clientY: 30, pointerId: 1 });
+    overlay.svg.dispatchEvent(down);
+    expect(stage.querySelector("textarea.proto-annotate-textinput")).not.toBeNull();
+
+    // The trailing compatibility mousedown of the SAME physical click. On a real browser this lands on
+    // the non-focusable SVG and steals focus off the just-created textarea (blur -> finish removes it)
+    // within one click. jsdom does not fire that focus shift, so the deterministic, load-bearing signal
+    // is that the guard preventDefault'd this mousedown.
+    const trailing = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    overlay.svg.dispatchEvent(trailing);
+    expect(trailing.defaultPrevented).toBe(true); // primary: guard neutralized the focus theft
+    expect(stage.querySelector("textarea.proto-annotate-textinput")).not.toBeNull(); // secondary: editor survived
+
+    // The guard is one-shot: a genuine LATER mousedown is NOT swallowed, so drawing / commit-on-blur
+    // are never regressed.
+    const later = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    overlay.svg.dispatchEvent(later);
+    expect(later.defaultPrevented).toBe(false);
+  });
+
   it("empty text commit adds no shape", () => {
     overlay.setTool("text");
     const down = new Event("pointerdown") as PointerEvent;

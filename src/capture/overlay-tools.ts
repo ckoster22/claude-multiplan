@@ -189,10 +189,25 @@ export function createOverlay(
     stage.appendChild(input);
     pendingText = input;
     onTextEditor?.(true);
+
+    // A real click fires `pointerdown` THEN a trailing compatibility `mousedown`. That mousedown lands
+    // on the non-focusable SVG stage and, by default browser behavior, pulls focus off the textarea we
+    // just created + focused — firing its `blur` handler, which tears the editor down within the same
+    // click (so no comment box ever stays). preventDefault() on that one trailing mousedown is the
+    // canonical way to stop a non-focusable element from stealing focus, so the textarea survives. The
+    // guard is one-shot (the trailing mousedown consumes it) and also removed in finish(), so it can
+    // never swallow an unrelated LATER mousedown — a genuine later click outside the box must still
+    // blur→commit, and the drawing tools must still start on mousedown.
+    const swallowTrailingMousedown = (ev: MouseEvent): void => {
+      ev.preventDefault();
+    };
+    root.addEventListener("mousedown", swallowTrailingMousedown, { capture: true, once: true });
+
     let done = false;
     const finish = (commit: boolean): void => {
       if (done) return;
       done = true;
+      root.removeEventListener("mousedown", swallowTrailingMousedown, { capture: true });
       const value = input.value;
       input.remove();
       pendingText = null;
