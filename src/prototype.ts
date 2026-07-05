@@ -50,7 +50,7 @@ export function composePreviewMarkdown(gate: PrototypeGate): string {
   if (gate.kind === "html") {
     const list = gate.paths.map((p) => `- \`${p}\``).join("\n");
     sections.push(
-      "HTML prototype written to `.plan-tree/prototype/` — use **Open in browser** below." +
+      "HTML prototype ready — use **Preview in app** (or **Open in browser**) below." +
         (gate.paths.length > 0 ? `\n\n${list}` : ""),
     );
   } else if (gate.inlinePreview !== null && gate.inlinePreview !== "") {
@@ -124,6 +124,73 @@ export function prototypeGateActive(
 export function prototypeOpenTarget(gate: Pick<PrototypeGate, "paths">): string | null {
   const index = gate.paths.find((p) => p === "index.html" || p.endsWith("/index.html"));
   return index ?? gate.paths[0] ?? null;
+}
+
+// A reference is "external" (breaks under srcdoc) unless it is one of these self-resolving schemes.
+// A leading `/` (root-relative) and a protocol-relative `//host/...` both break under srcdoc — the
+// former has no document base URL, the latter resolves against the app scheme (tauri://) and fails
+// to load — so neither is listed here; both are treated as external → flagged.
+const SELF_RESOLVING = /^(?:https?:|data:|blob:|#|mailto:|tel:|javascript:|about:)/i;
+
+function isRelativeRef(raw: string | null | undefined): boolean {
+  const ref = (raw ?? "").trim();
+  if (ref === "") return false;
+  return !SELF_RESOLVING.test(ref);
+}
+
+// Split a `srcset` value ("a.png 1x, b.png 2x") into its candidate URLs (first token of each entry).
+function srcsetUrls(value: string): string[] {
+  return value
+    .split(",")
+    .map((part) => part.trim().split(/\s+/)[0] ?? "")
+    .filter((u) => u !== "");
+}
+
+// Extract the URLs referenced by CSS text: `@import "..."`/`@import url(...)` and every `url(...)`.
+function cssUrls(css: string): string[] {
+  const urls: string[] = [];
+  const urlFn = /url\(\s*(['"]?)([^'")]+)\1\s*\)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = urlFn.exec(css)) !== null) urls.push(m[2]);
+  const importBare = /@import\s+(['"])([^'"]+)\1/gi;
+  while ((m = importBare.exec(css)) !== null) urls.push(m[2]);
+  return urls;
+}
+
+/**
+ * PURE: does this HTML reference any RELATIVE subresource that would 404 under a `srcdoc` iframe
+ * (which has no base URL)? Parses with `DOMParser` (never a regex over unparsed HTML) and inspects
+ * every subresource vector — `src`, `<link href>`, `srcset`, SVG `<use href>`/`xlink:href`,
+ * `<object data>`/`<embed src>`, and `url(...)`/`@import` inside `<style>` and inline `style=""`.
+ * Flags TRUE on ANY relative ref. We err toward over-flagging: a false positive routes a prototype
+ * that would have worked to the browser (benign); a false negative renders a silently-broken iframe.
+ */
+export function referencesExternalFiles(html: string): boolean {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  for (const el of doc.querySelectorAll<HTMLElement>("[src]")) {
+    if (isRelativeRef(el.getAttribute("src"))) return true;
+  }
+  for (const link of doc.querySelectorAll("link[href]")) {
+    if (isRelativeRef(link.getAttribute("href"))) return true;
+  }
+  for (const el of doc.querySelectorAll("[srcset]")) {
+    if (srcsetUrls(el.getAttribute("srcset") ?? "").some(isRelativeRef)) return true;
+  }
+  for (const use of doc.querySelectorAll("use")) {
+    if (isRelativeRef(use.getAttribute("href"))) return true;
+    if (isRelativeRef(use.getAttribute("xlink:href"))) return true;
+  }
+  for (const obj of doc.querySelectorAll("object[data]")) {
+    if (isRelativeRef(obj.getAttribute("data"))) return true;
+  }
+  for (const style of doc.querySelectorAll("style")) {
+    if (cssUrls(style.textContent ?? "").some(isRelativeRef)) return true;
+  }
+  for (const el of doc.querySelectorAll<HTMLElement>("[style]")) {
+    if (cssUrls(el.getAttribute("style") ?? "").some(isRelativeRef)) return true;
+  }
+  return false;
 }
 
 /**

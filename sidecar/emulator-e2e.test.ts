@@ -51,7 +51,7 @@ import {
 } from "./emulator-scenes";
 import { SCENARIO_EXIT_CODES } from "./exit-codes";
 import { SECOND_START_MESSAGE } from "./session-start";
-import { RESUME_FALLBACK_REASON } from "./session-resume";
+import { RESUME_FALLBACK_REASON, RESUME_TIMEOUT_FALLBACK_REASON } from "./session-resume";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
@@ -185,14 +185,24 @@ function startSidecar(scenario: string): Sidecar {
   };
 }
 
-async function runScenario(
-  scenario: string,
-  startExtra: Record<string, unknown> = {},
-): Promise<{ frames: Frame[]; rawLines: string[]; exitCode: number | null }> {
-  const s = startSidecar(scenario);
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// The default protocol drive: send `start` then a `user` line immediately, wait for the first
+// terminal frame. A scenario whose PROTOCOL TIMING is under test (e.g. resume-idle-until-input, which
+// withholds the user message) supplies its own `drive` on the Spec instead.
+async function defaultDrive(s: Sidecar, startExtra: Record<string, unknown>): Promise<void> {
   s.send({ type: "start", cwd: scratchCwd, permissionMode: "default", ...startExtra });
   s.send({ type: "user", text: "drive the scripted scenario" });
   await s.waitFor(isTerminal);
+}
+
+async function runScenario(
+  scenario: string,
+  startExtra: Record<string, unknown> = {},
+  drive: (s: Sidecar, startExtra: Record<string, unknown>) => Promise<void> = defaultDrive,
+): Promise<{ frames: Frame[]; rawLines: string[]; exitCode: number | null }> {
+  const s = startSidecar(scenario);
+  await drive(s, startExtra);
   s.endIfAlive();
   const exitCode = await s.closed;
   return { frames: s.frames, rawLines: s.rawLines, exitCode };
@@ -247,6 +257,9 @@ interface Spec {
   start?: Record<string, unknown>;
   kinds: string[];
   verify?: (frames: Frame[]) => void;
+  /** Custom protocol drive, replacing the default (start + immediate user, wait terminal). Used by
+   *  scenarios whose timing is load-bearing — e.g. resume-idle-until-input withholds the user line. */
+  drive?: (s: Sidecar, startExtra: Record<string, unknown>) => Promise<void>;
 }
 
 const SPECS: Spec[] = [
@@ -478,6 +491,76 @@ const SPECS: Spec[] = [
       expect(firstOf(frames, "resume_fallback").reason).toBe(RESUME_FALLBACK_REASON);
     },
   },
+  {
+    // resume-silent-recover: a wedged first-frame resume must recover to a terminal `result` (drops
+    // resume, fresh retry streams to completion). See index.ts firstFrameWatchdog.
+    name: "resume-silent-recover",
+    scenario: "resume-silent-recover",
+    start: { resume: "emu-silent-resume-id" },
+    kinds: [
+      "resume_fallback",
+      "system_init",
+      ...streamed("Recovered on a fresh start after the silent resume."),
+      "result",
+    ],
+    verify: (frames) => {
+      expect(firstOf(frames, "resume_fallback").reason).toBe(RESUME_TIMEOUT_FALLBACK_REASON);
+      const result = firstOf(frames, "result");
+      expect(result.is_error).toBe(false);
+      expect(result.result).toBe("Recovered after resume timeout.");
+    },
+  },
+  {
+    // resume-silent-exhausted: when both the resume attempt and its fresh retry hang, the sidecar must
+    // still terminate — recovers once (resume_fallback) then a loud fatal + exit 1. See index.ts firstFrameWatchdog.
+    name: "resume-silent-exhausted",
+    scenario: "resume-silent-exhausted",
+    start: { resume: "emu-silent-resume-id" },
+    kinds: ["resume_fallback", "error"],
+    verify: (frames) => {
+      expect(firstOf(frames, "resume_fallback").reason).toBe(RESUME_TIMEOUT_FALLBACK_REASON);
+      const err = firstOf(frames, "error");
+      expect(err.error_kind).toBe("sdk");
+      expect(err.fatal).toBe(true);
+      expect(err.message).toContain("fresh retry also stalled");
+    },
+  },
+  {
+    // resume-idle-until-input: a resume that receives NO user message must idle silently — the
+    // first-frame watchdog arms on first input, NOT at query start — then complete a normal turn once
+    // a late message arrives. The quiet window is comfortably longer than several EMU_RESUME_TIMEOUT_MS
+    // (100ms) periods: an arm-at-query-start watchdog would fire during it and double-fatal (proven by
+    // the falsifiability inversion), so the empty frame stream mid-window and the clean terminal result
+    // together pin arm-on-first-input. See index.ts firstFrameWatchdog.
+    name: "resume-idle-until-input",
+    scenario: "resume-idle-until-input",
+    start: { resume: "emu-idle-resume-id" },
+    kinds: [
+      "system_init",
+      ...streamed("Handled the gate after the late message arrived."),
+      "result",
+    ],
+    drive: async (s, startExtra) => {
+      s.send({ type: "start", cwd: scratchCwd, permissionMode: "default", ...startExtra });
+      // Withhold input across several first-frame timeout periods. With arm-on-first-input NOTHING is
+      // emitted here (the watchdog never armed); with the old arm-at-query-start behavior the watchdog
+      // would have fired at ~100ms and double-fatal'd by ~200ms, leaving frames on the wire.
+      await delay(700);
+      expect(
+        s.frames.map((f) => f.kind),
+        "an input-less resume must emit no frames until a user message arrives",
+      ).toEqual([]);
+      s.send({ type: "user", text: "the late message that finally drives the turn" });
+      await s.waitFor(isTerminal);
+    },
+    verify: (frames) => {
+      expect(frames.some((f) => f.kind === "resume_fallback")).toBe(false);
+      expect(frames.some((f) => f.kind === "error")).toBe(false);
+      const result = firstOf(frames, "result");
+      expect(result.is_error).toBe(false);
+      expect(result.result).toBe("Resumed and completed after idle.");
+    },
+  },
 ];
 
 describeE2E("emulator e2e — spawned agent-driver binary, per-scenario frame streams", () => {
@@ -517,7 +600,11 @@ describeE2E("emulator e2e — spawned agent-driver binary, per-scenario frame st
         // The shared per-golden exit map (also consumed by the frontend golden-replay adapter's
         // agent-exit synthesis) MUST cover every spec — an uncovered name is a drift bug, not a 0.
         expect(SCENARIO_EXIT_CODES[spec.name]).toBeDefined();
-        const { frames, rawLines, exitCode } = await runScenario(spec.scenario, spec.start ?? {});
+        const { frames, rawLines, exitCode } = await runScenario(
+          spec.scenario,
+          spec.start ?? {},
+          spec.drive ?? defaultDrive,
+        );
         expect(frames.map((f) => f.kind)).toEqual(spec.kinds);
         assertSeqMonotonic(frames);
         spec.verify?.(frames);

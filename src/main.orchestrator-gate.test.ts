@@ -59,6 +59,7 @@ vi.mock("./titlebar", () => ({ initTitlebar: vi.fn(), initThemeToggle: vi.fn(), 
 
 import { __resetReviewStateForTest } from "./main";
 import { parseNn } from "./conversation/plan-tree";
+import type { PrototypeGate } from "./conversation/plan-tree";
 import {
   createOrchestrator,
   __setOrchestratorForTest,
@@ -161,9 +162,11 @@ function bootDom(): void {
         <div class="doc-header"><div id="doc-filename"></div><div id="doc-src"></div></div>
         <div class="review-bar hidden" id="review-bar">
           <span id="review-bar-label"></span>
+          <textarea id="prototype-feedback" class="hidden"></textarea>
           <button id="review-submit" disabled>Submit feedback</button>
           <button id="review-clear">Clear comments</button>
           <button id="review-approve" class="hidden">Approve &amp; Build</button>
+          <button id="prototype-open" class="hidden">Open in browser</button>
           <button id="review-resume"></button>
         </div>
         <div class="md" id="reading-pane"></div>
@@ -585,6 +588,89 @@ describe("orchestrator gate — pendingPrototype drives the conversation idle-wa
     expect(document.querySelector("#conversation-stream .conv-working")).toBeNull();
 
     await h.cancel();
+  });
+});
+
+// A prototype "Request changes" whose dispatch REJECTS (the session ended, e.g. clicking against a
+// dead session on Resume) must NOT silently no-op — main.ts surfaces the failure as a `.conv-notice`
+// so the user knows their feedback was not delivered, and preserves the typed text for a retry.
+describe("orchestrator gate — a failed prototype 'Request changes' surfaces a notice, not a silent no-op", () => {
+  it("refinePrototype rejecting → a .conv-notice is surfaced and the typed feedback is preserved", async () => {
+    const { deps } = makeDeps();
+    const h = createOrchestrator(deps);
+    // The dispatch the prototype Submit routes into — force it to REJECT (dead session).
+    const refineSpy = vi.spyOn(h, "refinePrototype").mockRejectedValue(new Error("session ended"));
+    __setOrchestratorForTest(h);
+    bootDom();
+    await flush();
+
+    await h.start({ cwd: "/work", request: "build a widget" });
+    await flush();
+    const gate: PrototypeGate = {
+      kind: "ascii",
+      paths: [],
+      screenshot: null,
+      inlinePreview: "preview body",
+      variants: [],
+      round: 1,
+      cwd: "/work",
+    };
+    await h.dispatch({ type: "PROTOTYPE_READY", gate });
+    await flush();
+
+    // PROTOTYPE mode: type non-empty feedback so "Request changes" is enabled and routes to refinePrototype.
+    const feedbackEl = document.querySelector<HTMLTextAreaElement>("#prototype-feedback")!;
+    feedbackEl.value = "make the header bigger";
+    feedbackEl.dispatchEvent(new Event("input", { bubbles: true }));
+    await flush();
+    const submit = document.querySelector<HTMLButtonElement>("#review-submit")!;
+    expect(submit.disabled).toBe(false);
+
+    submit.click();
+    await flush();
+
+    // The dispatch WAS attempted (not short-circuited by the empty-feedback guard) and it rejected.
+    expect(refineSpy).toHaveBeenCalledTimes(1);
+    expect(refineSpy).toHaveBeenCalledWith("make the header bigger");
+    // FALSIFY (verified by invert/restore): drop the surfaceMessage call in main.ts's refinePrototype
+    // catch (bare `return`) → no notice row → this assertion goes RED.
+    const notices = [...document.querySelectorAll("#conversation-stream .conv-notice")].map(
+      (n) => n.textContent ?? "",
+    );
+    expect(notices.some((t) => /couldn.?t send your changes/i.test(t))).toBe(true);
+    // The failure path never cleared the textarea — the feedback is preserved for a one-click retry.
+    expect(feedbackEl.value).toBe("make the header bigger");
+
+    await h.cancel();
+  });
+});
+
+// Sibling coverage: the orchestrator-gate APPROVE path (#review-approve → approve(pathKey)) shares the
+// same dead-session surfacing. A rejecting approve must raise a `.conv-notice`, not silently no-op.
+describe("orchestrator gate — a failed approve surfaces a notice, not a silent no-op", () => {
+  it("approve rejecting → a .conv-notice is surfaced", async () => {
+    const planPath = "/p/01.md";
+    H.rows = [planRow(planPath, "1")];
+    const { deps } = makeDeps();
+    const h = createOrchestrator(deps);
+    // The dispatch #review-approve routes into — force it to REJECT (dead session).
+    const approveSpy = vi.spyOn(h, "approve").mockRejectedValue(new Error("session ended"));
+    __setOrchestratorForTest(h);
+    bootDom();
+    await flush();
+    await driveToSubDraftedGate(h, planPath);
+    await flush();
+
+    document.querySelector<HTMLButtonElement>("#review-approve")!.click();
+    await flush();
+
+    expect(approveSpy).toHaveBeenCalledTimes(1);
+    // FALSIFY (verified by invert/restore): drop the surfaceMessage call in main.ts's approve catch
+    // (bare swallow) → no notice row → this assertion goes RED.
+    const notices = [...document.querySelectorAll("#conversation-stream .conv-notice")].map(
+      (n) => n.textContent ?? "",
+    );
+    expect(notices.some((t) => /couldn.?t send your approval/i.test(t))).toBe(true);
   });
 });
 

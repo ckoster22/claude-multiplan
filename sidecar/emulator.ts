@@ -16,6 +16,12 @@ import { EMULATOR_SCENARIOS, attemptMessages, type EmulatorScenario } from "./em
 // non-null `emulatorScenario`).
 export const EMU_BACKOFF_MS = 10;
 
+// Resume first-frame watchdog bound index.ts clamps its real ~30s ceiling to while the emulator is
+// active, so a scripted `{ kind: "hang" }` attempt trips the watchdog fast yet genuinely. Small but
+// non-trivial so it comfortably outlasts a healthy fresh-retry's first frame (which the emulator
+// yields synchronously) — the recovery must NEVER false-trip on its own retry.
+export const EMU_RESUME_TIMEOUT_MS = 100;
+
 /**
  * Returns the registry scenario matching `env.EMU_SCENARIO`, or `null` for unset/unknown. An unknown
  * name MUST fall through to `null` (the real `query()`), never silently activate the emulator.
@@ -36,9 +42,9 @@ interface QueryArgs {
 
 /**
  * Build a fake `query()` from a scenario. A closure `attemptIndex` advances per call, so a backoff
- * RETRY gets the NEXT attempt and repeats the last once past the end. A throw-tailed attempt
- * (`{ messages, thenThrow }`) yields its messages then throws, landing in index.ts's consume-loop
- * catch exactly like a thrown SDK error.
+ * RETRY gets the NEXT attempt and repeats the last once past the end. A `{ kind: "throw" }` attempt
+ * yields its messages then throws, landing in index.ts's consume-loop catch exactly like a thrown
+ * SDK error.
  *
  * The `as unknown as Query` cast is load-bearing and safe: index.ts's only runtime use of the query
  * is async iteration, `interrupt()`, `setPermissionMode()`, and an optional `close?.()`; the stubs
@@ -50,12 +56,25 @@ export function makeEmulatorQuery(
   let attemptIndex = 0;
   const last = scenario.attempts.length - 1;
 
-  return function emulatorQuery(_args: QueryArgs): Query {
+  return function emulatorQuery(args: QueryArgs): Query {
     const attempt = scenario.attempts[Math.min(attemptIndex++, last)];
     const messages = attemptMessages(attempt);
-    const thenThrow = Array.isArray(attempt) ? null : attempt.thenThrow;
+    const hang = attempt.kind === "hang";
+    const awaitInput = attempt.kind === "await-input";
+    const thenThrow = attempt.kind === "throw" ? attempt.thenThrow : null;
 
     async function* gen(): AsyncGenerator<SDKMessage> {
+      // A "hang" attempt never settles its first `.next()` (see index.ts firstFrameWatchdog). The
+      // never-settling promise registers no timer/handle, so it does not pin the event loop once
+      // index.ts abandons this iterator on its first-frame timeout.
+      if (hang) await new Promise<never>(() => {});
+      // "await-input" models the real CLI: emit ZERO frames until the first user message reaches the
+      // streaming-input prompt. Consume one item from the prompt queue (the emulator is the only
+      // consumer in emulator mode). A queue `end` during teardown also wakes this; the generator then
+      // suspends at its first `yield` with no consumer, so no frame leaks after the iterator is abandoned.
+      if (awaitInput && typeof args.prompt !== "string") {
+        await args.prompt[Symbol.asyncIterator]().next();
+      }
       for (const msg of messages) {
         yield msg;
       }

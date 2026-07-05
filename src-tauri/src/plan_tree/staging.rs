@@ -8,10 +8,20 @@
 
 use std::path::{Path, PathBuf};
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
+
 use super::validated_cwd;
+use crate::plans::contents::MAX_IMAGE_BYTES;
 
 #[cfg(test)]
 use super::testutil::unique_temp_dir;
+
+/// The 8-byte PNG file signature. A decoded capture must start with it or it is rejected.
+const PNG_MAGIC: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// The `data:` URL prefix a capture PNG arrives with (the inverse of `read_image_as_data_url`).
+const CAPTURE_DATA_URL_PREFIX: &str = "data:image/png;base64,";
 
 // The intent-clarifier's visual-prototype mode writes throwaway artifacts under
 // `<cwd>/.plan-tree/prototype/` (the sidecar's "prototype" write policy confines the agent to
@@ -104,6 +114,96 @@ pub fn open_prototype(
     app.opener()
         .open_path(file.to_string_lossy().to_string(), None::<String>)
         .map_err(|e| format!("could not open prototype: {e}"))
+}
+
+/// Containment (strictly under `<cwd>/.plan-tree/prototype/`) is delegated to
+/// `validated_prototype_file`; bytes are lossily decoded to `String`.
+#[tauri::command]
+pub fn read_prototype_file(cwd: String, path: String) -> Result<String, String> {
+    let file = validated_prototype_file(&cwd, &path)?;
+    let bytes = std::fs::read(&file).map_err(|e| format!("could not read prototype: {e}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// True iff `id` matches `^cap[0-9]+$` — the only shape a capture id may take. Rejects any `/`,
+/// `..`, or other separator/escape, so it can never widen the join below into a traversal.
+fn valid_capture_id(id: &str) -> bool {
+    let Some(digits) = id.strip_prefix("cap") else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Validation core for a capture-PNG target: the (not-yet-existing) leaf
+/// `<cwd>/.plan-tree/prototype/captures/capture-<id>.png`. Creates the `captures` dir (idempotent),
+/// then asserts the CANONICAL `captures` dir equals `<canon cwd>/.plan-tree/prototype/captures`
+/// exactly — a symlinked `captures`/`prototype`/`.plan-tree` canonicalizes elsewhere and is rejected.
+/// The leaf itself is NOT canonicalized (it may not exist yet); instead, if it already exists as a
+/// SYMLINK it is rejected, so a write can never follow a planted link out of containment.
+fn validated_capture_target(cwd: &str, id: &str) -> Result<PathBuf, String> {
+    if !valid_capture_id(id) {
+        return Err(format!("invalid capture id: {id:?}"));
+    }
+    let cwd_path = validated_cwd(cwd)?;
+    let dir = cwd_path
+        .join(".plan-tree")
+        .join("prototype")
+        .join("captures");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create captures dir: {e}"))?;
+    let canon_cwd = std::fs::canonicalize(cwd_path).map_err(|e| format!("cwd unavailable: {e}"))?;
+    let canon_dir =
+        std::fs::canonicalize(&dir).map_err(|e| format!("captures dir unavailable: {e}"))?;
+    if canon_dir
+        != canon_cwd
+            .join(".plan-tree")
+            .join("prototype")
+            .join("captures")
+    {
+        return Err("path escapes the working directory".to_string());
+    }
+    let target = canon_dir.join(format!("capture-{id}.png"));
+    if let Ok(meta) = std::fs::symlink_metadata(&target) {
+        if meta.file_type().is_symlink() {
+            return Err("capture target is a symlink".to_string());
+        }
+    }
+    Ok(target)
+}
+
+/// Decode a `data:image/png;base64,<...>` capture, enforce PNG magic + the shared image size cap,
+/// then atomically write it to `<cwd>/.plan-tree/prototype/captures/capture-<id>.png` (containment
+/// via `validated_capture_target`). Returns the absolute path written. This is the app's first
+/// fs-WRITE of frontend-produced bytes; every guard is Rust-side.
+#[tauri::command]
+pub fn write_capture_png(cwd: String, id: String, data_url: String) -> Result<String, String> {
+    let target = validated_capture_target(&cwd, &id)?;
+    let b64 = data_url
+        .strip_prefix(CAPTURE_DATA_URL_PREFIX)
+        .ok_or_else(|| "capture is not a png data URL".to_string())?;
+    let bytes = BASE64
+        .decode(b64)
+        .map_err(|e| format!("capture base64 invalid: {e}"))?;
+    if !bytes.starts_with(PNG_MAGIC) {
+        return Err("capture is not a PNG".to_string());
+    }
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err("capture too large".to_string());
+    }
+    crate::state::persist::atomic_write(&target, &bytes)
+        .map_err(|e| format!("capture write failed: {e}"))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// Delete `<cwd>/.plan-tree/prototype/captures/capture-<id>.png` (containment via
+/// `validated_capture_target`). Best-effort: an absent file is `Ok(())`, never an error.
+#[tauri::command]
+pub fn delete_capture_png(cwd: String, id: String) -> Result<(), String> {
+    let target = validated_capture_target(&cwd, &id)?;
+    match std::fs::remove_file(&target) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("capture delete failed: {e}")),
+    }
 }
 
 // When the user marks a visual prototype a "working reference" at the prototype-approval gate, the
@@ -447,6 +547,40 @@ mod tests {
         std::fs::remove_dir_all(&outside).ok();
     }
 
+    /// `read_prototype_file` returns the EXACT text of an in-dir prototype file and rejects a
+    /// traversal escaping `prototype/` (it delegates containment to `validated_prototype_file`).
+    /// Falsifiable: return a fixed string instead of the file bytes and the exact-text assert goes
+    /// red; drop the containment delegation and the traversal case would read the out-of-dir victim.
+    #[test]
+    fn read_prototype_file_reads_text_and_rejects_traversal() {
+        let cwd = unique_temp_dir();
+        let proto = cwd.join(".plan-tree").join("prototype");
+        std::fs::create_dir_all(&proto).expect("seed prototype dir");
+        std::fs::write(proto.join("index.html"), "<h1>hello prototype</h1>")
+            .expect("seed prototype file");
+        // An out-of-cwd victim a traversal would otherwise read.
+        let outside = unique_temp_dir();
+        std::fs::write(outside.join("escape.html"), "SECRET").expect("seed victim");
+
+        let cwd_s = cwd.to_string_lossy().to_string();
+
+        let text = read_prototype_file(cwd_s.clone(), ".plan-tree/prototype/index.html".to_string())
+            .expect("in-dir file must read");
+        assert_eq!(text, "<h1>hello prototype</h1>", "must return the file's exact text");
+
+        let depth = outside.components().count();
+        let ups = "../".repeat(depth + 4);
+        let traversal = format!(
+            ".plan-tree/prototype/../../{ups}{}/escape.html",
+            outside.to_string_lossy().trim_start_matches('/')
+        );
+        let res = read_prototype_file(cwd_s, traversal);
+        assert!(res.is_err(), "traversal out of prototype/ must be rejected, got {res:?}");
+
+        std::fs::remove_dir_all(&cwd).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
     /// `ensure_baseline_dir` creates `<cwd>/.plan-tree/baseline/` when absent and is IDEMPOTENT.
     /// The returned path is absolute and ends with `.plan-tree/baseline`. Falsifiable: skip the
     /// create_dir_all and the canonicalize fails → the expect panics.
@@ -701,5 +835,212 @@ mod tests {
 
         std::fs::remove_dir_all(&cwd).ok();
         std::fs::remove_dir_all(&outside).ok();
+    }
+
+    /// A real 1x1 PNG (signature + IHDR + IDAT + IEND), reused as the happy-path capture body.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x62, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    fn png_data_url(bytes: &[u8]) -> String {
+        format!("{CAPTURE_DATA_URL_PREFIX}{}", BASE64.encode(bytes))
+    }
+
+    /// ROUND-TRIP: a valid PNG data URL writes `.plan-tree/prototype/captures/capture-cap1.png` with
+    /// the EXACT decoded bytes, and the returned path is that file. Falsifiable: corrupt the decode
+    /// (or skip the write) and the byte-equality read goes red.
+    #[test]
+    fn write_capture_png_round_trips_exact_bytes() {
+        let cwd = unique_temp_dir();
+        let written = write_capture_png(
+            cwd.to_string_lossy().to_string(),
+            "cap1".to_string(),
+            png_data_url(TINY_PNG),
+        )
+        .expect("valid capture must write");
+        assert!(
+            written.ends_with("/.plan-tree/prototype/captures/capture-cap1.png"),
+            "got {written}"
+        );
+        let on_disk = std::fs::read(&written).expect("written file must exist");
+        assert_eq!(on_disk, TINY_PNG, "decoded bytes must match the source PNG exactly");
+        std::fs::remove_dir_all(&cwd).ok();
+    }
+
+    /// A traversal / separator-bearing id (`../evil`, `foo/bar`) is rejected and NOTHING is written.
+    /// Falsifiable: drop the `valid_capture_id` guard and the join escapes, producing a write.
+    #[test]
+    fn write_capture_png_rejects_traversal_ids() {
+        let cwd = unique_temp_dir();
+        for id in ["../evil", "foo/bar", "cap", "cap1x", "cap 1", ".."] {
+            let res = write_capture_png(
+                cwd.to_string_lossy().to_string(),
+                id.to_string(),
+                png_data_url(TINY_PNG),
+            );
+            assert!(res.is_err(), "id {id:?} must be rejected, got {res:?}");
+        }
+        // No captures dir entry was ever produced beyond the dir itself.
+        let captures = cwd.join(".plan-tree").join("prototype").join("captures");
+        if let Ok(entries) = std::fs::read_dir(&captures) {
+            let files: Vec<_> = entries.flatten().collect();
+            assert!(files.is_empty(), "no capture file may be written for a bad id");
+        }
+        std::fs::remove_dir_all(&cwd).ok();
+    }
+
+    /// A SYMLINKED `captures` dir pointing out of the cwd is rejected by the equality assert (the
+    /// canonical dir no longer equals `<canon cwd>/.plan-tree/prototype/captures`), and no write
+    /// lands in the target. Falsifiable: drop the equality check and the write plants a file there.
+    #[cfg(unix)]
+    #[test]
+    fn write_capture_png_rejects_symlinked_captures_dir() {
+        let cwd = unique_temp_dir();
+        let proto = cwd.join(".plan-tree").join("prototype");
+        std::fs::create_dir_all(&proto).expect("seed prototype dir");
+        let target = unique_temp_dir(); // elsewhere under temp, NOT inside cwd
+        std::os::unix::fs::symlink(&target, proto.join("captures")).expect("plant symlink");
+
+        let res = write_capture_png(
+            cwd.to_string_lossy().to_string(),
+            "cap1".to_string(),
+            png_data_url(TINY_PNG),
+        );
+        assert!(res.is_err(), "symlinked captures dir must be rejected, got {res:?}");
+        assert!(
+            !target.join("capture-cap1.png").exists(),
+            "no capture may be planted in the symlink target"
+        );
+        std::fs::remove_dir_all(&cwd).ok();
+        std::fs::remove_dir_all(&target).ok();
+    }
+
+    /// A SYMLINKED leaf (`capture-cap1.png` pre-planted as a link out of containment) is rejected by
+    /// the `symlink_metadata` leaf guard, and the link's target is left untouched — the write never
+    /// follows the link. Falsifiable: remove the leaf symlink guard and the victim is overwritten.
+    #[cfg(unix)]
+    #[test]
+    fn write_capture_png_rejects_symlinked_leaf() {
+        let cwd = unique_temp_dir();
+        let captures = cwd.join(".plan-tree").join("prototype").join("captures");
+        std::fs::create_dir_all(&captures).expect("seed captures dir");
+        let outside = unique_temp_dir();
+        let victim = outside.join("victim.png");
+        std::fs::write(&victim, b"ORIGINAL").expect("seed victim");
+        std::os::unix::fs::symlink(&victim, captures.join("capture-cap1.png"))
+            .expect("plant leaf symlink");
+
+        let res = write_capture_png(
+            cwd.to_string_lossy().to_string(),
+            "cap1".to_string(),
+            png_data_url(TINY_PNG),
+        );
+        assert!(res.is_err(), "symlinked leaf must be rejected, got {res:?}");
+        assert_eq!(
+            std::fs::read(&victim).expect("victim readable"),
+            b"ORIGINAL",
+            "the leaf symlink must NOT be followed to overwrite the victim"
+        );
+        std::fs::remove_dir_all(&cwd).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    /// A payload missing the `data:image/png;base64,` prefix is rejected (and nothing written).
+    /// Falsifiable: drop the `strip_prefix` guard and a raw-base64 body would decode + write.
+    #[test]
+    fn write_capture_png_rejects_missing_prefix() {
+        let cwd = unique_temp_dir();
+        let res = write_capture_png(
+            cwd.to_string_lossy().to_string(),
+            "cap1".to_string(),
+            BASE64.encode(TINY_PNG), // no data: prefix
+        );
+        assert!(res.is_err(), "missing data-url prefix must be rejected, got {res:?}");
+        std::fs::remove_dir_all(&cwd).ok();
+    }
+
+    /// Valid base64 whose decoded bytes are NOT a PNG (wrong magic) is rejected. Falsifiable: drop
+    /// the magic-byte assert and the non-PNG body writes through.
+    #[test]
+    fn write_capture_png_rejects_non_png_bytes() {
+        let cwd = unique_temp_dir();
+        let res = write_capture_png(
+            cwd.to_string_lossy().to_string(),
+            "cap1".to_string(),
+            png_data_url(b"not a png at all"),
+        );
+        assert!(res.is_err(), "non-PNG magic must be rejected, got {res:?}");
+        std::fs::remove_dir_all(&cwd).ok();
+    }
+
+    /// A decoded body over `MAX_IMAGE_BYTES` is rejected (PNG magic present, but too large).
+    /// Falsifiable: drop the size cap and the oversize body writes through.
+    #[test]
+    fn write_capture_png_rejects_over_cap() {
+        let cwd = unique_temp_dir();
+        let mut big = PNG_MAGIC.to_vec();
+        big.resize((MAX_IMAGE_BYTES as usize) + 1, 0u8);
+        let res = write_capture_png(
+            cwd.to_string_lossy().to_string(),
+            "cap1".to_string(),
+            png_data_url(&big),
+        );
+        assert!(res.is_err(), "over-cap capture must be rejected, got {res:?}");
+        std::fs::remove_dir_all(&cwd).ok();
+    }
+
+    /// The cwd guards mirror the rest of staging: relative cwd, a `..`-bearing cwd, and a missing cwd
+    /// are all rejected. Falsifiable: drop the guards and the `..` form resolves + writes.
+    #[test]
+    fn write_capture_png_rejects_bad_cwd() {
+        let cwd = unique_temp_dir();
+        let res = write_capture_png("relative/dir".to_string(), "cap1".to_string(), png_data_url(TINY_PNG));
+        assert!(res.is_err(), "relative cwd must be rejected, got {res:?}");
+
+        let traversing = format!("{}/..", cwd.to_string_lossy());
+        let res = write_capture_png(traversing, "cap1".to_string(), png_data_url(TINY_PNG));
+        assert!(res.is_err(), "cwd with `..` must be rejected, got {res:?}");
+
+        let missing = cwd.join("does-not-exist");
+        let res = write_capture_png(
+            missing.to_string_lossy().to_string(),
+            "cap1".to_string(),
+            png_data_url(TINY_PNG),
+        );
+        assert!(res.is_err(), "missing cwd must be rejected, got {res:?}");
+        std::fs::remove_dir_all(&cwd).ok();
+    }
+
+    /// `delete_capture_png` removes an existing capture, is a graceful no-op (`Ok`) when the file is
+    /// absent, and rejects a traversal id. Falsifiable: if the unlink were skipped, the post-delete
+    /// existence assert fires; if the absent case errored, the second `expect` panics.
+    #[test]
+    fn delete_capture_png_removes_absent_ok_and_rejects_traversal() {
+        let cwd = unique_temp_dir();
+        let written = write_capture_png(
+            cwd.to_string_lossy().to_string(),
+            "cap1".to_string(),
+            png_data_url(TINY_PNG),
+        )
+        .expect("seed capture");
+        assert!(Path::new(&written).exists(), "seed must exist before delete");
+
+        delete_capture_png(cwd.to_string_lossy().to_string(), "cap1".to_string())
+            .expect("delete of existing capture must succeed");
+        assert!(!Path::new(&written).exists(), "capture must be gone after delete");
+
+        // Absent is a graceful no-op.
+        delete_capture_png(cwd.to_string_lossy().to_string(), "cap1".to_string())
+            .expect("delete of an absent capture must be Ok, not Err");
+
+        // Traversal id is rejected.
+        let res = delete_capture_png(cwd.to_string_lossy().to_string(), "../evil".to_string());
+        assert!(res.is_err(), "traversal delete id must be rejected, got {res:?}");
+
+        std::fs::remove_dir_all(&cwd).ok();
     }
 }

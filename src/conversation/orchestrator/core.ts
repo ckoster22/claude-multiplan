@@ -55,6 +55,7 @@ import {
 } from "../plan-tree";
 import { phaseModel } from "../plan-tree/triage";
 import type { ModelOptions } from "../../model-picker";
+import type { AttachedImage } from "../images";
 import type {
   AgentStream,
   AskUserQuestionAnswers,
@@ -549,7 +550,11 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // policy and asserts setMode("plan") BEFORE the recon send — the INTENT_CLARIFIED continuation's
   // ordering). Called by approvePrototype() and the intent-ingestion auto-approve branch. The session
   // is IDLE at both call sites, so the recon prompt opens a fresh turn — no resuming hold, no interrupt.
-  const resolveApprove = async (gate: PrototypeGate, asWorkingReference = false): Promise<void> => {
+  const resolveApprove = async (
+    gate: PrototypeGate,
+    asWorkingReference = false,
+    images?: AttachedImage[],
+  ): Promise<void> => {
     const intentContents = composeIntentMd(run.pendingIntentText ?? "", gate, run.cwd);
     // when the user marked the prototype a working reference,
     // freeze .plan-tree/prototype/ → .plan-tree/baseline/ BEFORE dispatching, so the on-disk copy
@@ -579,7 +584,12 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // Arm BEFORE sending (the result may arrive as this sendMessage resolves — see start()).
     run.awaiting = { tag: "recon", path: [], buffer: "" };
     diag("resolveApprove: INTENT.md written, armed recon, sending reconPrompt");
-    await deps.sendMessage(reconPrompt(run.request, run.confirmedIntent));
+    // The user's annotated captures (if any) ride this recon send; omit-when-empty keeps every
+    // image-less approval byte-identical to the pre-attach send.
+    await deps.sendMessage(
+      reconPrompt(run.request, run.confirmedIntent),
+      images && images.length ? images : undefined,
+    );
   };
 
   // Execute a single effect against the injected deps. Persist writes the schema-2 ledger to
@@ -927,7 +937,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // through enqueueIngest, like the resuming watchdog). The fire guard re-checks BOTH the tag and the
   // armed path so a fired-but-not-yet-run callback racing a fresh arm of the same tag can't FATAL the
   // wrong turn.
-  const armTurnWatchdog = (label: "summary" | "parent-review" | "intent", forPath: NodePath): void => {
+  const armTurnWatchdog = (
+    label: "summary" | "parent-review" | "intent" | "recon" | "sizer" | "exec",
+    forPath: NodePath,
+  ): void => {
     clearTurnWatchdog();
     const armedKey = pathKey(forPath);
     const timeoutMs = label === "intent" ? INTENT_RESULT_TIMEOUT_MS : TURN_RESULT_TIMEOUT_MS;
@@ -937,10 +950,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       void enqueueIngest(async () => {
         if (!active || run.awaiting.tag !== label) return; // the result won the race (or terminal)
         const armed =
-          run.awaiting.tag === "summary"
-            ? run.awaiting.path
-            : run.awaiting.tag === "parent-review"
-              ? run.awaiting.parentPath
+          run.awaiting.tag === "parent-review"
+            ? run.awaiting.parentPath
+            : "path" in run.awaiting
+              ? run.awaiting.path // summary / recon / sizer / exec all key on their node path
               : []; // the intent turn is the ROOT's genesis turn (no per-node path)
         if (pathKey(armed) !== armedKey) return; // a different turn of the same tag is in flight
         run.awaiting = { tag: "idle" };
@@ -1145,21 +1158,21 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       pause.awaitingVariant.tag === "resuming" || pause.awaitingVariant.tag === "idle"
         ? { tag: "idle" }
         : { ...pause.awaitingVariant, buffer: "" };
-    // RE-ARM THE TURN WATCHDOG for the watched generation tags. The resumed turn is a REAL generation
-    // turn again, so a silently-stuck one must drive to a loud terminal FATAL as a never-paused turn
-    // would — fireResume previously re-armed `awaiting` but NOT its watchdog, so a resumed summary /
-    // parent-review / intent turn with no result hung the run forever. The watch path is computed PER
-    // TAG, NOT from the generic capturedPath below: capturedPath resolves to [] for a parent-review
-    // variant (it carries `parentPath`, not `path`), and armTurnWatchdog's fire guard compares against
-    // awaiting.parentPath — so a root-keyed arm is INERT for a non-root parent-review. Map: summary →
-    // .path, parent-review → .parentPath, intent → []. The other captured tags (recon/sizer/exec) carry
-    // NO watchdog at their live arming sites by design, so the resume re-arms none for them either.
-    // INVARIANT[watchdog-rearmed-per-tag-on-resume] (runtime-guard): on quota resume the watchdog is re-armed per awaited tag (summary→path, parent-review→parentPath, intent→[]).
-    //   prevents: a silently-stuck resumed turn hanging the run with no terminal
+    // RE-ARM THE TURN WATCHDOG per resumed generation tag, so a silently-stuck resumed turn drives to a
+    // loud terminal FATAL as a never-paused turn would. Defense in depth against the sidecar's
+    // silent-resume wedge: even if that first-frame watchdog were bypassed, this host-side watchdog still
+    // surfaces the stuck turn. Armed PER TAG, not from the generic capturedPath below: capturedPath is []
+    // for a parent-review (it carries `parentPath`, not `path`), and armTurnWatchdog's fire guard
+    // compares against awaiting.parentPath — so a root-keyed arm is inert for a non-root parent-review.
+    // INVARIANT[watchdog-rearmed-per-tag-on-resume] (runtime-guard): on quota resume the watchdog is re-armed per awaited generation tag (parent-review→parentPath, intent→[], summary/recon/sizer/exec→path).
+    //   prevents: a silently-stuck resumed turn (including the sidecar silent-resume wedge on recon/sizer/exec) hanging the run with no terminal
     const rearmed = pause.awaitingVariant;
     if (rearmed.tag === "summary") armTurnWatchdog("summary", rearmed.path);
     else if (rearmed.tag === "parent-review") armTurnWatchdog("parent-review", rearmed.parentPath);
     else if (rearmed.tag === "intent") armTurnWatchdog("intent", []);
+    else if (rearmed.tag === "recon") armTurnWatchdog("recon", rearmed.path);
+    else if (rearmed.tag === "sizer") armTurnWatchdog("sizer", rearmed.path);
+    else if (rearmed.tag === "exec") armTurnWatchdog("exec", rearmed.path);
     const capturedPath =
       "path" in pause.awaitingVariant
         ? (pause.awaitingVariant.path as NodePath)
@@ -2728,7 +2741,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // INTENT.md, dispatches PROTOTYPE_APPROVED (legal from prototype-review), arms recon and
       // sends the recon prompt. `asWorkingReference` (DEFAULT false — "just a sketch") additionally
       // freezes .plan-tree/prototype/ → .plan-tree/baseline/ and records baseline_ on the ledger.
-      await resolveApprove(gate, opts?.asWorkingReference === true);
+      // `opts.images` (annotated captures) ride the recon send resolveApprove dispatches.
+      await resolveApprove(gate, opts?.asWorkingReference === true, opts?.images);
     },
 
     refinePrototype: async (feedback, opts) => {
@@ -2754,7 +2768,12 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       diag(
         `refinePrototype: round=${run.prototypeRound}, autoApprove=${opts?.autoApprove === true}, re-armed intent, sending refine prompt`,
       );
-      await deps.sendMessage(refinePrototypePrompt(feedback));
+      // The user's annotated captures (if any) ride this refine send; omit-when-empty keeps every
+      // image-less refine byte-identical to the pre-attach send.
+      await deps.sendMessage(
+        refinePrototypePrompt(feedback),
+        opts?.images && opts.images.length ? opts.images : undefined,
+      );
     },
 
     approveAcceptance: async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Plan-review UX — OPTION A: a review OPENS THE REAL plan file through the normal plan-open flow.
 //
@@ -43,12 +43,19 @@ const H = vi.hoisted(() => ({
   // Mock-plumbing flag: when true the open_prototype invoke REJECTS (so openExternally's error arm
   // fires). Default false → resolves benignly.
   failOpenProto: false,
+  // Self-contained HTML the read_prototype_file mock returns (no relative refs → renders in-app,
+  // not routed to the browser). Drives the prototype-preview modal + annotate/capture flow.
+  protoHtml: "<!doctype html><html><body><h1>proto</h1></body></html>",
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn((cmd: string, args?: { path?: string; comments?: Rec[]; reviewId?: string; decision?: string; reason?: string }) => {
+  invoke: vi.fn((cmd: string, args?: { path?: string; comments?: Rec[]; reviewId?: string; decision?: string; reason?: string; id?: string; dataUrl?: string }) => {
     const path = args?.path ?? "";
     H.invokeCalls.push({ cmd, path });
+    // Prototype-preview + capture flow (the staged-attachments tests).
+    if (cmd === "read_prototype_file") return Promise.resolve(H.protoHtml);
+    if (cmd === "capture_webview_png") return Promise.resolve("data:image/png;base64,STUB");
+    if (cmd === "write_capture_png") return Promise.resolve(`/work/.plan-tree/prototype/.captures/${args?.id ?? "cap"}.png`);
     if (cmd === "read_plan_contents") return Promise.resolve("# plan\n\nselect this phrase here\n");
     if (cmd === "list_plans") return Promise.resolve(H.rows);
     if (cmd === "get_comments") return Promise.resolve(H.store[path] ?? []);
@@ -97,6 +104,7 @@ import {
   type OrchestratorHandle,
 } from "./conversation/orchestrator";
 import type { PrototypeGate } from "./conversation/plan-tree";
+import type { AttachedImage } from "./conversation/images";
 
 // Recording fake OrchestratorDeps (mirrors main.orchestrator-gate.test.ts) — every effect is a
 // benign async no-op; the prototype double-submit test only needs the handle's state machine to
@@ -176,6 +184,9 @@ function bootDom(): void {
     <div class="review-bar hidden" id="review-bar">
       <span id="review-bar-label"></span>
       <textarea id="prototype-feedback" class="hidden"></textarea>
+      <div id="prototype-attachments" class="hidden"></div>
+      <label id="prototype-working-ref-label" class="hidden"><input type="checkbox" id="prototype-working-ref" /></label>
+      <button id="prototype-preview" class="hidden">Preview in app</button>
       <button id="review-submit" disabled></button>
       <button id="review-approve" class="hidden">Approve &amp; Build</button>
       <button id="prototype-open" class="hidden">Open in browser</button>
@@ -256,12 +267,19 @@ beforeEach(() => {
   H.rows = [];
   H.failRespond = false;
   H.failOpenProto = false;
+  H.protoHtml = "<!doctype html><html><body><h1>proto</h1></body></html>";
   // Module state (pendingReviews) persists across tests in a vitest file and re-booting the DOM does
   // not reset it. Clear it so each test starts clean.
   __resetReviewStateForTest();
   // Reset the shared orchestrator singleton to a fresh inactive default so a prior test's installed
   // handle (the prototype double-submit test installs one) cannot leak into the next test.
   __resetOrchestratorForTest();
+  // Close any modal a prior test left open (an html prototype gate auto-opens the preview modal via
+  // onPrototypeReview). The modal's close() resets main.ts's module-level `previewModal`, so a later
+  // test's openPrototypePreview is not blocked by the stale one.
+  for (const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".modal-close"))) {
+    btn.click();
+  }
 });
 
 describe("review-opens-real-file invariant — the reviewed plan is selected in the sidebar", () => {
@@ -756,6 +774,198 @@ describe("prototype Open in browser — a FAILED open_prototype surfaces #hook-s
     expect(status.textContent).toContain("Could not open prototype");
     expect(status.classList.contains("error")).toBe(true);
     expect(status.classList.contains("hidden")).toBe(false);
+
+    await h.cancel();
+  });
+});
+
+// ---- Staged prototype captures ride the GATE send (Request changes / Approve visual) ----------
+//
+// Captures the user annotates in the prototype-preview modal must NOT land in the composer tray (gate
+// feedback is otherwise sent through the text-only review bar, which never carries the tray images —
+// the screenshot would be stranded). They are staged on the held prototype gate and threaded into the
+// message the review-bar action sends.
+describe("prototype captures stage on the gate and ride Request-changes / Approve sends", () => {
+  // The staged AttachedImage produced by the capture flow: canvas.toDataURL → "data:image/png;base64,CROP",
+  // persisted, then shaped (prefix stripped) by captureToAttachedImage.
+  const STAGED: AttachedImage[] = [{ media_type: "image/png", data: "CROP" }];
+
+  // The snapshot→crop path is native (WKWebView); jsdom has no canvas 2D backend and Image.decode never
+  // resolves against a stub URL. Stub those primitives so the annotate→capture FLOW runs (mirrors
+  // annotate-overlay.test.ts) without asserting on real pixels.
+  function stubCanvasAndImage(): void {
+    vi.stubGlobal(
+      "Image",
+      class {
+        naturalWidth = 800;
+        naturalHeight = 600;
+        src = "";
+        decode(): Promise<void> {
+          return Promise.resolve();
+        }
+      },
+    );
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({ drawImage: vi.fn() })) as never;
+    HTMLCanvasElement.prototype.toDataURL = vi.fn(() => "data:image/png;base64,CROP") as never;
+  }
+
+  beforeEach(() => stubCanvasAndImage());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  // Boot to a HELD html prototype gate (kind "html" auto-opens the preview modal via onPrototypeReview).
+  // Returns the handle + the recording deps so tests can assert on deps.sendMessage.
+  async function bootToHtmlGate(): Promise<{ h: OrchestratorHandle; deps: OrchestratorDeps }> {
+    const deps = makeOrchDeps();
+    const h = createOrchestrator(deps);
+    __setOrchestratorForTest(h);
+    bootDom();
+    await flush();
+    await h.start({ cwd: "/work", request: "build a widget" });
+    await flush();
+    const gate: PrototypeGate = {
+      kind: "html",
+      paths: ["index.html"],
+      screenshot: null,
+      inlinePreview: "preview body",
+      variants: [],
+      round: 1,
+      cwd: "/work",
+    };
+    await h.dispatch({ type: "PROTOTYPE_READY", gate });
+    // The html gate auto-opens the preview modal (onPrototypeReview → openPrototypePreview awaits
+    // read_prototype_file, then the real render pipeline settles); give it ample microtask turns.
+    await flush(40);
+    return { h, deps };
+  }
+
+  // Drive the auto-opened preview modal through Annotate → Capture → close so exactly one capture is
+  // flushed on close (persisted + routed via the attachImages seam). Asserts the modal actually opened.
+  async function annotateCaptureAndCloseModal(): Promise<void> {
+    const toggle = document.querySelector<HTMLButtonElement>(".proto-annotate-toggle");
+    expect(toggle).not.toBeNull(); // the preview modal + annotate controller mounted
+    toggle!.click();
+    await flush(20);
+    document.querySelector<HTMLButtonElement>(".proto-annotate-capture")!.click();
+    await flush(20);
+    document.querySelector<HTMLButtonElement>(".modal-close")!.click();
+    await flush(20);
+  }
+
+  const chips = (): number =>
+    document.querySelectorAll("#prototype-attachments .conv-attach-chip").length;
+
+  it("closing the preview modal STAGES the capture on the gate (visible chips), NOT the composer tray", async () => {
+    const { h } = await bootToHtmlGate();
+    await annotateCaptureAndCloseModal();
+
+    // The capture is staged on the gate: a chip is visible in the review bar's strip.
+    // FALSIFY (verified): restoring the old `conversationHandle?.attachImages(imgs)` routing sends the
+    // capture to the composer tray instead → this strip stays empty → RED.
+    expect(chips()).toBe(1);
+    const strip = document.querySelector<HTMLElement>("#prototype-attachments")!;
+    expect(strip.classList.contains("hidden")).toBe(false);
+
+    await h.cancel();
+  });
+
+  it("Request changes with a staged capture sends the refine message WITH the staged images and clears the stage on success", async () => {
+    const { h, deps } = await bootToHtmlGate();
+    await annotateCaptureAndCloseModal();
+    expect(chips()).toBe(1);
+
+    const feedbackEl = document.querySelector<HTMLTextAreaElement>("#prototype-feedback")!;
+    feedbackEl.value = "make it blue";
+    feedbackEl.dispatchEvent(new Event("input", { bubbles: true }));
+    const before = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    document.querySelector<HTMLButtonElement>("#review-submit")!.dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    await flush();
+
+    // The refine send carried the staged images as its second arg.
+    // FALSIFY (verified): dropping the `{ images }` threading in the Request-changes handler sends the
+    // refine text-only → the images arg is undefined → RED.
+    const calls = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(before + 1);
+    expect(calls.at(-1)![1]).toEqual(STAGED);
+    // Stage cleared on success — no chips remain.
+    expect(chips()).toBe(0);
+
+    await h.cancel();
+  });
+
+  it("a Request-changes whose REAL send rejects still carried the images; the dispatch has already consumed the gate (strip hidden)", async () => {
+    const { h, deps } = await bootToHtmlGate();
+    await annotateCaptureAndCloseModal();
+    expect(chips()).toBe(1);
+
+    // Reject the refine send at the REAL deps.sendMessage seam (NOT by mocking the whole handle). In
+    // core.ts refinePrototype dispatches PROTOTYPE_REFINED — consuming pendingPrototype — BEFORE this
+    // send, so the failure lands with the gate ALREADY gone. This is the true production path; mocking
+    // h.refinePrototype wholesale would validate an unreachable "gate still held" state.
+    const sm = deps.sendMessage as ReturnType<typeof vi.fn>;
+    sm.mockRejectedValueOnce(new Error("session ended"));
+    const feedbackEl = document.querySelector<HTMLTextAreaElement>("#prototype-feedback")!;
+    feedbackEl.value = "make it blue";
+    feedbackEl.dispatchEvent(new Event("input", { bubbles: true }));
+    const before = sm.mock.calls.length;
+    document.querySelector<HTMLButtonElement>("#review-submit")!.dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    await flush();
+
+    // The refine send WAS attempted and carried the staged images — the threading happens before the
+    // reject. FALSIFY (verified): dropping the `{ images }` threading makes the images arg undefined → RED.
+    expect(sm.mock.calls.length).toBe(before + 1);
+    expect(sm.mock.calls.at(-1)![1]).toEqual(STAGED);
+    // ACTUAL behavior on a real send failure: the dispatch already consumed the gate, so the bar left
+    // PROTOTYPE mode and the strip is HIDDEN — there is no same-gate retry (asserting a "still visible,
+    // preserved for retry" state would be an unreachable aspiration). The snapshot lingers in the array,
+    // hidden, until the run ends or a next run begins.
+    expect(document.querySelector("#prototype-attachments")!.classList.contains("hidden")).toBe(true);
+
+    await h.cancel();
+  });
+
+  it("a NEW run discards captures a prior (cancelled) run left staged — no cross-run leak", async () => {
+    const first = await bootToHtmlGate();
+    await annotateCaptureAndCloseModal();
+    expect(chips()).toBe(1);
+    // Cancel WITHOUT sending — cancel() does not fire onDone/onFatal, so the stage is not cleared here.
+    await first.h.cancel();
+    await flush();
+
+    // Start a SECOND run and drive it to its own prototype gate. The genesis clear (first fresh-treeId
+    // snapshot) must have discarded the first run's staged capture, so the new gate's strip is empty.
+    // FALSIFY (verified): removing the genesis clearStagedGateCaptures() surfaces the stale chip → RED.
+    const second = await bootToHtmlGate();
+    expect(chips()).toBe(0);
+
+    await second.h.cancel();
+  });
+
+  it("Approve visual (empty feedback) sends the recon message WITH the staged images", async () => {
+    const { h, deps } = await bootToHtmlGate();
+    await annotateCaptureAndCloseModal();
+    expect(chips()).toBe(1);
+    const before = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Empty feedback → the plain approve arc (approvePrototype → resolveApprove → recon send).
+    document.querySelector<HTMLButtonElement>("#review-approve")!.dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    await flush();
+
+    // FALSIFY (verified): dropping the images arg from approvePrototype → resolveApprove's recon send
+    // makes the recon send text-only → RED.
+    const calls = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(before + 1);
+    expect(calls.at(-1)![1]).toEqual(STAGED);
+    expect(chips()).toBe(0); // cleared on success
 
     await h.cancel();
   });

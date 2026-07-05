@@ -59,7 +59,9 @@ type MockCommand =
   | { cmd: "get_comments"; args: { path: string } }
   | { cmd: "get_comment_count"; args: { path: string } }
   | { cmd: "read_plan_contents"; args: { path: string } }
+  | { cmd: "read_prototype_file"; args: { cwd: string; path: string } }
   | { cmd: "read_image_as_data_url"; args: { path: string } }
+  | { cmd: "capture_webview_png"; args?: undefined }
   | { cmd: "read_plan_tree_file"; args: { cwd: string; name: string } }
   | {
       cmd: "read_plan_transcript";
@@ -102,7 +104,9 @@ type MockCommand =
   | { cmd: "reset_plan_tree_dir"; args: { cwd: string } }
   | { cmd: "ensure_prototype_dir"; args: { cwd: string } }
   | { cmd: "ensure_baseline_dir"; args: { cwd: string } }
-  | { cmd: "freeze_baseline"; args: { cwd: string } };
+  | { cmd: "freeze_baseline"; args: { cwd: string } }
+  | { cmd: "write_capture_png"; args: { cwd: string; id: string; dataUrl: string } }
+  | { cmd: "delete_capture_png"; args: { cwd: string; id: string } };
 
 // The exhaustive set of command names this mock HANDLES. Exported (and asserted in the
 // registry canary) so a new real call site without a mock handler is caught. Derived from the
@@ -116,7 +120,9 @@ export const HANDLED_COMMANDS = [
   "get_comments",
   "get_comment_count",
   "read_plan_contents",
+  "read_prototype_file",
   "read_image_as_data_url",
+  "capture_webview_png",
   "read_plan_tree_file",
   "read_plan_transcript",
   "read_review_plan",
@@ -149,6 +155,8 @@ export const HANDLED_COMMANDS = [
   "ensure_prototype_dir",
   "ensure_baseline_dir",
   "freeze_baseline",
+  "write_capture_png",
+  "delete_capture_png",
 ] as const satisfies readonly MockCommand["cmd"][];
 
 // A Set form for O(1) membership checks (used by the canary + the runtime dispatch guard).
@@ -238,8 +246,27 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
       return stripFrontmatter(getMarkdown(path));
     }
 
+    case "read_prototype_file":
+      // Self-contained HTML (inline <style>, no external/relative refs) so openPrototypePreview
+      // takes the embed path (srcdoc iframe) rather than the external-ref browser fallback.
+      return [
+        "<!doctype html>",
+        '<html lang="en">',
+        "<head><meta charset=\"utf-8\">",
+        "<style>body{font:16px system-ui;margin:2rem;color:#222}h1{color:#5b21b6}</style>",
+        "</head>",
+        "<body><h1>Mock prototype</h1><p>Rendered from the mock read_prototype_file command.</p></body>",
+        "</html>",
+      ].join("\n");
+
     case "read_image_as_data_url":
       // A real 1x1 PNG data URL so the reading pane's async image pass sets a valid <img src>.
+      return TINY_PNG_DATA_URL;
+
+    case "capture_webview_png":
+      // jsdom/mock has no WKWebView; return a valid stub PNG data URL matching the real
+      // command's full `data:image/png;base64,...` return shape (the drift canary only checks
+      // that the command is handled, not the pixels).
       return TINY_PNG_DATA_URL;
 
     case "read_plan_tree_file": {
@@ -308,6 +335,17 @@ async function dispatch(cmd: string, args?: Record<string, unknown>): Promise<un
     case "ensure_baseline_dir":
     case "freeze_baseline":
       return "/Users/mock/.plan-tree/mock-path";
+
+    case "write_capture_png": {
+      // The real command returns the absolute path written; mirror its shape so the gallery's
+      // attach flow round-trips a plausible captures path without touching the filesystem.
+      const cwd = String(args?.cwd ?? "/Users/mock");
+      const id = String(args?.id ?? "cap0");
+      return `${cwd}/.plan-tree/prototype/captures/capture-${id}.png`;
+    }
+
+    case "delete_capture_png":
+      return undefined;
 
     // Agent / orchestrator: drive scene playback through the event bus.
 

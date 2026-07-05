@@ -24,7 +24,7 @@
 //   contract — `(tree_id None, nn None) ⇒ master`, `(tree_id Some, nn Some) ⇒ sub` —
 //   is a strict subset of this rule.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::model::{ModelOptions, RawFlavor};
@@ -107,6 +107,42 @@ pub(crate) fn valid_dotted_nn(nn: &str) -> bool {
     })
 }
 
+/// Best-effort cleanup of a node's LEGACY entropy-named siblings, run AFTER its canonical file is
+/// written. Pre-deterministic-slug builds wrote `agent-plan-{tree}-{nn}-{ENTROPY:032X}.md`; the
+/// deterministic slug (`agent-plan-{tree}-{nn}.md`) lands a DIFFERENT filename on a legacy node's
+/// first redraft, so the old entropy file would otherwise survive as a permanent orphan — a
+/// duplicate sub row. This unlinks every sibling of the SAME node and NOTHING else:
+///   - the canonical file itself is excluded by exact name (`{slug}.md` — no `-` + entropy tail);
+///   - a DIFFERENT nn is excluded because the char after `{slug}` must be the `-` separator, so
+///     writing `-02` never matches the dotted child `-02.01-<hex>.md` (`.` ≠ `-`) nor `-0201-…`;
+///   - a DIFFERENT tree_id is excluded because the full tree_id is inside `{slug}`;
+///   - the tail must be EXACTLY the 32-hex `{:032X}` entropy stamp, so a neighboring node whose
+///     canonical name happens to read as hex (e.g. a `-03.md` sub of a dash-bearing tree_id) is
+///     not a 32-char hex string and is left untouched.
+/// Containment: `dir` is the guarded plans dir; entries come from `read_dir(dir)` as bare file
+/// names joined back onto `dir`, so no traversal is possible, and `remove_file` unlinks a symlink
+/// entry itself (never its target). A missing dir or unlink error is a no-op — the canonical write
+/// is load-bearing; this is only cleanup.
+fn sweep_legacy_entropy_siblings(dir: &Path, canonical_slug: &str) {
+    let canonical_name = format!("{canonical_slug}.md");
+    let prefix = format!("{canonical_slug}-");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name == canonical_name {
+            continue;
+        }
+        let Some(rest) = name.strip_prefix(&prefix) else { continue };
+        let Some(hex) = rest.strip_suffix(".md") else { continue };
+        if hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// PURE core of `write_agent_plan`, parameterized on the plans `base` dir so it is unit-testable
 /// against a tempdir (no real `~/.claude/plans/` needed). Decides flavor/tree_id/nn, builds the
 /// frontmatter + body, derives a safe slug, containment-guards the path, and atomically writes.
@@ -144,13 +180,15 @@ pub(crate) fn write_agent_plan_in(
         Some(n) => (tree_id.unwrap_or_else(fresh_tree_id), RawFlavor::Sub, Some(n)),
     };
 
-    // Build a deterministic-where-possible, traversal-free slug. The tree_id is already a safe
-    // token (hex / caller-supplied); we still derive entropy so re-plans never collide on a
-    // filename within the same tree. `nanos_suffix` mirrors `atomic_write`'s temp-name entropy.
-    // The nn part is the dotted id verbatim (`valid_plan_slug` already allows '.').
+    // The slug is a DETERMINISTIC function of (tree_id, nn) — no per-write entropy — so a redraft of
+    // the same node resolves to the SAME path and the atomic temp+rename OVERWRITES it in place. This
+    // makes "two files for one (tree_id, nn) node" unconstructable by design (the redraft-orphan bug):
+    // a node identified by (tree_id, nn) is backed by AT MOST ONE file. `nn: None` (the master) maps
+    // to the reserved `00` part — `valid_dotted_nn` rejects `00` for a sub, so master and sub never
+    // collide. tree_id already disambiguates distinct trees. The nn part is the dotted id verbatim
+    // (`valid_plan_slug` already allows '.').
     let nn_part = resolved_nn.clone().unwrap_or_else(|| "00".to_string());
-    let entropy = nanos_suffix();
-    let raw_slug = format!("agent-plan-{resolved_tree_id}-{nn_part}-{entropy:032X}");
+    let raw_slug = format!("agent-plan-{resolved_tree_id}-{nn_part}");
     // Sanitize to the safe character class (the tree_id could in theory contain a separator if a
     // caller hand-supplied one; replacing keeps the slug a single safe segment). The containment
     // guard below is the load-bearing backstop regardless.
@@ -199,6 +237,13 @@ pub(crate) fn write_agent_plan_in(
     let mut contents = frontmatter;
     contents.push_str(plan);
     atomic_write(&path, contents.as_bytes()).map_err(|e| format!("write failed: {e}"))?;
+
+    // The canonical file is on disk; NOW sweep any legacy entropy-named sibling of this node so the
+    // entropy→deterministic slug migration never leaves a duplicate. Order matters: sweeping AFTER
+    // the canonical write means a crash mid-op never leaves the node with zero files.
+    if let (Some(parent), Some(stem)) = (path.parent(), path.file_stem().and_then(|s| s.to_str())) {
+        sweep_legacy_entropy_siblings(parent, stem);
+    }
 
     Ok(path.to_string_lossy().to_string())
 }
@@ -493,8 +538,8 @@ mod tests {
             .map(str::to_string)
             .expect("stem");
         assert!(
-            stem.contains("-02.01-"),
-            "the slug's nn part must be the dotted id, got {stem:?}"
+            stem.ends_with("-02.01"),
+            "the slug's nn part must be the dotted id (deterministic, no entropy suffix), got {stem:?}"
         );
 
         let _ = std::fs::remove_dir_all(&base);
@@ -638,6 +683,184 @@ mod tests {
                 effort: None,
             }),
         );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// INVARIANT (structural): within a plan tree, a node identified by (tree_id, nn, flavor) is
+    /// backed by AT MOST ONE plan file on disk. Redrafting that node OVERWRITES its file in place —
+    /// it can never mint a SECOND file for the same (tree_id, nn). The filename is a deterministic
+    /// function of (tree_id, nn) with NO per-write entropy, so the second write resolves to the same
+    /// path and the atomic temp+rename overwrites it. Falsifiable: reintroduce a per-write entropy
+    /// suffix in the slug and the redraft lands a distinct filename ⇒ two files for nn:03 ⇒ the
+    /// `same path` and `exactly one file` asserts go RED.
+    #[test]
+    fn write_agent_plan_redraft_overwrites_same_node_file() {
+        let base = unique_dir("wap_redraft");
+        let tree_id = "tree-redraftx-abcd".to_string();
+
+        let first = write_agent_plan_in(
+            Some(base.clone()),
+            "# Draft 1\n\nOriginal body.\n",
+            Some(tree_id.clone()),
+            Some("03".to_string()),
+            None,
+        )
+        .expect("first draft write");
+
+        let second = write_agent_plan_in(
+            Some(base.clone()),
+            "# Draft 2\n\nRedrafted with the extra section.\n",
+            Some(tree_id.clone()),
+            Some("03".to_string()),
+            None,
+        )
+        .expect("redraft write");
+
+        // The redraft must resolve to the SAME path (deterministic, entropy-free filename).
+        assert_eq!(
+            first, second,
+            "a redraft of (tree_id, nn) must resolve to the SAME file path, got {first} vs {second}"
+        );
+
+        // Exactly ONE .md file exists in the base after both writes (no orphaned first draft).
+        let md_files: Vec<String> = std::fs::read_dir(&base)
+            .expect("list base")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".md"))
+            .collect();
+        assert_eq!(
+            md_files.len(),
+            1,
+            "exactly one file may back the single node; found {md_files:?}"
+        );
+
+        // The surviving file holds the SECOND write, not the first.
+        let contents = std::fs::read_to_string(&second).expect("read surviving file");
+        assert!(
+            contents.contains("Redrafted with the extra section."),
+            "the surviving file must hold the redraft body, got:\n{contents}"
+        );
+        assert!(
+            !contents.contains("Original body."),
+            "the superseded original draft body must be gone, got:\n{contents}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Craft the legacy pre-migration on-disk filename for a node: the entropy form
+    /// `agent-plan-{tree}-{nn}-{ENTROPY:032X}.md` that the deterministic slug replaced.
+    fn legacy_entropy_name(tree_id: &str, nn: &str, entropy: u128) -> String {
+        format!("agent-plan-{tree_id}-{nn}-{entropy:032X}.md")
+    }
+
+    /// MIGRATION SWEEP (the redraft-orphan bug across the entropy→deterministic slug change): a
+    /// legacy node file `agent-plan-{tree}-{nn}-{ENTROPY:032X}.md` predates the deterministic slug.
+    /// The FIRST post-change redraft writes the canonical `agent-plan-{tree}-{nn}.md` (a DIFFERENT
+    /// name), so without a sweep the entropy file survives as a permanent orphan ⇒ a duplicate sub
+    /// row. This asserts the invariant "at most ONE plan file per (tree_id, nn) node": after the
+    /// redraft, exactly the canonical file remains, holding the new body; the legacy file is gone.
+    /// Falsifiable: disable the sweep and the legacy file survives ⇒ two files ⇒ RED.
+    #[test]
+    fn write_agent_plan_sweeps_legacy_entropy_sibling_of_same_node() {
+        let base = unique_dir("wap_sweep");
+        let tree_id = "tree-legacyx-abcd";
+
+        // Simulate a pre-migration on-disk file for node nn=03 (old entropy-named form).
+        let legacy = base.join(legacy_entropy_name(tree_id, "03", 0xABCDu128));
+        std::fs::write(&legacy, "---\ntree_id: x\nflavor: sub\nnn: 03\n---\n\n# stale draft\n")
+            .expect("seed legacy entropy file");
+
+        let path = write_agent_plan_in(
+            Some(base.clone()),
+            "# Fresh\n\nRedrafted body.\n",
+            Some(tree_id.to_string()),
+            Some("03".to_string()),
+            None,
+        )
+        .expect("deterministic redraft write");
+
+        // Exactly ONE .md file backs the node now, and it is the canonical (entropy-free) one.
+        let md_files: Vec<String> = std::fs::read_dir(&base)
+            .expect("list base")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".md"))
+            .collect();
+        assert_eq!(
+            md_files.len(),
+            1,
+            "the legacy entropy sibling must be swept, leaving one file; found {md_files:?}"
+        );
+        assert!(!legacy.exists(), "the legacy entropy-named file must be unlinked");
+        assert_eq!(
+            md_files[0],
+            format!("agent-plan-{tree_id}-03.md"),
+            "the surviving file is the canonical deterministic slug"
+        );
+
+        let contents = std::fs::read_to_string(&path).expect("read surviving file");
+        assert!(
+            contents.contains("Redrafted body."),
+            "surviving file holds the redraft body, got:\n{contents}"
+        );
+        assert!(
+            !contents.contains("stale draft"),
+            "the stale legacy body must be gone, got:\n{contents}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// SWEEP PRECISION (must NOT over-delete): the sweep for a node touches ONLY that node's legacy
+    /// entropy siblings. Three non-matches, each with a pre-seeded legacy file that MUST survive a
+    /// write of a neighboring node:
+    ///   (a) writing `02` must NOT touch a DOTTED CHILD `02.01-<hex>.md` (nn boundary: the char
+    ///       after `02` is `.`, not the `-` separator),
+    ///   (b) writing the MASTER `00` must NOT touch a SUB `01-<hex>.md` (and vice-versa),
+    ///   (c) writing a node must NOT touch a same-nn legacy file of a DIFFERENT tree_id.
+    /// Falsifiable: broaden the matcher to a bare `{tree}-{nn}` prefix (dropping the `-` boundary or
+    /// the exact 32-hex anchor) and one of these survivors gets deleted ⇒ RED.
+    #[test]
+    fn write_agent_plan_sweep_does_not_over_delete_neighbors() {
+        let base = unique_dir("wap_sweep_precision");
+        let tree_id = "tree-precisex-0001";
+        let other_tree = "tree-otherx-0002";
+
+        // (a) dotted child of node 02 — legacy entropy form for nn=02.01.
+        let child = base.join(legacy_entropy_name(tree_id, "02.01", 0x1111u128));
+        std::fs::write(&child, "child\n").expect("seed dotted child");
+        // (b) a SUB (nn=01) legacy file that the master write must not sweep.
+        let sub = base.join(legacy_entropy_name(tree_id, "01", 0x2222u128));
+        std::fs::write(&sub, "sub\n").expect("seed sub");
+        // (c) a DIFFERENT tree's node-02 legacy file.
+        let foreign = base.join(legacy_entropy_name(other_tree, "02", 0x3333u128));
+        std::fs::write(&foreign, "foreign\n").expect("seed foreign tree");
+
+        // Writing node 02 of tree_id must leave the dotted child (a) and the foreign tree (c) alone.
+        write_agent_plan_in(
+            Some(base.clone()),
+            "# node 02\n",
+            Some(tree_id.to_string()),
+            Some("02".to_string()),
+            None,
+        )
+        .expect("write node 02");
+        assert!(child.exists(), "dotted child 02.01 must NOT be swept when writing 02");
+        assert!(foreign.exists(), "a different tree's 02 file must NOT be swept");
+
+        // Writing the MASTER (nn=00) must leave the SUB (nn=01) legacy file alone.
+        write_agent_plan_in(
+            Some(base.clone()),
+            "# master\n",
+            Some(tree_id.to_string()),
+            None,
+            None,
+        )
+        .expect("write master");
+        assert!(sub.exists(), "sub 01 must NOT be swept when writing the master 00");
 
         let _ = std::fs::remove_dir_all(&base);
     }

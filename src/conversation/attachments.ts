@@ -51,6 +51,43 @@ const CLASS_BADGE = "conv-attach-badge";
 const CLASS_REMOVE = "conv-attach-remove";
 
 /**
+ * Render an ordered image set as removable thumbnail chips into `container` (replacing its
+ * children). Each chip carries a 1-based positional badge (recomputed each render so a removal
+ * renumbers) and an ✕ button firing `onRemove(idx)` with the chip's CURRENT index. Shared by the
+ * composer tray and the prototype-gate staging strip so both read identically.
+ */
+export function renderAttachmentChips(
+  container: HTMLElement,
+  images: readonly AttachedImage[],
+  onRemove: (idx: number) => void,
+): void {
+  container.replaceChildren();
+  images.forEach((img, idx) => {
+    const chip = document.createElement("div");
+    chip.className = CLASS_CHIP;
+
+    const thumb = document.createElement("img");
+    thumb.className = CLASS_THUMB;
+    thumb.src = `data:${img.media_type};base64,${img.data}`;
+    thumb.alt = "";
+
+    const badge = document.createElement("span");
+    badge.className = CLASS_BADGE;
+    badge.textContent = `#${idx + 1}`;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = CLASS_REMOVE;
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove image #${idx + 1}`);
+    remove.addEventListener("click", () => onRemove(idx));
+
+    chip.append(thumb, badge, remove);
+    container.append(chip);
+  });
+}
+
+/**
  * Wire up an image-attachment controller on a single prompt surface. Returns a handle the
  * caller uses to read/clear images; everything else (validation, chips, removal renumbering)
  * is internal. State is closure-local to this call — two surfaces never share an array.
@@ -80,33 +117,9 @@ export function createImageAttachments(opts: CreateImageAttachmentsOptions): Ima
   }
 
   function render(): void {
-    chipStrip.replaceChildren();
-    images.forEach((img, idx) => {
-      const chip = document.createElement("div");
-      chip.className = CLASS_CHIP;
-
-      const thumb = document.createElement("img");
-      thumb.className = CLASS_THUMB;
-      thumb.src = `data:${img.media_type};base64,${img.data}`;
-      thumb.alt = "";
-
-      // 1-based positional badge — recomputed each render so removal renumbers.
-      const badge = document.createElement("span");
-      badge.className = CLASS_BADGE;
-      badge.textContent = `#${idx + 1}`;
-
-      const remove = document.createElement("button");
-      remove.type = "button";
-      remove.className = CLASS_REMOVE;
-      remove.textContent = "×";
-      remove.setAttribute("aria-label", `Remove image #${idx + 1}`);
-      remove.addEventListener("click", () => {
-        images.splice(idx, 1);
-        render();
-      });
-
-      chip.append(thumb, badge, remove);
-      chipStrip.append(chip);
+    renderAttachmentChips(chipStrip, images, (idx) => {
+      images.splice(idx, 1);
+      render();
     });
   }
 
