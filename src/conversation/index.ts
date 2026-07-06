@@ -406,17 +406,17 @@ export async function initConversation(
           .then((started) => {
             if (started) {
               lastCwd = args.cwd;
-              // COMPOSER FIRST-TURN ECHO (gated on images-present). The orchestrator sends
-              // intentPrompt(request) and never echoes the raw request as a bubble, so without this
-              // there is nothing to attach thumbnails to. When ≥1 image is attached, echo the RAW
-              // `request` (NOT the intentPrompt wrapper) + the display image URLs so the user's
-              // attachments appear in history. GATED on images: a text-only start echoes NO first-turn
-              // bubble, keeping the text-only composer flow byte-identical to today. Echoed only on a
-              // TRUE start (mirroring the in-conversation echo-on-success discipline).
-              if (args.images && args.images.length) {
-                model.appendUserMessage(args.request, imagesToDataUrls(args.images));
-                rerender();
-              }
+              // COMPOSER FIRST-TURN ECHO. The orchestrator sends intentPrompt(request) and never
+              // echoes the raw request as a bubble, so without this the user's own query never
+              // appears in the conversation. Always echo the RAW `request` (NOT the intentPrompt
+              // wrapper) so the typed query is the first visible message; when ≥1 image was
+              // attached, include the display image URLs too. Echoed only on a TRUE start
+              // (mirroring the in-conversation echo-on-success discipline).
+              model.appendUserMessage(
+                args.request,
+                args.images && args.images.length ? imagesToDataUrls(args.images) : undefined,
+              );
+              rerender();
             }
             return started;
           });
