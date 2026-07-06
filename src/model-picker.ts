@@ -1,7 +1,9 @@
 // Model roster: the fixed preset table plus the pure helpers that map between a preset id, its
 // concrete agent options ({model, effort?}), and the UI-facing badge class / friendly name. This
 // module is the single source of truth for the roster; it is UI- and transport-free (the DOM and the
-// orchestrator/Rust/sidecar wiring live elsewhere).
+// orchestrator/Rust/sidecar wiring live elsewhere). Stays a LEAF: `conversation/plan-tree/triage`
+// imports `buildOptions` from here, so importing triage back would form a value cycle that deadlocks
+// vite's module runner (the renderers that need triage live in `./model-bar`).
 
 // The three preset ids, in display order. `as const` makes this the source of
 // truth for both the runtime membership check and the ModelPreset union.
