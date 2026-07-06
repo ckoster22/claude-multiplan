@@ -17,8 +17,10 @@ import { renderDiagrams, destroyControllers } from "./mermaid";
 
 import "highlight.js/styles/github-dark.css";
 
-// Re-export the read-only ToC extraction surface so main.ts (sidebar domain)
-// talks only to this render facade — never to `src/render/toc` directly.
+// Re-export the read-only ToC extraction surface. The ToC DOM-writers `buildToc`/`rebuildTocFromPane`
+// also live in `./toc` but are imported from there DIRECTLY by the composition root (main.ts) rather
+// than re-exported here — unit tests mock this whole facade, so the writers must bypass it to resolve
+// to their real (jsdom-safe) implementations.
 export { extractToc } from "./toc";
 export type { TocEntry } from "./toc";
 

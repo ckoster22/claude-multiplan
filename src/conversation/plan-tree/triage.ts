@@ -5,7 +5,8 @@
 // tag and a short rationale for the UI. PURE: no DOM, no Tauri, no I/O. Depends on `model` (TreeNode
 // / NodeState types) and `model-picker` (`buildOptions` value + `ModelOptions` type-only). The
 // switches are exhaustive + total over the state union (`assertNever` makes a new phase a compile
-// error). `model-picker` imports nothing from plan-tree, so no cycle.
+// error). `model-picker` imports nothing from plan-tree, so no cycle (the reading-pane picker/chip
+// renderers that DO need triage live in `model-bar`, a sink module, not in `model-picker`).
 
 import { buildOptions } from "../../model-picker";
 import type { ModelOptions } from "../../model-picker";
