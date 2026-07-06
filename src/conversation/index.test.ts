@@ -1260,9 +1260,9 @@ describe("render — user bubble renders submitted images as thumbnails", () => 
   });
 });
 
-// Composer first-turn echo: gated on images-present. With images, echo the RAW request +
-// thumbnails; without images, echo NO first-turn bubble (text-only flow stays byte-identical).
-describe("controller — composer first-turn echo is gated on images-present", () => {
+// Composer first-turn echo: always fires on a TRUE start. With images, echo the RAW request +
+// thumbnails; without images, echo the RAW request with zero thumbnails.
+describe("controller — composer first-turn echo always fires on a TRUE start", () => {
   it("starting WITH images echoes a user bubble carrying the RAW request + the image thumbnail", async () => {
     const fake = makeFakeHandle(true);
     __setOrchestratorForTest(fake);
@@ -1297,7 +1297,7 @@ describe("controller — composer first-turn echo is gated on images-present", (
     expect((thumbs[0] as HTMLImageElement).src.startsWith("data:image/png;base64,")).toBe(true);
   });
 
-  it("starting WITHOUT images echoes NO first-turn user bubble (text-only stays unchanged)", async () => {
+  it("starting WITHOUT images echoes the RAW request as a first-turn user bubble with NO thumbnails", async () => {
     const fake = makeFakeHandle(true);
     __setOrchestratorForTest(fake);
     const els = makeEls();
@@ -1306,8 +1306,11 @@ describe("controller — composer first-turn echo is gated on images-present", (
 
     await driveComposerStart(els, handle);
 
-    // FALSIFY: always echo the request on start → a .conv-text-user bubble would appear here → RED.
-    expect(els.stream.querySelector(".conv-text-user")).toBeNull();
+    // FALSIFY: revert the gating to images-only → no bubble appears here → RED.
+    const bubble = els.stream.querySelector(".conv-text-user");
+    expect(bubble).not.toBeNull();
+    expect(bubble!.textContent).toContain("do a thing");
+    expect(bubble!.querySelectorAll("img.conv-user-image")).toHaveLength(0);
   });
 });
 
@@ -1956,9 +1959,14 @@ describe("controller — composer re-enabled after session end + resume-on-send"
     // The typed text is PRESERVED (no clear on failure) so the user can retry by Sending again.
     // FALSIFY: clear the field in the .catch → this expectation is RED.
     expect(els.messageInput.value).toBe("keep going please");
-    // Reverted to "none": the textarea stays typable for the retry, no orphan user bubble was added.
+    // Reverted to "none": the textarea stays typable for the retry, no orphan user bubble was added
+    // for the FAILED resume-send — only the earlier successful start's own echo ("build a thing")
+    // is present.
     expect(els.messageInput.disabled).toBe(false);
-    expect(els.stream.querySelector(".conv-text-user")).toBeNull();
+    const bubbles = els.stream.querySelectorAll(".conv-text-user");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0].textContent).toContain("build a thing");
+    expect(Array.from(bubbles).some((b) => b.textContent?.includes("keep going please"))).toBe(false);
   });
 
   it("LIVE Send whose send_agent_message REJECTS surfaces a non-fatal notice, adds NO user bubble, and restores the field", async () => {
