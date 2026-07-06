@@ -36,6 +36,7 @@ import { optionOverridesFromEnv } from "./env-overrides";
 import { selectEmulatorScenario, makeEmulatorQuery, EMU_BACKOFF_MS, EMU_RESUME_TIMEOUT_MS } from "./emulator";
 import { resolveModelEffort } from "./model-effort";
 import { cliPlanRedirectSettings } from "./cli-plans";
+import { systemPromptOption } from "./policy";
 import { decideStart } from "./session-start";
 import { decideSessionCommand, decideModelCommand, type Session } from "./session-command";
 import { decideResume, resumeOption, RESUME_FALLBACK_REASON, RESUME_TIMEOUT_FALLBACK_REASON } from "./session-resume";
@@ -432,6 +433,7 @@ function buildOptions(start: StartCmd) {
     permissionMode: sdkPermissionMode(start.permissionMode),
     // Explicit for DETERMINISM — never let an SDK bump silently flip the default.
     settingSources: ["user", "project", "local"] as Array<"user" | "project" | "local">,
+    ...systemPromptOption(),
     // APP-OWNED planning sub-agents (intent-clarifier / plan-sizer / scope-recon /
     // devils-advocate-reviewer). Passed programmatically so the multiplan flow no longer
     // depends on the host's global ~/.claude/agents/ and resolves regardless of the target
