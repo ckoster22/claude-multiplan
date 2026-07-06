@@ -1,8 +1,6 @@
-// The plan-flow SINK: opening a plan into the reading pane, live-reloading it, and the plan-review /
-// gate open flows that route through it. Only `main` imports this module (re-exported via the shim);
-// these functions pull the main-resident DOM-handle table (K2) and compose sites (K3) through an
-// injection seam so nothing here reaches back into `./main` — imports stay one-directional
-// (`main → controller → app-state`/leaf; controllers never import `./main`).
+// Opening a plan into the reading pane, live-reloading it, and the plan-review / gate-open flows.
+// A sink module (only `main` imports it); reaches main-resident DOM handles and compose sites through
+// the injected `deps`, never by importing `./main`.
 
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -32,26 +30,19 @@ import {
 } from "./app-state";
 import { asAbsPath, type AbsPath, type PlanRecord, type Stem } from "./types";
 
-// ---- init-injection seam ----------------------------------------------------------------------
-// The main-resident state, DOM handles, and cross-domain entry points the moved plan-flow logic
-// reaches through, supplied once by `main` via `initPlanFlow`. Injected as LIVE GETTER CLOSURES (never
-// by value): `getLoadPlanHistory` in particular reads a main `let` that is assigned ASYNCHRONOUSLY
-// after initPlanFlow runs, so a by-value capture would freeze `null` forever and silently kill history
-// reconstruction. Default to null/no-op closures so a unit test that never calls initPlanFlow still
-// gets well-defined behavior.
+// Injected once by `main` via `initPlanFlow`, as LIVE GETTER CLOSURES not by-value: `getLoadPlanHistory`
+// reads a main `let` assigned asynchronously after initPlanFlow runs, so a by-value capture would freeze
+// `null`. Defaults are null/no-op so a test that never calls initPlanFlow stays well-defined.
 export interface PlanFlowDeps {
-  // Late-bound / shared: read live at the call site, never captured by value.
   getLoadPlanHistory: () => ((stem: Stem) => void) | null;
   getRenderGuard: () => RenderGuard;
   getHookStatusEl: () => HTMLElement | null;
-  // K2 DOM handles (assigned once in DOMContentLoaded; read via getters).
   getReadingPaneEl: () => HTMLElement | null;
   getReaderScrollEl: () => HTMLElement | null;
   getPlanListEl: () => HTMLElement | null;
   getDocHeaderEl: () => HTMLElement | null;
   getDocFilenameEl: () => HTMLElement | null;
   getTocListEl: () => HTMLElement | null;
-  // Main-resident functions the movers call.
   patchDocSrc: () => void;
   markViewed: (path: AbsPath) => Promise<void>;
   refreshList: () => Promise<void>;

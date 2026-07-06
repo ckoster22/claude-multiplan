@@ -22,10 +22,8 @@ export function chainHandler(
   return pending.then(body).catch((e) => console.error("plan-changed handler failed", e));
 }
 
-// ---- init-injection seam ----------------------------------------------------------------------
-// The main-resident reading-pane logic the M4 plan-review handlers reach through, supplied once by
-// `main` via `initIpc`. Default to no-op closures so a unit test that never calls initIpc still gets
-// well-defined behavior.
+// Reading-pane logic the plan-review handlers reach through, injected once by `main` via `initIpc`;
+// defaults are no-op so a test that never calls initIpc stays well-defined.
 export interface IpcDeps {
   openReviewPlanFile: (review: PendingReview) => Promise<void>;
   refreshReviewBar: (countOverride?: number) => void;

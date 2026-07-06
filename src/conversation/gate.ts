@@ -1,17 +1,15 @@
-// The approval-gate observer FACTORY. `main` subscribes the object this returns to the shared
-// orchestrator instance; the six hooks drive the reading-pane tab, sidebar, model bar, and review bar
-// off each transition. To avoid a `conversation ↔ app-state`/`render` runtime cycle this module imports
-// ONLY TYPES (fully erased by tsc — no runtime import edge) and takes every runtime dependency through
-// the injected `deps` object, so nothing here reaches back into `./main`.
+// The approval-gate observer FACTORY. `main` subscribes the returned object to the orchestrator; its
+// hooks drive the reading-pane tab, sidebar, model bar, and review bar off each transition. Imports
+// ONLY TYPES (erased by tsc) and takes runtime deps through `deps`, to avoid a conversation ↔
+// app-state/render runtime cycle.
 
 import type { PlanTreeSnapshot2, PrototypeGate, TreeNode } from "./plan-tree";
 import type { OrchestratorObserver } from "./orchestrator";
 import type { ConversationHandle } from ".";
 import type { Selection } from "../app-state";
 
-// The main-resident state, DOM-bound callbacks, and cross-domain entry points the observer reaches
-// through, supplied by `main` at the compose site. Getters read live main `let`s; setters write main's
-// single-source-of-truth `let`s (`orchSnapshot`, `runPlaceholder`, `selection`) so no copy lives here.
+// State, DOM-bound callbacks, and cross-domain entry points supplied by `main`. Getters/setters read
+// and write main's single-source-of-truth `let`s (orchSnapshot, runPlaceholder, selection) — no copy here.
 export interface GateObserverDeps {
   setOrchSnapshot: (snap: PlanTreeSnapshot2 | null) => void;
   getConversationHandle: () => ConversationHandle | null;
@@ -35,8 +33,7 @@ export interface GateObserverDeps {
 }
 
 export function createGateObserver(deps: GateObserverDeps): OrchestratorObserver {
-  // The badge live-update guard — observer-private (only these six hooks read/write it), so it lives
-  // here as a factory-local rather than a main `let`.
+  // Observer-private badge guard (only these hooks touch it), so it lives as a factory-local, not a main `let`.
   let lastBadgeSig: string | null = null;
 
   return {
@@ -143,20 +140,16 @@ export function createGateObserver(deps: GateObserverDeps): OrchestratorObserver
     },
     onDone: () => {
       deps.setOrchSnapshot(null);
-      // The run is over — no gate can be blocking on the user; drop the idle-waiting hint.
       deps.getConversationHandle()?.setIdleWaitingHint(false);
       // The gate is gone — discard any captures still staged on it (never leak into the next run).
       deps.clearStagedGateCaptures();
-      // Run finished: the placeholder's run is over (its real rows exist by now or never will).
       deps.setRunPlaceholder(null);
       // If the placeholder was the active selection, fall back to the empty pane (a real plan/sentinel
       // the user opened mid-run is left untouched — selection only collapses from the placeholder).
       if (deps.getSelection().k === "placeholder") deps.setSelection({ k: "none" });
       lastBadgeSig = null; // the tree is gone — the next run re-initializes the signature
       deps.applyFilterAndRender();
-      // The picker is a live-tree concept — the run ended, so hide it.
       deps.renderModelBar();
-      // The run ended — the header chip has no active session to report; hide it.
       deps.renderModelChip();
       // The run ended: re-derive BOTH affordances. The open plan may now be RESUMABLE (the run was
       // suppressing detectResumable via isOrchestrationActive) — refreshAffordances re-evaluates the
@@ -165,11 +158,9 @@ export function createGateObserver(deps: GateObserverDeps): OrchestratorObserver
     },
     onFatal: () => {
       deps.setOrchSnapshot(null);
-      // Fatal teardown: no gate survives it — drop the idle-waiting hint (same as onDone).
       deps.getConversationHandle()?.setIdleWaitingHint(false);
       // The gate is gone — discard any captures still staged on it (never leak into the next run).
       deps.clearStagedGateCaptures();
-      // Fatal teardown: same placeholder clear as onDone.
       deps.setRunPlaceholder(null);
       if (deps.getSelection().k === "placeholder") deps.setSelection({ k: "none" });
       lastBadgeSig = null;

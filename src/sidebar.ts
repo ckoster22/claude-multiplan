@@ -23,12 +23,9 @@ import { resolveNodeByNnPath } from "./conversation/plan-tree";
 import { nodeExecutionModel } from "./conversation/plan-tree/triage";
 import { filterRecords, planCountText, highlightInto } from "./filter";
 
-// ---- reading-pane callback injection seam -------------------------------------------------------
-// makeSidebarCtx wires two cross-domain reading-pane callbacks into the SidebarCtx — opening a plan and
-// flipping to the Conversation tab — both of which live in `main` (plan-flow / conversation domain).
-// `main` supplies them once via initSidebar so the sidebar never imports `./main`; the two domains stay
-// disjoint (they converge only at the composition root). Default no-op closures keep unit tests that
-// never call initSidebar well-defined.
+// Two cross-domain reading-pane callbacks (open a plan, flip to the Conversation tab) supplied by `main`
+// via initSidebar, so the sidebar never imports `./main` and the two domains stay disjoint. Defaults are
+// no-op so a test that never calls initSidebar stays well-defined.
 let openPlanCb: (path: AbsPath, stem: Stem) => void = () => {};
 let switchToConversationTabCb: () => void = () => {};
 
@@ -373,9 +370,6 @@ function buildMaster(rec: PlanRecord, ctx: SidebarCtx): { wrapper: HTMLElement; 
 // `nn_path` prefixes with a prefix-keyed stack: a sub whose nn_path extends the top frame's
 // nn_path by exactly one segment nests inside it; otherwise frames pop until its parent prefix
 // matches. The stack carries SubTreeNodes (not DOM) so "internal" = actually-accumulated kids.
-// Reads the shared selection / collapseOverride / subCollapse + the cwd subsystem + the injected
-// DOM handles; the sidebar and reading-pane domains never import each other (CLAUDE.md keeps them
-// disjoint), so they converge only at the composition root.
 export function renderSidebar(listEl: HTMLElement, records: PlanRecord[], ctx: SidebarCtx): void {
   listEl.replaceChildren();
 

@@ -1,11 +1,8 @@
-// Reading-pane execution-model UI: the "Execution model" picker bar, the conversation-header model
-// chip, and the sidebar's per-node badge signature. Split OUT of `./model-picker` (the pure roster
-// leaf) on purpose: these renderers need `conversation/plan-tree/triage` (nodeExecutionModel /
-// phaseModel), and `triage` imports `buildOptions` FROM `./model-picker` — so keeping them in
-// `model-picker` would form a triage ↔ model-picker VALUE cycle that deadlocks vite's module runner.
-// This module is a SINK (only `main` imports it), so pulling in the heavy triage/orchestrator/app-state
-// graph here closes no cycle. DOM handles / the orchestrator snapshot are reached through the
-// `./app-state` injection seam (never `./main`).
+// Reading-pane execution-model UI (the picker bar, the conversation-header model chip, the sidebar's
+// per-node badge signature). Split out of `./model-picker` because these renderers need
+// `conversation/plan-tree/triage`, which itself imports `buildOptions` from `./model-picker` — keeping
+// them there would form a triage ↔ model-picker value cycle that deadlocks vite's module runner. A sink
+// module; DOM handles / orchestrator snapshot come through the `./app-state` seam.
 
 import {
   MODEL_PRESETS,

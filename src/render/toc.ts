@@ -11,16 +11,14 @@
 // attribute, so it never becomes a second writer of `#reading-pane` and never
 // creates positionally-stale keys across live reloads.
 //
-// `buildToc`/`rebuildTocFromPane` are the DOM-writing half: they populate `#toc-list` from a
-// `TocEntry[]`. They reach the frozen reading-pane / ToC DOM handles through this module's OWN
-// injection seam (`initToc`, supplied once by `main`) rather than `../app-state`: the render facade
-// re-exports this module, so importing `app-state` here would close a src/render ↔ app-state module
-// cycle (app-state's conversation deps import back into src/render) that DEADLOCKS vite's module
-// runner. Depending only on the leaf `./scroll` keeps this module cycle-free.
+// `buildToc`/`rebuildTocFromPane` are the DOM-writing half. They reach the reading-pane / ToC handles
+// through this module's OWN injection seam (`initToc`) rather than `../app-state`: the render facade
+// re-exports this module, so importing app-state here would close a src/render ↔ app-state module cycle
+// that deadlocks vite's module runner.
 
 import { scrollToHeading } from "./scroll";
 
-// ---- init-injection seam (supplied once by main; default null-yielding for unit tests) ----------
+// Injected once by `main`; defaults null-yielding for unit tests.
 let getTocListEl: () => HTMLElement | null = () => null;
 let getReadingPaneEl: () => HTMLElement | null = () => null;
 let getReaderScrollEl: () => HTMLElement | null = () => null;

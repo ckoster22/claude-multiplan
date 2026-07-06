@@ -1,13 +1,7 @@
-// The shared UI-state spine: the reading-pane selection, the pending-review set, the live-run
-// placeholder, the derived gate accessors, and the staged prototype-gate captures. Owned here so the
-// domain controllers (plans 02–04) can mutate it WITHOUT importing `./main` — imports stay
-// one-directional (`main → controller`, `controller → app-state`); nothing here reaches back to
-// `./main`.
-//
-// Three helpers are NOT pure — they read main-resident sources (the `orchSnapshot` let, the
-// `conversationHandle`, and the frozen `#prototype-attachments` DOM handle). Rather than thread those
-// through every call site, `main` injects lazy getter closures once via `initAppState(...)`; the
-// closures capture the live `let`s, so injection can precede those assignments.
+// Shared UI-state spine (selection, pending reviews, live-run placeholder, gate accessors, staged
+// prototype captures). Domain controllers mutate it without importing `./main`, so imports stay
+// one-directional. Three non-pure helpers read main-resident sources (orchSnapshot, conversationHandle,
+// the `#prototype-attachments` handle) through getter closures injected once via `initAppState`.
 
 import {
   isOrchestrationActive,
@@ -22,12 +16,8 @@ import type { AttachedImage } from "./conversation/images";
 import { asAbsPath, type AbsPath, type PlanRecord } from "./types";
 import type { ConversationHandle } from "./conversation";
 
-// ---- init-injection seam ----------------------------------------------------------------------
-// The non-pure sources this module (and the sidebar-side domain controllers that read through it)
-// consult, supplied once by `main` via `initAppState`. Default to null/empty-yielding closures so a
-// unit test that never calls initAppState still gets well-defined behavior. The DOM-handle getters
-// back the public accessors below: a moved controller reaches a main-resident `let`/DOM handle through
-// these injected getters, never by importing `./main`.
+// Injected once by `main` via `initAppState`; defaults are null/empty-yielding so a test that never
+// calls initAppState stays well-defined.
 let getOrchSnapshot: () => PlanTreeSnapshot2 | null = () => null;
 let getConversationHandle: () => ConversationHandle | null = () => null;
 let getPrototypeAttachmentsEl: () => HTMLElement | null = () => null;
@@ -80,12 +70,6 @@ export function initAppState(deps: AppStateDeps): void {
   getToastEl = deps.toastEl;
 }
 
-// Public accessors over the injected sources. The sidebar-side controllers (resume-banner, sidebar,
-// model-picker, render/toc) import these instead of reaching into `./main`.
-//   • currentRecords / orchSnapshot — the two shared stores owned/written in `main` but read by the
-//     moved sidebar + model-picker helpers.
-//   • the DOM-handle accessors — the frozen reading-pane / sidebar element handles those controllers
-//     mutate, resolved live so a not-yet-assigned handle reads null under unit tests.
 export function currentRecords(): PlanRecord[] {
   return getRecords();
 }
@@ -253,13 +237,10 @@ export function activeAcceptanceGate(): AcceptanceGate | null {
 }
 
 // ---- PendingSurface[]: the unified set of "things awaiting the user" -------------------------
-// One typed surface per "thing awaiting the user" so the SUMMARY count and the Resume target derive
-// from the same source:
+// One typed surface each, so the SUMMARY count and the Resume target derive from the same source:
 //   • external / in-process — tracked pendingReviews (held hooks / canUseTool seams).
 //   • orchestrator-gate     — the live run's held ApprovalGate2 (NOT in pendingReviews).
 //   • prototype / acceptance — the live run's held visual/forced-acceptance gates.
-// The builder (pendingSurfaces) lives in `main` (it reads the orchSnapshot + gate accessors); this is
-// the shared type both the count site and the Resume path (plan-flow.resumeNewestReview) consume.
 export type PendingSurface =
   | { kind: "external" | "in-process"; review: PendingReview }
   | { kind: "orchestrator-gate"; gate: ApprovalGate2 }

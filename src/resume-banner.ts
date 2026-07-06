@@ -75,14 +75,9 @@ export function computeAffordance(signals: {
   return "none";
 }
 
-// ---- Synthetic "resume" sidebar rows ------------------------------------------------
-//
-// `list_plans` synthesizes a `PlanRecord` for a mid-decompose plan-tree that has NO real plan `.md`
-// file yet, so the tree is still visible + its resume banner reachable. The row carries a SENTINEL
-// `absolute_path` of the form `plan-tree-resume://<tree_id>` — there is NO file behind it. Anything
-// that would `invoke` `read_plan_contents` / `set_open_plan` / `mark_viewed` against the path MUST
-// guard on this predicate first (the Rust commands reject a sentinel — canonicalize fails on the
-// scheme string).
+// Synthetic "resume" sidebar rows carry a sentinel `absolute_path` (`plan-tree-resume://<tree_id>`)
+// with no file behind it. Any read_plan_contents / set_open_plan / mark_viewed call MUST guard on
+// isResumeSentinel first (the Rust commands reject a sentinel — canonicalize fails on the scheme string).
 
 // True iff `path` is a synthetic-row sentinel (no real `.md` file behind it).
 export function isResumeSentinel(path: string): boolean {
@@ -406,16 +401,12 @@ export async function detectResumable(rec: PlanRecord): Promise<ResumeVerdict | 
   }
 }
 
-// Resume context for the currently-rendered resumable banner; null when hidden / blocked. Set by
-// renderResumeBanner when a resumable verdict paints, cleared on hide / blocked / success. Owned here
-// (a module `let`) rather than in `main` because a controller cannot write a main-resident `let`
-// through the read-only injection getters; `resumeFromBanner`/`executeResume` in `main` read it back
-// via getPendingResume().
+// Resume context for the currently-rendered resumable banner (null when hidden / blocked). Owned here
+// rather than in `main` because a controller cannot write a main-resident `let` through the read-only
+// injection getters; `resumeFromBanner`/`executeResume` read it back via getPendingResume().
 let pendingResume: { cwd: string; ledger: RecursiveLedger; requiresConfirm: boolean; hazard: string | null } | null =
   null;
 
-// The resume context stashed by the last resumable render (or null). Read by the staying
-// resumeFromBanner/executeResume in `main`.
 export function getPendingResume(): {
   cwd: string;
   ledger: RecursiveLedger;

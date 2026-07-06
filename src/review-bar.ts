@@ -18,10 +18,8 @@ import { RenderGuard } from "./render-guard";
 import type { PrototypeGate } from "./conversation/orchestrator";
 import type { AbsPath, CommentRecord } from "./types";
 
-// ---- init-injection seam ----------------------------------------------------------------------
-// The main-resident sources the moved review-bar logic reaches through, supplied once by `main` via
-// `initReviewBar`. Default to no-op closures so a unit test that never calls initReviewBar still gets
-// well-defined behavior (behavior-identical to today's `!reviewBarEl` early-return before DOM wiring).
+// Injected once by `main` via `initReviewBar`; defaults are no-op so a test that never calls it stays
+// well-defined (behavior-identical to today's `!reviewBarEl` early-return before DOM wiring).
 let getRefreshReviewBar: (countOverride?: number) => void = () => {};
 let getRefreshAffordances: () => void = () => {};
 let getRenderGuard: () => RenderGuard = () => new RenderGuard();
