@@ -1311,4 +1311,44 @@ describe("orchestrator — #8 turn watchdog re-armed on quota resume", () => {
     expect(o.fatal[0]).toContain("parent-review");
     expect(h.orchestrationActive()).toBe(false);
   });
+
+  it("exec turn: the resume-armed watchdog is a SILENCE timer — streaming frames re-arm it (no FATAL across a multi-minute resumed execution); pure silence fires exactly one FATAL", async () => {
+    const { h, rec, clock, o } = await freshAtIntent();
+    await advanceIntentToRecon(h);
+    await advanceReconToSizer(h);
+    await advanceSizerToChildRecon(h);
+    await advanceChildReconToDraft(h);
+    await advanceDraftToExec(h); // the exec turn for [01] is in flight
+
+    // The resume re-arms the captured exec turn AND its 120s watchdog (exec has no normal-flow watchdog;
+    // resume is the only site that arms one).
+    await quotaWallAndResume(h, rec, clock);
+    const armedAtResume = live(rec).find((t) => t.ms === 120_000);
+    expect(armedAtResume).toBeDefined();
+
+    // A resumed leaf execution legitimately streams file-editing activity for many minutes — past 120s
+    // TOTAL. Each frame proving it is alive must RE-ARM the silence window, never accumulate toward a
+    // total-duration cap. FALSIFY (verified): drop the exec re-arm and `armedAtResume` survives every
+    // frame — firing it FATALs a healthy execution → the alive-while-streaming assertions below go RED.
+    const livenessFrames: AgentStream[] = [
+      { seq: nextSeq(), kind: "status", label: "editing…" },
+      { seq: nextSeq(), kind: "tool_use", id: "e1", tool: "Edit", input: {}, parent_tool_use_id: null },
+      { seq: nextSeq(), kind: "tool_result", tool_use_id: "e1", content: "ok", is_error: false, parent_tool_use_id: null },
+      { seq: nextSeq(), kind: "subagent_started", tool_use_id: "e2", subagent_type: "x", description: null, prompt: null },
+      textFrame("still implementing…"),
+    ];
+    for (const f of livenessFrames) await h.ingestStream(f);
+    expect(armedAtResume!.cleared).toBe(true);
+    expect(live(rec).filter((t) => t.ms === 120_000)).toHaveLength(1);
+    expect(o.fatal).toHaveLength(0);
+    expect(h.orchestrationActive()).toBe(true);
+
+    // SILENCE past the window (no further frames): the live timer fires → exactly one terminal FATAL.
+    live(rec).find((t) => t.ms === 120_000)!.fn();
+    await flush();
+    expect(o.fatal).toHaveLength(1);
+    expect(o.fatal[0]).toMatch(/watchdog/i);
+    expect(o.fatal[0]).toContain("exec");
+    expect(h.orchestrationActive()).toBe(false);
+  });
 });

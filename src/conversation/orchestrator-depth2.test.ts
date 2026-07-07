@@ -338,11 +338,12 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
 
     // RESUMING-ARMING SITES: exactly the TWO decomposition approvals armed a RESUMING (30s)
     // watchdog. FALSIFY: arm resuming at any summary/roll-up hop → a third 30s timer appears → RED.
-    // (summary and parent-review turns arm their own 120s turn watchdogs — 4 summary turns
-    // [01, 02.01, 02.02, the 02 roll-up] + 2 review turns [root after 01, 02 after 02.01] — all
-    // cleared by their consumed results; none live at the end.)
+    // The 120s turn watchdogs are SILENCE timers: 6 turns arm one at turn start — 4 summary turns
+    // [01, 02.01, 02.02, the 02 roll-up] + 2 review turns [root after 01, 02 after 02.01] — and each
+    // re-arms once on its single streaming text frame (arm + one re-arm = 2 per turn ⇒ 12), all
+    // cleared by their consumed results; none live at the end.
     expect(rec.resumingTimers()).toHaveLength(2);
-    expect(rec.timers.filter((t) => t.ms === 120_000)).toHaveLength(6);
+    expect(rec.timers.filter((t) => t.ms === 120_000)).toHaveLength(12);
     expect(rec.liveTimers()).toBe(0);
 
     // the summary FILES: every node contributed exactly one summary

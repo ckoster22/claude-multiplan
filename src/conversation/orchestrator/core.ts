@@ -902,7 +902,10 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
   // awaiting variants (ONE constant for both). These are REAL generation turns, not interrupt-bounded
   // boundary waits, so the window is wider than RESUME_RESULT_TIMEOUT_MS — but still finite and LOUD:
   // their prompts forbid tools, yet that is prompt-only (the sidecar backstop auto-allows Task/
-  // read-Bash), so an errant tool call could otherwise stall the turn silently forever.
+  // read-Bash), so an errant tool call could otherwise stall the turn silently forever. The window
+  // measures SILENCE, not total duration: every stream frame proving the turn is alive RE-ARMS it (the
+  // liveness reset in ingestStreamImpl), so a healthy-but-slow turn that keeps streaming never trips it
+  // — only 120s of dead air does.
   const TURN_RESULT_TIMEOUT_MS = 120_000;
 
   // THE INTENT-TURN TIMEOUT. The intent turn previously had NO watchdog
@@ -965,6 +968,31 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         });
       });
     }, timeoutMs);
+  };
+
+  // The single tag→(label, keyed path) mapping for every watchdogged generation turn: intent keys on
+  // the ROOT genesis (no per-node path), parent-review on `parentPath`, the rest on `path`. `idle` and
+  // `resuming` are not generation turns (no turn watchdog) ⇒ null. Both the resume re-arm and the
+  // per-frame liveness re-arm derive their arm here so the two cannot drift.
+  const turnWatchdogArm = (
+    a: Awaiting,
+  ): { label: "summary" | "parent-review" | "intent" | "recon" | "sizer" | "exec"; forPath: NodePath } | null => {
+    switch (a.tag) {
+      case "intent":
+        return { label: "intent", forPath: [] };
+      case "recon":
+        return { label: "recon", forPath: a.path };
+      case "sizer":
+        return { label: "sizer", forPath: a.path };
+      case "exec":
+        return { label: "exec", forPath: a.path };
+      case "summary":
+        return { label: "summary", forPath: a.path };
+      case "parent-review":
+        return { label: "parent-review", forPath: a.parentPath };
+      default:
+        return null;
+    }
   };
 
   // Arm the RESUMING hold: the next step (recon for `nextPath`) is DEFERRED until the in-flight
@@ -1166,13 +1194,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // compares against awaiting.parentPath — so a root-keyed arm is inert for a non-root parent-review.
     // INVARIANT[watchdog-rearmed-per-tag-on-resume] (runtime-guard): on quota resume the watchdog is re-armed per awaited generation tag (parent-review→parentPath, intent→[], summary/recon/sizer/exec→path).
     //   prevents: a silently-stuck resumed turn (including the sidecar silent-resume wedge on recon/sizer/exec) hanging the run with no terminal
-    const rearmed = pause.awaitingVariant;
-    if (rearmed.tag === "summary") armTurnWatchdog("summary", rearmed.path);
-    else if (rearmed.tag === "parent-review") armTurnWatchdog("parent-review", rearmed.parentPath);
-    else if (rearmed.tag === "intent") armTurnWatchdog("intent", []);
-    else if (rearmed.tag === "recon") armTurnWatchdog("recon", rearmed.path);
-    else if (rearmed.tag === "sizer") armTurnWatchdog("sizer", rearmed.path);
-    else if (rearmed.tag === "exec") armTurnWatchdog("exec", rearmed.path);
+    const rearmedArm = turnWatchdogArm(pause.awaitingVariant);
+    if (rearmedArm) armTurnWatchdog(rearmedArm.label, rearmedArm.forPath);
     const capturedPath =
       "path" in pause.awaitingVariant
         ? (pause.awaitingVariant.path as NodePath)
@@ -1231,14 +1254,15 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       diag("ingestStreamImpl: SWALLOWED by !active guard (terminal)");
       return;
     }
-    // INTENT-WATCHDOG LIVENESS RESET: the intent watchdog measures SILENCE, not total turn duration —
-    // a long prototype build (clarifier writing HTML + screenshots, streaming throughout) must not
-    // FATAL at 300s. Any frame proving the intent turn is alive re-arms the per-silence window. The
-    // `turnWatchdog !== null` guard preserves the AskUserQuestion PAUSE: a held clarify cleared the
-    // timer, and liveness frames during the hold must NOT re-arm it — answerClarify alone owns the
-    // resume. The `result` frame is excluded: the intent branch below consumes it and disarms.
+    // TURN-WATCHDOG LIVENESS RESET: every generation-turn watchdog measures SILENCE, not total turn
+    // duration — a turn that legitimately streams past its window (a prototype build, or a multi-minute
+    // leaf execution) must not FATAL while it is provably alive. Any frame proving the turn is alive
+    // re-arms the per-silence window with the CURRENT turn's label, so each turn keeps its own timeout
+    // constant. The `turnWatchdog !== null` guard preserves the AskUserQuestion PAUSE (only reachable on
+    // intent): a held clarify cleared the timer, and liveness frames during the hold must NOT re-arm it —
+    // answerClarify alone owns the resume. The `result` frame is excluded: the sequencer below consumes
+    // it and disarms.
     if (
-      run.awaiting.tag === "intent" &&
       run.turnWatchdog !== null &&
       (frame.kind === "assistant_text" ||
         frame.kind === "tool_use" ||
@@ -1246,7 +1270,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         frame.kind === "status" ||
         frame.kind === "subagent_started")
     ) {
-      armTurnWatchdog("intent", []);
+      const arm = turnWatchdogArm(run.awaiting);
+      if (arm) armTurnWatchdog(arm.label, arm.forPath);
     }
     if (frame.kind === "system_init") {
       // RESUME-SUPPORT SESSION CAPTURE: the SDK announced this conversation's session_id. Capture it

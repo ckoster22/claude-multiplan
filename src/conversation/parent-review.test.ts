@@ -42,7 +42,7 @@ import {
   type TreeNode,
   type PlanTreeFilePath,
 } from "./plan-tree";
-import type { AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
+import type { AgentStream, AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
 
 const nnOf = (n: number) => parseNn(n);
 const p = (...ns: number[]): NodePath => ns.map(nnOf);
@@ -649,6 +649,90 @@ describe("PHASE 5 — turn watchdog for the summary and parent-review variants",
     expect(fatals).toHaveLength(1);
     expect(fatals[0]).toContain("turn watchdog");
     expect(fatals[0]).toContain("summary");
+    expect(h.orchestrationActive()).toBe(false);
+  });
+
+  // The five stream kinds that PROVE a turn is still generating (assistant_text/tool_use/tool_result/
+  // status/subagent_started). Each must re-arm the silence window; `result` is excluded (it is the
+  // boundary the sequencer consumes).
+  const livenessFrames = (): AgentStream[] => [
+    { seq: ++seq, kind: "status", label: "thinking…" },
+    { seq: ++seq, kind: "tool_use", id: "kt1", tool: "Read", input: {}, parent_tool_use_id: null },
+    { seq: ++seq, kind: "tool_result", tool_use_id: "kt1", content: "ok", is_error: false, parent_tool_use_id: null },
+    { seq: ++seq, kind: "subagent_started", tool_use_id: "kt2", subagent_type: "x", description: null, prompt: null },
+    { seq: ++seq, kind: "status", label: "still working…" },
+  ];
+
+  it("the summary watchdog measures SILENCE, not total duration: streaming frames re-arm the 120s window (no FATAL across a long summary turn); pure silence still fires", async () => {
+    const rec = makeDeps();
+    const h = createOrchestrator(rec.deps);
+    const fatals: string[] = [];
+    h.subscribe({ onFatal: (m) => fatals.push(m) });
+    await driveToRootGate(h, THREE_WAY);
+    await h.approve("");
+    await h.ingestStream(resultFrame());
+    await h.ingestStream(textFrame("01 recon"));
+    await h.ingestStream(resultFrame());
+    await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
+    await h.ingestStream(resultFrame());
+    await h.ingestPermission(exitPlanModeReq("leaf-01-tu", "01 plan"));
+    await h.approve("01");
+    await h.ingestStream(resultFrame()); // exec completion → summary prompt + summary watchdog
+
+    const live = () => rec.liveTimers();
+    expect(live()).toHaveLength(1);
+    expect(live()[0].ms).toBe(120_000);
+    const armedAtStart = live()[0];
+
+    // A healthy summary turn that legitimately streams longer than 120s TOTAL: each frame re-arms a
+    // fresh 120s-of-SILENCE window. FALSIFY (verified): with the re-arm absent for the summary tag,
+    // `armedAtStart` stays live across all frames and firing it FATALs a turn that streamed the whole
+    // time → the alive-while-streaming assertions below go RED.
+    for (const f of livenessFrames()) await h.ingestStream(f);
+    expect(armedAtStart.cleared).toBe(true);
+    expect(live()).toHaveLength(1);
+    expect(live()[0].ms).toBe(120_000);
+    expect(fatals).toHaveLength(0);
+    expect(h.orchestrationActive()).toBe(true);
+
+    // SILENCE > the window (no further frames): the live timer fires → loud terminal FATAL.
+    live()[0].fn();
+    for (let i = 0; i < 16; i++) await Promise.resolve();
+    expect(fatals).toHaveLength(1);
+    expect(fatals[0]).toContain("turn watchdog");
+    expect(fatals[0]).toContain("summary");
+    expect(h.orchestrationActive()).toBe(false);
+  });
+
+  it("the parent-review watchdog measures SILENCE, not total duration: streaming frames re-arm the 120s window (no FATAL across a long review turn); pure silence still fires", async () => {
+    const rec = makeDeps();
+    const h = createOrchestrator(rec.deps);
+    const fatals: string[] = [];
+    h.subscribe({ onFatal: (m) => fatals.push(m) });
+    await driveToRootGate(h, THREE_WAY);
+    await h.approve("");
+    await h.ingestStream(resultFrame());
+    await runLeaf(h, "01", "S1"); // → the parent-review turn is in flight, its watchdog armed
+
+    const live = () => rec.liveTimers();
+    expect(live()).toHaveLength(1);
+    expect(live()[0].ms).toBe(120_000);
+    const armedAtStart = live()[0];
+
+    // FALSIFY (verified): with the re-arm absent for the parent-review tag, `armedAtStart` survives
+    // every liveness frame and its fire FATALs a turn that streamed throughout → RED below.
+    for (const f of livenessFrames()) await h.ingestStream(f);
+    expect(armedAtStart.cleared).toBe(true);
+    expect(live()).toHaveLength(1);
+    expect(live()[0].ms).toBe(120_000);
+    expect(fatals).toHaveLength(0);
+    expect(h.orchestrationActive()).toBe(true);
+
+    live()[0].fn();
+    for (let i = 0; i < 16; i++) await Promise.resolve();
+    expect(fatals).toHaveLength(1);
+    expect(fatals[0]).toContain("turn watchdog");
+    expect(fatals[0]).toContain("parent-review");
     expect(h.orchestrationActive()).toBe(false);
   });
 

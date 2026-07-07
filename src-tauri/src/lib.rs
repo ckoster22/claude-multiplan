@@ -1,18 +1,18 @@
 // Tauri shell, plan list & live file-watch.
 //
-// This app never writes into `~/.claude/plans/`, so the plans watcher never fires
-// on our own writes. The cwd_spike example and all build artifacts live in the
-// repo, not the plans dir.
-//
-// The app adds exactly TWO write surfaces under `~/.claude/` (both OUTSIDE `plans/`):
-//   (a) `~/.claude/plan-reader/**` — self-owned headless-review state (requests/, responses/,
+// The app's write surfaces under `~/.claude/`:
+//   (a) `~/.claude/plans/` — its own agent-produced plans, via `write_agent_plan` (atomic
+//       temp-write + rename, containment-guarded to the plans dir). So the plans watcher CAN
+//       fire on our own writes.
+//   (b) `~/.claude/plan-reader/**` — self-owned headless-review state (requests/, responses/,
 //       app.alive heartbeat, hook.sh). Writes are atomic (temp-write + rename) and
 //       containment-guarded (`guarded_path_in` canonicalizes the parent, rejecting any id that
 //       would escape requests/ or responses/).
-//   (b) `~/.claude/settings.json` — a SINGLE idempotent, additive merge (`merge_install_hook`
+//   (c) `~/.claude/settings.json` — a SINGLE idempotent, additive merge (`merge_install_hook`
 //       / `merge_uninstall_hook`) that touches only our `ExitPlanMode` PreToolUse entry and
 //       preserves every other key/element untouched.
-// The app still NEVER writes into `plans/`.
+// The app still NEVER writes into `~/.claude/projects/` — that tree is read-only, used only
+// for cwd resolution.
 
 use std::sync::Mutex;
 
@@ -105,6 +105,12 @@ pub fn run() {
             // Heartbeat thread — touches app.alive every 5s so the hook knows we are
             // live (a missed beat just makes the hook fall through, the safe failure mode).
             control::spawn_heartbeat();
+
+            // Create the plans dir BEFORE binding the watcher: a fresh install has no
+            // `~/.claude/plans/` until the first plan write, which happens AFTER start_watcher,
+            // so binding to a missing dir would leave the (non-recursive) watcher permanently
+            // blind.
+            watcher::ensure_plans_dir(paths::plans_dir());
 
             // Keep the debouncer alive for the lifetime of the app by stashing it in
             // managed state. Dropping it would stop the watch thread.

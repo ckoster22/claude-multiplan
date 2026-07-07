@@ -1,6 +1,7 @@
 // The plans-dir debounced watcher: emit `plan-changed` for any `*.md` create/modify/remove.
 // notify has no Rename variant, so atomic saves surface as modify/remove/create.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use notify_debouncer_full::new_debouncer;
@@ -20,6 +21,17 @@ pub(crate) fn event_kind_label(kind: &EventKind) -> &'static str {
         EventKind::Any => "any",
         EventKind::Other => "other",
     }
+}
+
+/// Create the plans dir so `start_watcher` can bind to it on a cold start. A fresh install has
+/// no `~/.claude/plans/` until the first plan write — and that write happens AFTER
+/// `start_watcher`, so binding to a missing dir would leave the watcher permanently blind (the
+/// non-recursive watch never re-attaches when the dir later appears). Best-effort; returns
+/// whether the dir exists afterward.
+pub(crate) fn ensure_plans_dir(dir: Option<PathBuf>) -> bool {
+    let Some(dir) = dir else { return false };
+    let _ = std::fs::create_dir_all(&dir);
+    dir.is_dir()
 }
 
 /// Start the debounced watcher on the plans dir (non-recursive). Emits `plan-changed`
@@ -104,4 +116,39 @@ pub(crate) fn start_watcher(app: tauri::AppHandle) -> Option<impl Sized> {
     }
 
     Some(debouncer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A fresh install has no `~/.claude/plans/`. The startup prep step must create it so the
+    /// watcher binds successfully. Falsifiable: drop the `create_dir_all` in `ensure_plans_dir`
+    /// and this goes red, because the dir stays absent.
+    #[test]
+    fn ensure_plans_dir_creates_a_missing_plans_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "plan_reader_ensure_plans_{}_{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let plans = base.join(".claude").join("plans");
+        assert!(!plans.exists(), "precondition: plans dir must not exist yet");
+
+        let exists_after = ensure_plans_dir(Some(plans.clone()));
+
+        assert!(exists_after, "ensure_plans_dir must report the dir exists");
+        assert!(plans.is_dir(), "plans dir must exist after ensure_plans_dir");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn ensure_plans_dir_is_false_when_home_is_unlocatable() {
+        assert!(!ensure_plans_dir(None));
+    }
 }
