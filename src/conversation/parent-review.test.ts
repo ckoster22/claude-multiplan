@@ -71,10 +71,7 @@ function blank2(): PlanTreeState2 {
       state: { stage: "open", phase: "clarifying-intent" },
       execution_model: null,
     },
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: null,
     parsedChildren: null,
   };
 }

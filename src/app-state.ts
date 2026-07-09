@@ -5,6 +5,7 @@
 
 import {
   isOrchestrationActive,
+  approvalGateOf,
   type ApprovalGate2,
   type PrototypeGate,
   type AcceptanceGate,
@@ -217,21 +218,21 @@ export function setRunPlaceholder(next: { treeId: string; label: string } | null
 // decomposition AND leaf gates. Routing by gate.kind happens inside the orchestrator, not here.
 export function viewingGate(): ApprovalGate2 | null {
   if (!isOrchestrationActive()) return null;
-  const gate = getOrchSnapshot()?.pendingApproval ?? null;
+  const gate = approvalGateOf(getOrchSnapshot());
   if (!gate) return null;
   return openPath() === asAbsPath(gate.planPath) ? gate : null;
 }
 
 // The held PrototypeGate driving the bar's PROTOTYPE mode, or null. Derived strictly from the
-// orchestrator snapshot (self-clears when pendingPrototype is nulled). Precedence: pendingApproval
-// outranks this; this outranks pendingReviews.
+// orchestrator snapshot (self-clears when pendingGate is nulled/replaced). Yields non-null only
+// when the single held gate is of kind "prototype".
 export function activePrototypeGate(): PrototypeGate | null {
   return prototypeGateActive(getOrchSnapshot(), isOrchestrationActive());
 }
 
 // The held AcceptanceGate driving the bar's ACCEPTANCE mode, or null. Derived strictly from the
-// orchestrator snapshot (self-clears when pendingAcceptance is nulled). Precedence: pendingApproval
-// and pendingPrototype both outrank it.
+// orchestrator snapshot (self-clears when pendingGate is nulled/replaced). Yields non-null only
+// when the single held gate is of kind "acceptance".
 export function activeAcceptanceGate(): AcceptanceGate | null {
   return acceptanceGateActive(getOrchSnapshot(), isOrchestrationActive());
 }

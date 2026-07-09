@@ -24,6 +24,10 @@ import {
   inAcceptanceWindow,
   rehydrateState2,
   PlanValidationError,
+  approvalGateOf,
+  clarifyGateOf,
+  prototypeGateOf,
+  acceptanceGateOf,
 } from "./plan-tree";
 import type {
   PlanTreeState2,
@@ -70,10 +74,7 @@ function blank2(): PlanTreeState2 {
       state: { stage: "open", phase: "clarifying-intent" },
       execution_model: null,
     },
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: null,
     parsedChildren: null,
   };
 }
@@ -157,8 +158,7 @@ describe("gen-2 intent-clarification phase", () => {
     // Mutation: seed the root at open/recon → RED.
     expect(s.root.state).toEqual({ stage: "open", phase: "clarifying-intent" });
     expect(s.tree_id).toBe("t2");
-    expect(s.pendingApproval).toBeNull();
-    expect(s.pendingClarify).toBeNull();
+    expect(s.pendingGate).toBeNull();
     expect(s.parsedChildren).toBeNull();
     expect(() => assertCoherent2(s.root)).not.toThrow();
     // The in-flight root IS the active node (path []).
@@ -199,10 +199,10 @@ describe("gen-2 intent-clarification phase", () => {
     const s = genesisIntent2();
     const req = reduce2(s, { type: "CLARIFY_REQUESTED", toolUseId: "q-1", questions: [] });
     expect(req.state.root.state).toEqual({ stage: "open", phase: "clarifying-intent" });
-    expect(req.state.pendingClarify).toEqual({ toolUseId: "q-1", questions: [] });
+    expect(clarifyGateOf(req.state)).toEqual({ toolUseId: "q-1", questions: [] });
 
     const ans = reduce2(req.state, { type: "CLARIFY_ANSWERED", toolUseId: "q-1", answers: { Q: "A" } });
-    expect(ans.state.pendingClarify).toBeNull();
+    expect(ans.state.pendingGate).toBeNull();
     expect(ans.state.root.state).toEqual({ stage: "open", phase: "clarifying-intent" });
     expect(ans.effects).toContainEqual({
       kind: "resolvePermission",
@@ -210,6 +210,47 @@ describe("gen-2 intent-clarification phase", () => {
       allow: true,
       message: JSON.stringify({ answers: { Q: "A" } }),
     });
+  });
+
+  it("CLARIFY_REQUESTED throws if a non-clarify gate is already held (defense-in-depth)", () => {
+    // Reach a state holding a leaf approval gate (pendingGate = approval).
+    let s = splitToFirstChild(1);
+    s = reduce2(s, { type: "NODE_RECON_DONE", path: p(1) }).state;
+    s = reduce2(s, { type: "SIZER_DONE", path: p(1), outcome: sizer("single", 1, 0.9) }).state;
+    const held = reduce2(s, {
+      type: "NODE_DRAFTED",
+      path: p(1),
+      toolUseId: "tu1",
+      planPath: "/p.md",
+      plansDirPath: "/d",
+    }).state;
+    expect(held.pendingGate?.kind).toBe("approval");
+    // A CLARIFY raised while another gate is held must fail loudly rather than silently clobber it.
+    // Mutation: drop the pendingGate guard in CLARIFY_REQUESTED → no throw → RED.
+    expect(() =>
+      reduce2(held, { type: "CLARIFY_REQUESTED", toolUseId: "q-9", questions: [] }),
+    ).toThrow(/CLARIFY_REQUESTED illegal/);
+  });
+
+  it("CLARIFY_ANSWERED throws if the held gate is not a clarify gate (defense-in-depth)", () => {
+    // Reach a state holding a leaf approval gate (pendingGate = approval), same fixture as the
+    // sibling CLARIFY_REQUESTED guard test above.
+    let s = splitToFirstChild(1);
+    s = reduce2(s, { type: "NODE_RECON_DONE", path: p(1) }).state;
+    s = reduce2(s, { type: "SIZER_DONE", path: p(1), outcome: sizer("single", 1, 0.9) }).state;
+    const held = reduce2(s, {
+      type: "NODE_DRAFTED",
+      path: p(1),
+      toolUseId: "tu1",
+      planPath: "/p.md",
+      plansDirPath: "/d",
+    }).state;
+    expect(held.pendingGate?.kind).toBe("approval");
+    // Answering a CLARIFY while a non-clarify gate is held must fail loudly rather than silently
+    // clear the held approval gate. Mutation: drop the guard in CLARIFY_ANSWERED → no throw → RED.
+    expect(() =>
+      reduce2(held, { type: "CLARIFY_ANSWERED", toolUseId: "q-9", answers: {} }),
+    ).toThrow(/CLARIFY_ANSWERED illegal/);
   });
 });
 
@@ -230,8 +271,8 @@ describe("gen-2 prototype-review gate", () => {
     const out = reduce2(genesisIntent2(), { type: "PROTOTYPE_READY", gate: protoGate() });
     // Mutation: leave the root at clarifying-intent → RED.
     expect(out.state.root.state).toEqual({ stage: "open", phase: "prototype-review" });
-    // The gate is held TRANSIENTLY (pendingPrototype) — never on the tree.
-    expect(out.state.pendingPrototype).toEqual(protoGate());
+    // The gate is held TRANSIENTLY (pendingGate) — never on the tree.
+    expect(out.state.pendingGate).toEqual({ kind: "prototype", gate: protoGate() });
     // FALSIFIED: dropping the notifyPrototypeReview effect push turns
     // the kinds pin RED. Notify rides with persist (gate surfaced + ledger saved).
     expect(out.effects).toContainEqual({ kind: "notifyPrototypeReview", gate: protoGate() });
@@ -269,7 +310,7 @@ describe("gen-2 prototype-review gate", () => {
     });
     // Mutation: route approval back to clarifying-intent (or leave prototype-review) → RED.
     expect(out.state.root.state).toEqual({ stage: "open", phase: "recon" });
-    expect(out.state.pendingPrototype).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     // The INTENT.md write mirrors INTENT_CLARIFIED's effect shape byte-for-byte.
     expect(out.effects).toEqual([
       { kind: "writePlanTreeFile", name: "INTENT.md", contents: "intent + approved prototype" },
@@ -294,7 +335,7 @@ describe("gen-2 prototype-review gate", () => {
     });
     // The recon hop + INTENT.md write + gate clear are IDENTICAL to the sketch path.
     expect(out.state.root.state).toEqual({ stage: "open", phase: "recon" });
-    expect(out.state.pendingPrototype).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     expect(out.effects).toEqual([
       { kind: "writePlanTreeFile", name: "INTENT.md", contents: "intent + working reference" },
       { kind: "persist" },
@@ -341,12 +382,12 @@ describe("gen-2 prototype-review gate", () => {
     const out = reduce2(reviewing, { type: "PROTOTYPE_REFINED", feedback: "make it denser" });
     // Mutation: advance to recon on refine → RED (refine LOOPS, never advances).
     expect(out.state.root.state).toEqual({ stage: "open", phase: "clarifying-intent" });
-    expect(out.state.pendingPrototype).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     // The feedback is DRIVER prompt material: no write, no notify — persist only.
     expect(out.effects.map((e) => e.kind)).toEqual(["persist"]);
     // The loop is re-enterable: a fresh PROTOTYPE_READY (next round) is legal again.
     const again = reduce2(out.state, { type: "PROTOTYPE_READY", gate: protoGate(1) });
-    expect(again.state.pendingPrototype?.round).toBe(1);
+    expect(prototypeGateOf(again.state)?.round).toBe(1);
   });
 
   it("PROTOTYPE_REFINED throws outside prototype-review", () => {
@@ -358,12 +399,12 @@ describe("gen-2 prototype-review gate", () => {
     );
   });
 
-  it("the snapshot carries pendingPrototype; the LEDGER never does (no resume-from-disk)", () => {
+  it("the snapshot carries pendingGate; the LEDGER never does (no resume-from-disk)", () => {
     const reviewing = reduce2(genesisIntent2(), { type: "PROTOTYPE_READY", gate: protoGate() }).state;
     const snap = toSnapshot2(reviewing);
-    // Mutation: drop pendingPrototype from toSnapshot2 → undefined here → RED.
-    expect(snap.pendingPrototype).toEqual(protoGate());
-    // FALSIFIED: adding pendingPrototype to toLedger2's return object
+    // Mutation: drop pendingGate from toSnapshot2 → undefined here → RED.
+    expect(snap.pendingGate).toEqual({ kind: "prototype", gate: protoGate() });
+    // FALSIFIED: adding pendingGate to toLedger2's return object
     // turns this exact key-set pin RED.
     const ledger = toLedger2(reviewing);
     // sdk_session_id (resume support), baseline_ (working reference), and acceptance_ (Phase 5 —
@@ -380,8 +421,7 @@ describe("gen-2 prototype-review gate", () => {
       "tree_id",
       "updated_ms",
     ]);
-    expect("pendingPrototype" in ledger).toBe(false);
-    expect("pendingAcceptance" in ledger).toBe(false);
+    expect("pendingGate" in ledger).toBe(false);
   });
 
   it("INTENT_CLARIFIED is the unchanged no-prototype fallback (clarifying-intent → recon, INTENT.md)", () => {
@@ -440,7 +480,7 @@ describe("gen-2 single-collapse run", () => {
     expect(c.title).toBe("Plan");
     expect(c.state).toEqual({ stage: "open", phase: "recon" });
     // No decomposition gate was ever set — the collapse materializes the child immediately.
-    expect(s.pendingApproval).toBeNull();
+    expect(s.pendingGate).toBeNull();
     expect(s.parsedChildren).toBeNull();
   });
 
@@ -739,7 +779,7 @@ describe("gen-2 unified decomposition gate", () => {
     });
   }
 
-  it("DECOMPOSITION_DRAFTED sets the ROOT gate in pendingApproval (kind decomposition) and notifies", () => {
+  it("DECOMPOSITION_DRAFTED sets the ROOT gate in pendingGate (approval/decomposition) and notifies", () => {
     const out = drafted();
     expect(out.state.root.state).toEqual({ stage: "open", phase: "awaiting-decomposition-approval" });
     const expected: ApprovalGate2 = {
@@ -750,9 +790,9 @@ describe("gen-2 unified decomposition gate", () => {
       plansDirPath: "/plans/master.md",
       redraftCount: 0,
     };
-    // FALSIFIED (unified root gate): omitting the pendingApproval assignment in
+    // FALSIFIED (unified root gate): omitting the pendingGate assignment in
     // DECOMPOSITION_DRAFTED turns this RED.
-    expect(out.state.pendingApproval).toEqual(expected);
+    expect(out.state.pendingGate).toEqual({ kind: "approval", gate: expected });
     expect(out.effects).toContainEqual({ kind: "notifyAwaitingApproval", gate: expected });
     expect(out.effects.map((e) => e.kind)).toEqual(["persist", "notifyAwaitingApproval"]);
   });
@@ -768,7 +808,7 @@ describe("gen-2 unified decomposition gate", () => {
       ],
     }).state;
     const out = reduce2(s, { type: "DECOMPOSITION_APPROVED", path: [] });
-    expect(out.state.pendingApproval).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     expect(out.state.parsedChildren).toBeNull();
     // Mirror of the gen-1 APPROVE effect shape: resolve-allow then persist, nothing else.
     expect(out.effects.map((e) => e.kind)).toEqual(["resolvePermission", "persist"]);
@@ -795,7 +835,7 @@ describe("gen-2 unified decomposition gate", () => {
     expect(out.state.root.state).toEqual({ stage: "open", phase: "decomposing" });
     expect(out.state.root.redraftCount).toBe(1);
     expect(out.state.root.lastFeedback).toBe("split differently");
-    expect(out.state.pendingApproval).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     expect(out.effects.map((e) => e.kind)).toEqual(["resolvePermission", "persist"]);
     expect(out.effects).toContainEqual({
       kind: "resolvePermission",
@@ -812,7 +852,7 @@ describe("gen-2 unified decomposition gate", () => {
       plansDirPath: "/plans/master.md",
       toolUseId: "m2",
     });
-    expect(redraft.state.pendingApproval?.redraftCount).toBe(1);
+    expect(approvalGateOf(redraft.state)?.redraftCount).toBe(1);
   });
 
   it("a stale CHILDREN_PARSED from a rejected draft is discarded (changes-requested clears the stash)", () => {
@@ -855,7 +895,7 @@ describe("gen-2 leaf REQUEST_CHANGES", () => {
     expect(child(after, 1).redraftCount).toBe(redraftBefore + 1);
     expect(child(after, 1).lastFeedback).toBe("tighten scope");
     // Gate cleared and a deny resolution emitted with the feedback.
-    expect(after.pendingApproval).toBeNull();
+    expect(after.pendingGate).toBeNull();
     expect(out.effects).toContainEqual({
       kind: "resolvePermission",
       id: "tu1",
@@ -891,7 +931,7 @@ describe("gen-2 APPROVE legality", () => {
       plansDirPath: "/d",
       redraftCount: 0,
     };
-    expect(draftedOut.state.pendingApproval).toEqual(expectedGate);
+    expect(draftedOut.state.pendingGate).toEqual({ kind: "approval", gate: expectedGate });
     expect(draftedOut.effects).toContainEqual({ kind: "notifyAwaitingApproval", gate: expectedGate });
     // The drafted paths land on the leaf state. Mutation: drop the planPath record → RED.
     expect(leafState(child(draftedOut.state, 1)).planPath).toBe("/p.md");
@@ -899,7 +939,7 @@ describe("gen-2 APPROVE legality", () => {
 
     const ok = reduce2(draftedOut.state, { type: "APPROVE", path: p(1) });
     expect(leafState(child(ok.state, 1)).phase).toBe("executing");
-    expect(ok.state.pendingApproval).toBeNull();
+    expect(ok.state.pendingGate).toBeNull();
     // EXACTLY resolve-allow + persist — APPROVE emits NO setMode effect: the writable mode is the
     // DERIVED policy (writePolicyFor2 flips off the `executing` leaf). Mutation: add a setMode-like
     // effect → the exact kinds list goes RED.
@@ -1056,8 +1096,8 @@ describe("gen-2 forced acceptance gate", () => {
     expect(inAcceptanceWindow(out.state.root)).toBe(true);
     expect(treeIsDone(out.state.root)).toBe(false);
     // The transient gate is held; the snapshot surfaces it.
-    expect(out.state.pendingAcceptance).not.toBeNull();
-    expect(toSnapshot2(out.state).pendingAcceptance).not.toBeNull();
+    expect(acceptanceGateOf(out.state)).not.toBeNull();
+    expect(acceptanceGateOf(toSnapshot2(out.state))).not.toBeNull();
     // assertCoherent2 holds in the parked shape (it ran inside reduce2 already, but pin it).
     expect(() => assertCoherent2(out.state.root)).not.toThrow();
     // No verdict recorded yet.
@@ -1074,7 +1114,7 @@ describe("gen-2 forced acceptance gate", () => {
     const kinds = out.effects.map((e) => e.kind);
     expect(kinds).toContain("notifyDone");
     expect(kinds).not.toContain("notifyAcceptanceReview");
-    expect(out.state.pendingAcceptance).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     expect(out.state.root.state.phase).toBe("summarized");
     expect(treeIsDone(out.state.root)).toBe(true);
     expect(out.state.acceptance_).toBeUndefined();
@@ -1091,7 +1131,7 @@ describe("gen-2 forced acceptance gate", () => {
     expect(treeIsDone(out.state.root)).toBe(true);
     expect(out.effects.map((e) => e.kind)).toEqual(["persist", "notifyDone"]);
     // The gate clears; the verdict is recorded (no reason on approve).
-    expect(out.state.pendingAcceptance).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     expect(out.state.acceptance_).toEqual({ verdict: "approved", decided_ms: 9001 });
     // FALSIFY: drop the finalize (leave the root running-children) → treeIsDone false / notifyDone
     // missing → RED.
@@ -1106,7 +1146,7 @@ describe("gen-2 forced acceptance gate", () => {
     });
     expect(out.state.root.state.phase).toBe("summarized");
     expect(treeIsDone(out.state.root)).toBe(true);
-    expect(out.state.pendingAcceptance).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     // The reason is a serializable field recorded on acceptance_.
     expect(out.state.acceptance_).toEqual({
       verdict: "diverged",
@@ -1131,7 +1171,7 @@ describe("gen-2 forced acceptance gate", () => {
     s = cycleChild(s, 1).state;
     s = reduce2(s, { type: "PARENT_REVIEW_DONE", path: [], note: null }).state;
     s = cycleChild(s, 2).state;
-    expect(s.pendingAcceptance).toBeNull();
+    expect(s.pendingGate).toBeNull();
     expect(() => reduce2(s, { type: "ACCEPTANCE_APPROVED", decidedMs: 1 })).toThrow(
       /no acceptance gate is open/,
     );
@@ -1203,7 +1243,7 @@ describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
   }
 
   // Drive a baseline-bearing N-child split to the gate ARMED (root parked in the acceptance window,
-  // pendingAcceptance held). Each child runs recon→sizer(single)→draft→approve→exec→summary, with a
+  // acceptance pendingGate held). Each child runs recon→sizer(single)→draft→approve→exec→summary, with a
   // parent review between siblings (the real arc).
   function driveBaselineSplitToGate(n: number): PlanTreeState2 {
     const children = Array.from({ length: n }, (_, i) => ({ nn: nnOf(i + 1), title: `Sub ${i + 1}` }));
@@ -1232,7 +1272,7 @@ describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
     // (active); 03 (right sibling) → pending.
     const parked = driveBaselineSplitToGate(3);
     expect(inAcceptanceWindow(parked.root)).toBe(true);
-    expect(parked.pendingAcceptance).not.toBeNull();
+    expect(acceptanceGateOf(parked)).not.toBeNull();
 
     const out = reduce2(parked, { type: "ACCEPTANCE_REFINED", target: p(2) });
 
@@ -1249,7 +1289,7 @@ describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
     // The active node is now the target (re-execution resumes there).
     expect(activePathOf(out.state.root)).toEqual(p(2));
     // The gate is CLEARED (back to executing) and NO verdict was recorded.
-    expect(out.state.pendingAcceptance).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     expect(out.state.acceptance_).toBeUndefined();
     // The baseline is STILL present (a refine never drops it — the gate must re-arm on re-completion).
     expect(out.state.baseline_).toEqual({ frozen: true, frozen_ms: 7777 });
@@ -1402,7 +1442,7 @@ describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
     expect(() => assertCoherent2(last.root)).not.toThrow();
   });
 
-  it("after refine, the reset nodes re-execute and on root re-completion the acceptance gate RE-ARMS (pendingAcceptance set again, notifyDone STILL withheld)", () => {
+  it("after refine, the reset nodes re-execute and on root re-completion the acceptance gate RE-ARMS (acceptance pendingGate set again, notifyDone STILL withheld)", () => {
     const parked = driveBaselineSplitToGate(3);
     let s = reduce2(parked, { type: "ACCEPTANCE_REFINED", target: p(2) }).state;
     // refine before any verdict leaves the tree NOT done.
@@ -1417,7 +1457,7 @@ describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
     // re-arm → notifyDone fires here instead → these go RED.
     expect(kinds).toContain("notifyAcceptanceReview");
     expect(kinds).not.toContain("notifyDone");
-    expect(out.state.pendingAcceptance).not.toBeNull();
+    expect(acceptanceGateOf(out.state)).not.toBeNull();
     expect(inAcceptanceWindow(out.state.root)).toBe(true);
     expect(treeIsDone(out.state.root)).toBe(false);
     // No verdict was ever recorded across the refine + re-run.
@@ -1434,7 +1474,7 @@ describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
     s = cycleChild(s, 1).state;
     s = reduce2(s, { type: "PARENT_REVIEW_DONE", path: [], note: null }).state;
     s = cycleChild(s, 2).state;
-    expect(s.pendingAcceptance).toBeNull();
+    expect(s.pendingGate).toBeNull();
     expect(() => reduce2(s, { type: "ACCEPTANCE_REFINED", target: p(1) })).toThrow(
       /no acceptance gate is open/,
     );
@@ -1454,7 +1494,7 @@ describe("gen-2 forced-acceptance refine (re-plan) branch", () => {
     reduce2(parked, { type: "ACCEPTANCE_REFINED", target: p(1) });
     expect(JSON.stringify(toLedger2(parked))).toBe(before);
     // The transient gate on the INPUT is likewise untouched.
-    expect(parked.pendingAcceptance).not.toBeNull();
+    expect(acceptanceGateOf(parked)).not.toBeNull();
   });
 });
 
@@ -1551,7 +1591,7 @@ describe("gen-2 projections / persisted shape", () => {
       { type: "SIZER_DONE", path: p(1), outcome: sizer("single", 1, 0.9) },
       { type: "NODE_DRAFTED", path: p(1), toolUseId: "tu1", planPath: "/p1.md", plansDirPath: "/d1" },
     ]).state;
-    expect(s.pendingApproval).not.toBeNull();
+    expect(approvalGateOf(s)).not.toBeNull();
 
     const ledger = toLedger2(s);
     // THE PERSISTED SHAPE PIN: schema 2 is {schema, tree_id, created_ms, updated_ms, root,
@@ -1560,7 +1600,7 @@ describe("gen-2 projections / persisted shape", () => {
     // baseline_ the additive working-reference field; acceptance_ the Phase-5 additive
     // acceptance-verdict field; auto_resume_ the additive quota auto-resume budget — all undefined
     // here, omitted by JSON.stringify.)
-    // Mutation: leak pendingApproval/pendingAcceptance (or a pointer field) into toLedger2 → RED.
+    // Mutation: leak pendingGate (or a pointer field) into toLedger2 → RED.
     expect(Object.keys(ledger).sort()).toEqual([
       "acceptance_",
       "auto_resume_",
@@ -1587,8 +1627,8 @@ describe("gen-2 projections / persisted shape", () => {
     ]);
 
     const snap = toSnapshot2(s);
-    expect(snap.pendingApproval).toEqual(s.pendingApproval);
-    expect(snap.pendingClarify).toBeNull();
+    expect(approvalGateOf(snap)).toEqual(approvalGateOf(s));
+    expect(clarifyGateOf(snap)).toBeNull();
     expect(snap.activePath).toEqual(p(1));
     expect(snap.writePolicy).toBe("plan");
     expect(snap.done).toBe(false);
@@ -1806,9 +1846,9 @@ describe("gen-2 CLARIFY_ANSWERED", () => {
     const sample = { q1: "yes", q2: ["a", "b"] };
 
     const noGate = genesis2();
-    expect(noGate.pendingClarify).toBeNull();
+    expect(noGate.pendingGate).toBeNull();
     const a = reduce2(noGate, { type: "CLARIFY_ANSWERED", toolUseId: "q-x", answers: sample });
-    expect(a.state.pendingClarify).toBeNull();
+    expect(a.state.pendingGate).toBeNull();
     expect(a.effects).toContainEqual({
       kind: "resolvePermission",
       id: "q-x",
@@ -1816,9 +1856,12 @@ describe("gen-2 CLARIFY_ANSWERED", () => {
       message: JSON.stringify({ answers: sample }),
     });
 
-    const gated: PlanTreeState2 = { ...genesis2(), pendingClarify: { toolUseId: "gate-tu", questions: [] } };
+    const gated: PlanTreeState2 = {
+      ...genesis2(),
+      pendingGate: { kind: "clarify", gate: { toolUseId: "gate-tu", questions: [] } },
+    };
     const b = reduce2(gated, { type: "CLARIFY_ANSWERED", toolUseId: "evt-other", answers: sample });
-    expect(b.state.pendingClarify).toBeNull();
+    expect(b.state.pendingGate).toBeNull();
     expect(b.effects).toContainEqual({
       kind: "resolvePermission",
       id: "gate-tu",
@@ -2011,8 +2054,7 @@ describe("gen-2 SESSION_INITIALIZED (sdk_session_id self-persist)", () => {
     const out = reduce2(before, { type: "SESSION_INITIALIZED", sessionId: "sess-abc" });
     expect(out.state.root).toEqual(before.root);
     expect(activePathOf(out.state.root)).toEqual(activePathOf(before.root));
-    expect(out.state.pendingApproval).toBe(before.pendingApproval);
-    expect(out.state.pendingClarify).toBe(before.pendingClarify);
+    expect(out.state.pendingGate).toBe(before.pendingGate);
   });
 
   it("an old state.json with the field ABSENT deserializes (additive, schema stays 2)", () => {

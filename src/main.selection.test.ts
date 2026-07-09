@@ -252,8 +252,8 @@ describe("selection collapse closes the ghost pane", () => {
     bootDom();
     await flush();
 
-    // Align the selection to the gate plan + fan a held approval gate for it (pendingApproval.planPath
-    // = GATE, active). VIEWING in-process: #review-approve visible.
+    // Align the selection to the gate plan + fan a held approval gate for it (the approval gate's
+    // planPath = GATE, active). VIEWING in-process: #review-approve visible.
     __setOpenPathForMock(GATE);
     emitApprovalGate(GATE);
     await flush();

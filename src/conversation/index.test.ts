@@ -768,7 +768,7 @@ describe("controller — setIdleWaitingHint shows WAITING_INPUT_LABEL while idle
     await flush();
     expect(workingEl(els.stream)).toBeNull();
 
-    // The prototype gate appears (main.ts sees pendingPrototype in the snapshot) → hint ON.
+    // The prototype gate appears (main.ts sees the prototype gate in the snapshot) → hint ON.
     // FALSIFY: invert the idle-hint check in rerender (`!idleWaitingHint`) → no indicator → RED.
     handle.setIdleWaitingHint(true);
     await flush();
@@ -776,7 +776,7 @@ describe("controller — setIdleWaitingHint shows WAITING_INPUT_LABEL while idle
     expect(workingLabel(els.stream)).toBe(WAITING_INPUT_LABEL);
     expect(els.stream.querySelectorAll(".conv-working")).toHaveLength(1);
 
-    // The gate resolves (approve/refine nulls pendingPrototype) → hint OFF → normal idle (hidden).
+    // The gate resolves (approve/refine clears the prototype gate) → hint OFF → normal idle (hidden).
     handle.setIdleWaitingHint(false);
     await flush();
     expect(workingEl(els.stream)).toBeNull();

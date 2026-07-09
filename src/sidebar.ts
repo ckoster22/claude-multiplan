@@ -19,7 +19,7 @@ import {
 import { isResumeSentinel } from "./resume-banner";
 import { planSrcText } from "./cwd";
 import { presetClassForModel, friendlyModelName, type ModelOptions } from "./model-picker";
-import { resolveNodeByNnPath } from "./conversation/plan-tree";
+import { resolveNodeByNnPath, approvalGateOf } from "./conversation/plan-tree";
 import { nodeExecutionModel } from "./conversation/plan-tree/triage";
 import { filterRecords, planCountText, highlightInto } from "./filter";
 
@@ -529,7 +529,7 @@ function makeSidebarCtx(): SidebarCtx {
   // may have found no row to mark `.active`, so the placeholder stands in as the active row
   // (renderSidebar omits it once the row exists, at which point that row carries `.active` via
   // ctx.openPath instead).
-  const gate = orchSnapshot()?.pendingApproval ?? null;
+  const gate = approvalGateOf(orchSnapshot());
   const standsInForOpenGatePlan = gate != null && openPath() === asAbsPath(gate.planPath);
   const ph = getRunPlaceholder();
   return {

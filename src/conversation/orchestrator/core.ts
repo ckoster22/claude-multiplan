@@ -22,6 +22,9 @@ import {
   reduce2,
   toLedger2,
   toSnapshot2,
+  approvalGateOf,
+  prototypeGateOf,
+  acceptanceGateOf,
   parseSizerDecision,
   parseNn,
   PlanValidationError,
@@ -346,7 +349,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // a title-only Mandate from the tree.
     mandates: Map<PathKey, Mandate>;
     // toolUseId -> the AskUserQuestion's questions (retained for the CLARIFY_ANSWERED updatedInput
-    // reshape; the reducer nulls pendingClarify before the effect runs, so state can't supply them).
+    // reshape; the reducer clears the clarify gate (pendingGate) before the effect runs, so state can't supply them).
     clarifyQuestions: Map<string, AskUserQuestionItem[]>;
     // The confirmed intent (the intent-clarifier's final message), threaded into recon + decomposition-
     // draft. null when no/empty intent was confirmed (those prompts stay byte-identical pre-feature).
@@ -643,15 +646,15 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // the gate — so when the reducer still emits a resolvePermission for the gate's id, drop it
         // rather than call a dead resolver. The allow-side policy invalidation + held-id clear are
         // preserved. Real ids never carry this prefix, so the NON-resumed path is untouched.
-        // INVARIANT[at-most-one-pending-gate] (runtime-guard): a re-presented disk gate carries a synthetic `resumed:` id (the live resolver died with the prior process); this short-circuit drops its resolvePermission rather than calling the dead sidecar resolver.
+        // INVARIANT[resumed-gate-permission-short-circuit] (runtime-guard): a re-presented disk gate carries a synthetic `resumed:` id (the live resolver died with the prior process); this short-circuit drops its resolvePermission rather than calling the dead sidecar resolver.
         //   prevents: resolving a dead synthetic id against the sidecar
         if (eff.id.startsWith("resumed:")) {
           if (run.heldPermissionId === eff.id) run.heldPermissionId = null;
           if (eff.allow) run.assertedPolicy = null;
           return;
         }
-        // CLARIFY_ANSWERED reshape: the reducer can only carry the answers (it nulls pendingClarify
-        // before this effect runs). For a known clarify id, rebuild the SDK's expected
+        // CLARIFY_ANSWERED reshape: the reducer can only carry the answers (it clears the clarify gate
+        // (pendingGate) before this effect runs). For a known clarify id, rebuild the SDK's expected
         // updatedInput:{questions, answers} from the driver-retained questions + the answers parsed
         // from the reducer's JSON message, and DROP the raw message.
         if (run.clarifyQuestions.has(eff.id)) {
@@ -702,8 +705,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         // THE FORCED ACCEPTANCE GATE. The reducer parked the root in its acceptance window
         // (no notifyDone yet) and emitted this with a gate whose display fields it could not know
         // (cwd/openTarget/runCommand — driver concerns). AUGMENT the gate with the run's cwd + baseline
-        // open target, then (a) PATCH it back into state.pendingAcceptance so the next emitted snapshot
-        // carries it (the UI binds to the snapshot — self-clearing, like pendingPrototype), (b) fan it
+        // open target, then (a) PATCH it back into state.pendingGate (kind "acceptance") so the next emitted snapshot
+        // carries it (the UI binds to the snapshot — self-clearing, like the prototype gate), (b) fan it
         // to observers, and (c) best-effort OPEN the baseline. Like the prototype gate there is no
         // heldPermissionId — it resolves by an explicit user action, so cancel purges nothing.
         const openTarget = eff.gate.openTarget ?? "index.html";
@@ -713,8 +716,8 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           openTarget,
           runCommand: eff.gate.runCommand,
         };
-        if (state && state.pendingAcceptance) {
-          state = { ...state, pendingAcceptance: augmented };
+        if (state && state.pendingGate?.kind === "acceptance") {
+          state = { ...state, pendingGate: { kind: "acceptance", gate: augmented } };
         }
         for (const o of observers) o.onAcceptanceReview?.(augmented);
         if (deps.openBaseline && openTarget !== null) {
@@ -821,13 +824,12 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           title: "",
           redraftCount: 0,
           lastFeedback: null,
+          execution_model: null,
           state: { stage: "open", phase: "clarifying-intent" },
         },
-        pendingApproval: null,
-        pendingClarify: null,
-        pendingAcceptance: null,
+        pendingGate: null,
         parsedChildren: null,
-      } as PlanTreeState2);
+      });
     const { state: next, effects } = reduce2(base, event);
     state = next;
     for (const eff of effects) {
@@ -1616,7 +1618,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           const nextPath = activePath();
           if (nextPath !== null) {
             const nextNode = nodeAtPath(state.root, nextPath);
-            if (nextPath.length === 0 && state.pendingAcceptance) {
+            if (nextPath.length === 0 && state.pendingGate?.kind === "acceptance") {
               // THE FORCED ACCEPTANCE GATE held. The reducer parked the ROOT in its
               // acceptance window instead of finalizing, and emitted notifyAcceptanceReview. The root
               // is NOT done yet there is NO turn to send — the user must record a verdict
@@ -1785,7 +1787,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           // the two dispatches to preserve the gen-1 wire order: writeAgentPlan → state.json (children) →
           // plan file → state.json (gate) → onAwaitingApproval.
           await deps.writePlanTreeFile(run.cwd, planName2(path), plan);
-          // THE UNIFIED GATE: DECOMPOSITION_DRAFTED sets pendingApproval (kind "decomposition") and
+          // THE UNIFIED GATE: DECOMPOSITION_DRAFTED sets pendingGate (kind "approval", gate kind "decomposition") and
           // emits notifyAwaitingApproval — the reducer owns the gate surface now (no driver-side
           // sentinel, no masterToolUseId).
           await dispatch({
@@ -1923,7 +1925,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
 
   // Continue from the resolved ResumePlan. Mirrors the live phase boundaries:
   //   - "gate": re-present the held approval gate PURELY from disk (no tokens). Build an in-memory
-  //     ApprovalGate2 from the on-disk artifact, set state.pendingApproval directly (NOT via the
+  //     ApprovalGate2 from the on-disk artifact, set state.pendingGate (kind "approval") directly (NOT via the
   //     reducer — there is no DRAFTED event to replay), set heldPermissionId to the synthetic id,
   //     mark resumedGate, fire onAwaitingApproval + emit a snapshot. Send NO prompt.
   //   - "resend": ARM the matching `awaiting` variant (arm-before-send) then re-send that step's
@@ -1959,7 +1961,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         plansDirPath,
         redraftCount: plan.redraftCount,
       };
-      if (state) state.pendingApproval = gate;
+      if (state) state.pendingGate = { kind: "approval", gate };
       run.heldPermissionId = gate.toolUseId;
       run.resumedGate = true;
       run.awaiting = { tag: "idle" };
@@ -1985,7 +1987,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         runCommand: null,
         round: 1,
       };
-      if (state) state.pendingAcceptance = gate;
+      if (state) state.pendingGate = { kind: "acceptance", gate };
       run.awaiting = { tag: "idle" }; // no turn in flight — the gate waits on a human verdict.
       diag(`resume: re-minting the forced acceptance gate (cwd=${run.cwd}, openTarget=${gate.openTarget})`);
       for (const o of observers) o.onAcceptanceReview?.(gate);
@@ -2032,7 +2034,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // minimal gate from durable on-disk artifacts: the prototype dir is <cwd>/.plan-tree/prototype/
       // and its primary visual is index.html. round is prototypeRound+1 (=1 — resume reset it to 0).
       // INTENT.md does not exist yet at prototype-review (PROTOTYPE_APPROVED writes it), so
-      // pendingIntentText stays null; the user re-approves or refines. Set pendingPrototype directly
+      // pendingIntentText stays null; the user re-approves or refines. Set pendingGate (kind "prototype") directly
       // (NOT via the reducer — the root is ALREADY prototype-review), fire onPrototypeReview, emit a
       // snapshot. Send NO prompt — the gate resolves through approvePrototype()/refinePrototype().
       const protoDir = `${run.cwd}/.plan-tree/prototype`;
@@ -2045,7 +2047,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
         round: run.prototypeRound + 1,
         cwd: run.cwd,
       };
-      if (state) state.pendingPrototype = gate;
+      if (state) state.pendingGate = { kind: "prototype", gate };
       run.awaiting = { tag: "idle" };
       diag(`resume: re-presenting prototype-review gate from disk (dir=${protoDir}, round=${gate.round})`);
       for (const o of observers) o.onPrototypeReview?.(gate);
@@ -2139,7 +2141,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
           plansDirPath: plan.planPath,
           redraftCount: nodeAtPath(state!.root, plan.path)?.redraftCount ?? 0,
         };
-        if (state) state.pendingApproval = gate;
+        if (state) state.pendingGate = { kind: "approval", gate };
         run.heldPermissionId = gate.toolUseId;
         run.resumedGate = true;
         run.awaiting = { tag: "idle" };
@@ -2531,7 +2533,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // INSIDE the decomposition case so it can never be hoisted to cover a leaf approval.
     approve: async (pathKeyStr) => {
       const path = parsePathKey(pathKeyStr);
-      const gate = state?.pendingApproval ?? null;
+      const gate = approvalGateOf(state);
       if (!gate || pathKey(gate.path) !== pathKey(path)) {
         throw new Error(
           `approve("${pathKeyStr}"): no held approval gate for that path (held: ${
@@ -2700,7 +2702,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     // re-draft's fresh ExitPlanMode hold, not a `result` — nothing to arm.
     requestChanges: async (pathKeyStr, feedback) => {
       const path = parsePathKey(pathKeyStr);
-      const gate = state?.pendingApproval ?? null;
+      const gate = approvalGateOf(state);
       if (!gate || pathKey(gate.path) !== pathKey(path)) {
         throw new Error(
           `requestChanges("${pathKeyStr}"): no held approval gate for that path (held: ${
@@ -2760,7 +2762,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     },
 
     approvePrototype: async (opts) => {
-      const gate = state?.pendingPrototype ?? null;
+      const gate = prototypeGateOf(state);
       if (!gate) throw new Error("approvePrototype(): no pending prototype gate");
       // The root is already in prototype-review with this gate held; resolveApprove composes
       // INTENT.md, dispatches PROTOTYPE_APPROVED (legal from prototype-review), arms recon and
@@ -2771,7 +2773,7 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
     },
 
     refinePrototype: async (feedback, opts) => {
-      const gate = state?.pendingPrototype ?? null;
+      const gate = prototypeGateOf(state);
       if (!gate) throw new Error("refinePrototype(): no pending prototype gate");
       // DRIVER-OWNED round increment (see the prototypeRound discipline note): count the refine
       // request itself, so the NEXT gate is minted round prototypeRound+1 regardless of clarifier
@@ -2806,31 +2808,31 @@ export function createOrchestrator(deps: OrchestratorDeps = defaultDeps()): Orch
       // ACCEPTANCE_APPROVED performs the deferred finalize (root → summarized + notifyDone) and records
       // acceptance_={verdict:"approved"}. No turn is in flight (a post-completion hold), so nothing to
       // interrupt; markTerminal runs inside notifyDone's effect.
-      if (!state?.pendingAcceptance) throw new Error("approveAcceptance(): no pending acceptance gate");
+      if (!acceptanceGateOf(state)) throw new Error("approveAcceptance(): no pending acceptance gate");
       await dispatch({ type: "ACCEPTANCE_APPROVED", decidedMs: nowFn() });
     },
 
     divergeAcceptance: async (reason) => {
       // ACCEPT DIVERGENCE FROM THE BASELINE FLOOR, recording WHY. Same finalize as approve;
       // ACCEPTANCE_DIVERGED additionally persists the reason (the audit trail for the waived floor).
-      if (!state?.pendingAcceptance) throw new Error("divergeAcceptance(): no pending acceptance gate");
+      if (!acceptanceGateOf(state)) throw new Error("divergeAcceptance(): no pending acceptance gate");
       await dispatch({ type: "ACCEPTANCE_DIVERGED", reason, decidedMs: nowFn() });
     },
 
     refineAcceptance: async (target) => {
       // RE-PLAN A SUB-PLAN from the forced acceptance gate (the third gate action). The
       // reducer RESETS the target node + its right-siblings to a fresh re-execution shape (target →
-      // open/recon, right-siblings → open/pending), clears pendingAcceptance, deletes each reset node's
+      // open/recon, right-siblings → open/pending), clears the acceptance gate (pendingGate), deletes each reset node's
       // on-disk NN-plan.md/NN-summary.md, and persists. No turn is in flight (a post-completion hold),
       // so we drive the target's recon turn ourselves (mirroring the PARENT_REVIEW_DONE recon hop). On
       // re-completion (baseline still present, no verdict) the Phase-5 gate re-arms automatically.
-      if (!state?.pendingAcceptance) throw new Error("refineAcceptance(): no pending acceptance gate");
+      if (!acceptanceGateOf(state)) throw new Error("refineAcceptance(): no pending acceptance gate");
       // Compute the reset set (target + right-siblings at the target's level) BEFORE dispatch so we can
       // drop their STALE summaries from the driver's per-level threading map — a refine re-runs them,
       // so a leftover entry would thread a stale summary into the re-run AND survive as a phantom
       // sibling summary. The reducer re-validates the same set (it is the source of truth).
       const parentPath = target.slice(0, -1);
-      const parentNode = nodeAtPath(state.root, parentPath);
+      const parentNode = nodeAtPath(state!.root, parentPath);
       const resetKeys: PathKey[] = [];
       if (parentNode && parentNode.state.stage === "split") {
         const idx = parentNode.state.children.findIndex((c) => c.nn === target[target.length - 1]);

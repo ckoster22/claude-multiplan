@@ -119,9 +119,8 @@ function splitRoot(): TreeNode {
   };
 }
 
-// Build a PlanTreeSnapshot2 carrying exactly ONE held gate (prototype OR acceptance). All four
-// pending* gates default null; the one requested is set. This is the data the real orchestrator
-// produces; main.ts's real derivation reads it via orchSnapshot.
+// Build a PlanTreeSnapshot2 carrying exactly ONE held gate (prototype OR acceptance) in pendingGate.
+// This is the data the real orchestrator produces; main.ts's real derivation reads it via orchSnapshot.
 //
 // The Review-bar "prototype round" knob varies the held gate's `round` (1..3); the real
 // prototypeBarLabel(round) → "Visual prototype — round N of 3". `round` is clamped to the real 1..3
@@ -163,16 +162,16 @@ export function gateSnapshot(
     activePath: null,
     writePolicy: which === "prototype" ? "prototype" : "acceptEdits",
     done: false,
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: which === "prototype" ? proto : null,
-    pendingAcceptance: which === "acceptance" ? accept : null,
+    pendingGate:
+      which === "prototype"
+        ? { kind: "prototype", gate: proto }
+        : { kind: "acceptance", gate: accept },
   };
 }
 
 // The mock-ANIMATE comment chapter (review2 c5) shows the user requesting changes on the master plan
 // THEY ARE ALREADY VIEWING. The faithful surface is the orchestrator's held APPROVAL gate
-// (pendingApproval, an ApprovalGate2) whose `planPath` EQUALS the open plan — so main.ts's
+// (pendingGate kind "approval", an ApprovalGate2) whose `planPath` EQUALS the open plan — so main.ts's
 // viewingGate() matches (gate.planPath === openPath) WITHOUT a re-open, currentReviewSource() reports
 // "in-process" (→ Submit label "Request changes"), and orchGatePending=1 makes the bar visible. The
 // gate is fanned through main.ts's OWN subscribed onSnapshot observer (NOT onAwaitingApproval, which
@@ -195,10 +194,7 @@ export function approvalGateSnapshot(planPath: string): PlanTreeSnapshot2 {
     activePath: null,
     writePolicy: "plan",
     done: false,
-    pendingApproval: gate,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: { kind: "approval", gate },
   };
 }
 
@@ -213,10 +209,7 @@ export function placeholderSnapshot(): PlanTreeSnapshot2 {
     activePath: null,
     writePolicy: "plan",
     done: false,
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: null,
   };
 }
 

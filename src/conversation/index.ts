@@ -280,7 +280,7 @@ export async function initConversation(
 
   // Idle-waiting override (see ConversationHandle.setIdleWaitingHint): while ON and the session is
   // idle, rerender() shows WAITING_INPUT_LABEL instead of hiding the working indicator. Set from
-  // main.ts off the orchestrator snapshot (pendingPrototype != null). Never consulted while a turn
+  // gate.ts off the orchestrator snapshot (a prototype- or acceptance-kind pendingGate). Never consulted while a turn
   // is active (the model-derived label wins) or while no session exists.
   let idleWaitingHint = false;
 

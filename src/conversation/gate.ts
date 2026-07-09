@@ -40,14 +40,17 @@ export function createGateObserver(deps: GateObserverDeps): OrchestratorObserver
     onSnapshot: (snap) => {
       deps.setOrchSnapshot(snap);
       // Idle-waiting hint: the visual-prototype gate is TURN-COMPLETION signaled (the intent turn
-      // ends with a `result` → session idle → the facade hides its working indicator), so while
-      // pendingPrototype is held, tell the conversation facade to keep showing "Waiting for your
+      // ends with a `result` → session idle → the facade hides its working indicator), so while a
+      // prototype gate is held, tell the conversation facade to keep showing "Waiting for your
       // input…" in the idle state. Derived STRICTLY from the snapshot, so it self-clears:
-      // approve/refine null pendingPrototype in the reducer and the very next snapshot turns it off.
+      // approve/refine null pendingGate in the reducer and the very next snapshot turns it off.
       // Also keep the idle-waiting hint up while the forced acceptance gate is held (it is
       // turn-completion signaled like the prototype gate: the run is built and the session is idle,
-      // so the facade must not read "done" while the user owes a verdict).
-      deps.getConversationHandle()?.setIdleWaitingHint(snap.pendingPrototype != null || snap.pendingAcceptance != null);
+      // so the facade must not read "done" while the user owes a verdict). Both gate kinds live on
+      // the one `pendingGate` field, read off by kind.
+      deps.getConversationHandle()?.setIdleWaitingHint(
+        snap.pendingGate?.kind === "prototype" || snap.pendingGate?.kind === "acceptance",
+      );
       // Live-run placeholder: the FIRST snapshot of each run (keyed by treeId) mints a
       // placeholder sidebar row — the run has no real row until its plan file lands.
       if (
@@ -94,12 +97,12 @@ export function createGateObserver(deps: GateObserverDeps): OrchestratorObserver
       // UNIFIED GATE: decomposition (root included) and leaf gates arrive through the SAME
       // observer hook carrying the SAME ApprovalGate2 shape — no master sentinel, no side-channel
       // path capture. Open the gate's plan file via the NORMAL plan flow; viewingGate() matches the
-      // open plan against snapshot.pendingApproval.planPath.
+      // open plan against the held approval gate's planPath (approvalGateOf(snapshot)).
       //
       // ORDER MATTERS: flip to the Plan tab SYNCHRONOUSLY FIRST — before any await —
       // so the user sees the plan view the instant the gate arrives. While the awaits below run,
-      // stream frames keep firing onActivity; suppressConversationFlip (keyed on pendingApproval,
-      // already set in the snapshot by the time this observer hook fires) keeps them from stealing
+      // stream frames keep firing onActivity; suppressConversationFlip (keyed on the approval-kind
+      // pendingGate, already set in the snapshot by the time this observer hook fires) keeps them from stealing
       // the tab back. The tab is re-asserted after the awaits as a belt-and-suspenders.
       // openGatePlanFile flips to the Plan tab SYNCHRONOUSLY (before its first await), refreshes the
       // sidebar so the just-written plan's [data-path] row exists, opens it (selecting the row /
@@ -118,8 +121,8 @@ export function createGateObserver(deps: GateObserverDeps): OrchestratorObserver
       // Visual-prototype gate: flip to the Plan tab and render the preview DETACHED
       // into the reading pane (openPath untouched — the next openPlan replaces it), then derive
       // the bar's PROTOTYPE mode. The gate itself is NOT stashed here: the bar derives it from
-      // orchSnapshot.pendingPrototype (activePrototypeGate), so it self-clears when a later
-      // snapshot nulls pendingPrototype — this hook only owns the one-shot view flip + render.
+      // orchSnapshot.pendingGate (activePrototypeGate), so it self-clears when a later
+      // snapshot nulls or replaces pendingGate — this hook only owns the one-shot view flip + render.
       deps.diag(`prototype: review gate kind=${gate.kind} round=${gate.round}`);
       deps.switchToPlanTab();
       void deps.renderPrototypePreview(gate);
@@ -132,8 +135,8 @@ export function createGateObserver(deps: GateObserverDeps): OrchestratorObserver
       // The forced acceptance gate arrived: the run is built and the user must record a
       // verdict against the frozen baseline. The driver has already opened the baseline. Flip to the
       // Plan tab and derive the bar's ACCEPTANCE mode. Like the prototype gate, the gate is NOT
-      // stashed here — the bar derives it from orchSnapshot.pendingAcceptance (activeAcceptanceGate),
-      // so it self-clears when a later snapshot nulls pendingAcceptance (approve/diverge).
+      // stashed here — the bar derives it from orchSnapshot.pendingGate (activeAcceptanceGate),
+      // so it self-clears when a later snapshot nulls pendingGate (approve/diverge).
       deps.diag(`acceptance: review gate cwd=${gate.cwd} openTarget=${gate.openTarget}`);
       deps.switchToPlanTab();
       deps.refreshReviewBar();

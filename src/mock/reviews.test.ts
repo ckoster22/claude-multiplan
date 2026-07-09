@@ -41,6 +41,7 @@ import {
   MOCK_RESUME_BLOCKED,
   gateSnapshot,
 } from "./fixtures/reviews";
+import { prototypeGateOf } from "../conversation/plan-tree";
 import { transcriptFor, HISTORY_STEM, NO_TRANSCRIPT_STEM } from "./fixtures/transcripts";
 import { SCENES, EXIT_PLAN_MODE_PLAN } from "./fixtures/scenes";
 import { applySceneToModel } from "./player";
@@ -121,7 +122,7 @@ describe("review bar — prototype/acceptance gates drive the real gate-active f
   // default fixture is kind:"mermaid"; the player passes trailheadProtoPreviewOverride(round) (kind:"ascii")
   // so composePreviewMarkdown emits a PLAIN fence, never a ```mermaid one, and round 2 adds the badge.
   it("the Trailhead inline preview composes the trail card WITHOUT mermaid (#6); round 2 adds the badge", () => {
-    const round1Gate = gateSnapshot("prototype", 1, trailheadProtoPreviewOverride(1)).pendingPrototype!;
+    const round1Gate = prototypeGateOf(gateSnapshot("prototype", 1, trailheadProtoPreviewOverride(1)))!;
     expect(round1Gate.kind).toBe("ascii");
     const round1Md = composePreviewMarkdown(round1Gate);
     // The fix: NO mermaid fence ⇒ the reading-pane mermaid pipeline renders nothing.
@@ -134,7 +135,7 @@ describe("review bar — prototype/acceptance gates drive the real gate-active f
     expect(round1Md).not.toContain("Moderate");
 
     // Round 2 morphs the SAME card to add the difficulty badge (the typed-feedback result).
-    const round2Gate = gateSnapshot("prototype", 2, trailheadProtoPreviewOverride(2)).pendingPrototype!;
+    const round2Gate = prototypeGateOf(gateSnapshot("prototype", 2, trailheadProtoPreviewOverride(2)))!;
     const round2Md = composePreviewMarkdown(round2Gate);
     expect(round2Md).not.toContain("```mermaid");
     expect(round2Md).toContain("Eagle Peak Loop");
@@ -149,7 +150,7 @@ describe("review bar — prototype/acceptance gates drive the real gate-active f
     // FALSIFY: the DEFAULT (un-overridden) fixture is kind:"mermaid" and DOES emit a ```mermaid fence —
     // exactly the stray flowchart this fix removes from the Trailhead demo. If this assertion ever flips
     // (default no longer mermaid), the override-vs-default contract this test pins has rotted.
-    const defaultMd = composePreviewMarkdown(gateSnapshot("prototype").pendingPrototype!);
+    const defaultMd = composePreviewMarkdown(prototypeGateOf(gateSnapshot("prototype"))!);
     expect(defaultMd).toContain("```mermaid");
     expect(defaultMd).toContain("flowchart LR");
   });

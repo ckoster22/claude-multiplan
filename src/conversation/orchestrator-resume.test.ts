@@ -40,6 +40,9 @@ import {
   toLedger2,
   activePathOf,
   summaryName2,
+  approvalGateOf,
+  prototypeGateOf,
+  acceptanceGateOf,
   type TreeNode,
   type NodeState,
   type NodePath,
@@ -111,10 +114,7 @@ function ledgerOf(
     sdk_session_id: sessionId,
     baseline_: extra.baseline_,
     acceptance_: extra.acceptance_,
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: null,
     parsedChildren: null,
   };
   // The ROOT carries the request title (ledger.root.title is what resume() uses as `request`).
@@ -380,7 +380,7 @@ describe("resume() — no reset, no START, forwards resumeSessionId", () => {
     // NO prompt sent (pure-disk re-presentation)
     expect(rec.sendMessage).toEqual([]);
     // the held gate is on the snapshot
-    expect(h.snapshot().pendingApproval?.planPath).toBe(ABS_LEAF);
+    expect(approvalGateOf(h.snapshot())?.planPath).toBe(ABS_LEAF);
   });
 
   it("open/awaiting-decomposition-approval (root): re-presents decomposition gate resolved under .plan-tree/, NO message", async () => {
@@ -425,7 +425,7 @@ describe("resume() — no reset, no START, forwards resumeSessionId", () => {
     // NOT route through onAwaitingApproval).
     expect(rec.resetPlanTreeDir).toEqual([]);
     expect(obs.awaiting).toEqual([]);
-    expect(h.snapshot().pendingApproval).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
 
     // The CONTINUE prompt was sent verbatim (exact message), and it is NOT the restart/approval prompt.
     expect(rec.sendMessage).toEqual([resumedLeafContinuePrompt(ABS_LEAF)]);
@@ -718,7 +718,7 @@ describe("resumed-gate approval sends a continuation prompt and never resolves t
     expect(rec.resolvePermission).toEqual([]);
     expect(h.snapshot().root.state.stage).toBe("open");
     expect(h.snapshot().root.state.phase).toBe("decomposing");
-    expect(h.snapshot().pendingApproval).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
 
     // END-TO-END RECOVERABILITY (the gate is NOT a dead end). The model redrafts a WELL-FORMED
     // decomposition and holds it via a fresh LIVE ExitPlanMode — which routes through the normal live
@@ -738,8 +738,8 @@ describe("resumed-gate approval sends a continuation prompt and never resolves t
 
     // A fresh decomposition gate surfaced (a LIVE one — real id, not the dead synthetic resumed id).
     expect(obs.awaiting.at(-1)?.kind).toBe("decomposition");
-    expect(h.snapshot().pendingApproval?.kind).toBe("decomposition");
-    expect(h.snapshot().pendingApproval?.toolUseId).toBe("redraft-1");
+    expect(approvalGateOf(h.snapshot())?.kind).toBe("decomposition");
+    expect(approvalGateOf(h.snapshot())?.toolUseId).toBe("redraft-1");
 
     // Approving the corrected draft materializes the split (the recovery completes). The live gate's
     // real id is resolved (allow), proving this is the live path, not the dead resumed one.
@@ -791,7 +791,7 @@ describe("resume() — PHASE 5 forced acceptance window (parked baseline root)",
     });
   }
 
-  it("re-mints pendingAcceptance + fires onAcceptanceReview, sends NO turn, opens the baseline, no reset/START", async () => {
+  it("re-mints the acceptance gate + fires onAcceptanceReview, sends NO turn, opens the baseline, no reset/START", async () => {
     const { deps, rec } = makeDeps();
     const obs = makeObserver();
     const h = createOrchestrator(deps);
@@ -801,8 +801,8 @@ describe("resume() — PHASE 5 forced acceptance window (parked baseline root)",
     expect(started).toBe(true);
 
     // The gate is re-minted on the snapshot AND fanned to the observer (the acceptance bar binds to it).
-    expect(h.snapshot().pendingAcceptance).not.toBeNull();
-    expect(h.snapshot().pendingAcceptance!.cwd).toBe("/work");
+    expect(acceptanceGateOf(h.snapshot())).not.toBeNull();
+    expect(acceptanceGateOf(h.snapshot())!.cwd).toBe("/work");
     expect(obs.acceptances).toHaveLength(1);
     expect(obs.acceptances[0].cwd).toBe("/work");
     expect(obs.acceptances[0].openTarget).toBe("index.html");
@@ -837,7 +837,7 @@ describe("resume() — PHASE 5 forced acceptance window (parked baseline root)",
     // The deferred finalize ran: tree is done, gate cleared, verdict persisted.
     expect(obs.done).toBe(1);
     expect(h.snapshot().done).toBe(true);
-    expect(h.snapshot().pendingAcceptance).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     const lastState = rec.writePlanTreeFile.filter((w) => w.name === "state.json").at(-1)!;
     const ledger = JSON.parse(lastState.contents) as { acceptance_?: { verdict: string } };
     expect(ledger.acceptance_).toEqual({ verdict: "approved", decided_ms: expect.any(Number) });
@@ -914,7 +914,7 @@ describe("resume() — open/decomposing disk-probe (gate vs decompose-resend)", 
 
     // NO decomposition gate was re-presented (the absent-artifact branch must NOT mint a phantom gate).
     expect(obs.awaiting).toEqual([]);
-    expect(h.snapshot().pendingApproval).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
 
     // The tree was NOT duplicated/materialized: the root stays open/decomposing (no children parsed —
     // a re-draft does not mutate the tree; the next ExitPlanMode drives that). Falsifiable: if the
@@ -975,7 +975,7 @@ describe("resume() — open/decomposing disk-probe (gate vs decompose-resend)", 
     expect(obs.awaiting[0].kind).toBe("decomposition");
     expect(obs.awaiting[0].planPath).toBe("/work/.plan-tree/master.md");
     expect(obs.awaiting[0].toolUseId).toBe("resumed:");
-    expect(h.snapshot().pendingApproval?.planPath).toBe("/work/.plan-tree/master.md");
+    expect(approvalGateOf(h.snapshot())?.planPath).toBe("/work/.plan-tree/master.md");
 
     // NO draft prompt was sent — the PRESENT branch re-presents, it does NOT re-draft. Falsifiable:
     // if the probe were ignored (always-absent), a masterDraftPrompt sendMessage would appear → RED.
@@ -1094,7 +1094,7 @@ describe("resume() — prototype-gate: re-presents the prototype review gate in 
     expect(obs.prototypes).toHaveLength(1);
     expect(obs.prototypes[0].cwd).toBe("/work");
     expect(obs.prototypes[0].paths).toContain("/work/.plan-tree/prototype/index.html");
-    expect(h.snapshot().pendingPrototype).not.toBeNull();
+    expect(prototypeGateOf(h.snapshot())).not.toBeNull();
     expect(rec.sendMessage).toEqual([]);
 
     // CONTAINMENT: the session was opened in the "prototype" write-policy — the OBSERVABLE the fakes
@@ -1148,7 +1148,7 @@ describe("resume() — DEFECT FIX: reviewing / roll-up re-run the in-flight turn
     // NO approval gate was surfaced — the buggy behavior re-presented a decomposition gate here, which
     // would have dead-ended on approve. Falsifiable: reverting to the gate rewind makes this RED.
     expect(obs.awaiting).toEqual([]);
-    expect(h.snapshot().pendingApproval).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
 
     // The parent-review turn was RE-SENT, carrying the reviewed child's summary (verbatim) and the
     // remaining sibling's frozen mandate (Beta) — exactly what reloadDriverStateFromDisk reconstructed.
@@ -1236,7 +1236,7 @@ describe("resume() — DEFECT FIX: reviewing / roll-up re-run the in-flight turn
     // NO approval gate (the buggy behavior re-presented [01]'s decomposition gate, which would dead-end
     // on approve). The roll-up summary turn was re-sent for [01], fed its grandchild's summary.
     expect(obs.awaiting).toEqual([]);
-    expect(h.snapshot().pendingApproval).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(rec.sendMessage).toHaveLength(1);
     expect(rec.sendMessage[0]).toBe(rollupSummaryPrompt(path(1), [GRANDCHILD_SUMMARY]));
     expect(rec.sendMessage[0]).toContain(GRANDCHILD_SUMMARY);

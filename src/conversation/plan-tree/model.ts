@@ -41,7 +41,7 @@ export interface PrototypeInfo {
   variants: Array<{ label: string; path: string | null; inlinePreview: string | null }>;
 }
 
-// The held visual-prototype review gate (transient, not serialized — see pendingPrototype):
+// The held visual-prototype review gate (transient, not serialized — see the prototype arm of pendingGate):
 // PrototypeInfo plus the refinement round (0-based; PROTOTYPE_REFINED loops increment it
 // driver-side) and the cwd the prototype files were written under.
 export interface PrototypeGate extends PrototypeInfo {
@@ -63,7 +63,7 @@ export interface PrototypeGate extends PrototypeInfo {
 //     dev"); the gate never runs it.
 //   - round: 1-based (single-round today, so always 1 — kept for a uniform held-gate shape).
 // DERIVED-and-held, not stored: rehydrate nulls it (a resumed run re-presents it from the tree shape
-// + baseline_ — same discipline as pendingPrototype).
+// + baseline_ — same discipline as the prototype arm of pendingGate).
 export interface AcceptanceGate {
   readonly cwd: string;
   readonly openTarget: string | null;
@@ -187,41 +187,49 @@ export interface ApprovalGate2 {
   readonly redraftCount: number;
 }
 
+// The held interactive gate, unioned rather than four separate fields: at most one of
+// approval/clarify/prototype/acceptance can ever be held at a time (proven via the reducer/
+// orchestrator lifecycle trace — the four kinds are disjoint), so the union makes "two gates held
+// simultaneously" unconstructable instead of merely unreachable by convention.
+// INVARIANT[at-most-one-gate-held] (type-level): the held interactive gate is a single tagged union (approval|clarify|prototype|acceptance), so "two gates held at once" and "a gate of unknown kind" are unconstructable at compile time — not merely unreached by convention.
+//   prevents: a silent dual-gate state (two of approval/clarify/prototype/acceptance held simultaneously) or a kind-less gate the UI cannot discriminate
+//   test: src/conversation/plan-tree2-reducer.test.ts asserts pendingGate holds exactly one kind-tagged gate — e.g. { kind: "prototype", gate } on PROTOTYPE_DRAFTED and { kind: "approval", gate } on DECOMPOSITION_DRAFTED — and is nulled to a single null on every gate resolution
+export type PendingGate =
+  | { kind: "approval"; gate: ApprovalGate2 }
+  | { kind: "clarify"; gate: ClarifyGate }
+  | { kind: "prototype"; gate: PrototypeGate }
+  | { kind: "acceptance"; gate: AcceptanceGate };
+
 // The gen-2 in-memory state: the persisted schema-2 ledger PLUS transient fields NEVER serialized
 // (they live only while held open this session):
-//   - pendingApproval: the unified gate (decomposition AND leaf — no sentinel).
-//   - pendingClarify: the held AskUserQuestion gate (gen-1 carry-over).
+//   - pendingGate: the single held interactive gate (at most one at a time — see PendingGate), one of:
+//     - "approval": the unified ExitPlanMode gate (decomposition AND leaf — no sentinel).
+//     - "clarify": the held AskUserQuestion gate (gen-1 carry-over).
+//     - "prototype": the held visual-prototype gate. NEVER serialized (no resume-from-disk — a
+//       persisted gate could only describe a review the restart can't resolve; the turn re-runs).
+//     - "acceptance": the held forced-acceptance gate. Opened when the root's last child summarizes
+//       WITH a baseline present (the reducer parks the root in its running-children acceptance
+//       window instead of finalizing); cleared by ACCEPTANCE_APPROVED/DIVERGED. NEVER serialized —
+//       a resumed run re-presents it from the tree shape + baseline_.
 //   - parsedChildren: children parsed from a decomposition DRAFT, stashed until the gate resolves.
 //     Deliberately NOT in the tree yet: every split phase requires child activity the gate window
 //     cannot have (assertCoherent2's exactly-one-active rule), and `open` is structurally child-free.
 //     DECOMPOSITION_APPROVED materializes the split from this stash; DECOMPOSITION_CHANGES_REQUESTED
 //     discards it.
-//   - pendingPrototype: the held visual-prototype gate. NEVER serialized (no resume-from-disk — a
-//     persisted gate could only describe a review the restart can't resolve; the turn re-runs).
-//   - pendingAcceptance: the held forced-acceptance gate. Opened when the root's last child
-//     summarizes WITH a baseline present (the reducer parks the root in its running-children
-//     acceptance window instead of finalizing); cleared by ACCEPTANCE_APPROVED/DIVERGED. NEVER
-//     serialized — a resumed run re-presents it from the tree shape + baseline_.
 export interface PlanTreeState2 extends RecursiveLedger {
-  pendingApproval: ApprovalGate2 | null;
-  pendingClarify: ClarifyGate | null;
-  pendingPrototype: PrototypeGate | null;
-  pendingAcceptance: AcceptanceGate | null;
+  pendingGate: PendingGate | null;
   parsedChildren: { readonly path: NodePath; readonly children: NonEmptyArray<TreeNode> } | null;
 }
 
 // The gen-2 read-only snapshot: the ledger's tree plus DERIVED fields (active path, write policy,
-// done) so consumers never re-derive them divergently, plus the transient gates.
+// done) so consumers never re-derive them divergently, plus the transient gate.
 export interface PlanTreeSnapshot2 {
   readonly treeId: string;
   readonly root: TreeNode;
   readonly activePath: NodePath | null;
   readonly writePolicy: WritePolicy;
   readonly done: boolean;
-  readonly pendingApproval: ApprovalGate2 | null;
-  readonly pendingClarify: ClarifyGate | null;
-  readonly pendingPrototype: PrototypeGate | null;
-  readonly pendingAcceptance: AcceptanceGate | null;
+  readonly pendingGate: PendingGate | null;
 }
 
 // What resuming the active node REQUIRES of the driver. Shapes:
@@ -232,7 +240,7 @@ export interface PlanTreeSnapshot2 {
 //     driver re-arms `awaiting` and re-sends that step's existing prompt.
 //   - "acceptance": the ROOT is parked in its forced-acceptance window (running-children,
 //     all children summarized, baseline frozen, no verdict yet). The build is COMPLETE — only the
-//     human verdict is missing. The driver re-mints the transient pendingAcceptance gate (as the live
+//     human verdict is missing. The driver re-mints the transient acceptance gate (pendingGate) (as the live
 //     notifyAcceptanceReview path does) so the acceptance bar re-appears. NO model turn is sent.
 //     Carries NO path/artifact fields: re-derived from the tree shape + baseline_ (never serialized).
 //   - "restart": the active node is in the GENESIS clarify window (open/clarifying-intent).

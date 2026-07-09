@@ -34,8 +34,6 @@ import type {
   RecursiveLedger,
   PlanTreeFilePath,
   ApprovalGate2,
-  ClarifyGate,
-  PrototypeGate,
 } from "./plan-tree";
 
 const nnOf = (n: number) => parseNn(n);
@@ -76,9 +74,9 @@ function splitNode(
   });
 }
 
-// Wrap a root TreeNode in a coherent PlanTreeState2 with NON-null transient gates, so the
-// round-trip + rehydrate can prove the gates are dropped. (toLedger2 strips transients; we set them
-// here only to verify rehydrateState2 nulls them on the way back in.)
+// Wrap a root TreeNode in a coherent PlanTreeState2 with a NON-null transient gate, so the
+// round-trip + rehydrate can prove the gate is dropped. (toLedger2 strips transients; we set one
+// here only to verify rehydrateState2 nulls it on the way back in.)
 function stateWithGates(root: TreeNode): PlanTreeState2 {
   const fakeGate: ApprovalGate2 = {
     path: path(),
@@ -88,16 +86,6 @@ function stateWithGates(root: TreeNode): PlanTreeState2 {
     plansDirPath: "/sentinel",
     redraftCount: 0,
   };
-  const fakeClarify: ClarifyGate = { toolUseId: "c1", questions: [] };
-  const fakePrototype: PrototypeGate = {
-    kind: "html",
-    paths: [],
-    screenshot: null,
-    inlinePreview: null,
-    variants: [],
-    round: 0,
-    cwd: "/tmp",
-  };
   return {
     schema: 2,
     tree_id: "tree-x",
@@ -105,10 +93,7 @@ function stateWithGates(root: TreeNode): PlanTreeState2 {
     updated_ms: 2,
     root,
     sdk_session_id: "sess-42",
-    pendingApproval: fakeGate,
-    pendingClarify: fakeClarify,
-    pendingPrototype: fakePrototype,
-    pendingAcceptance: { cwd: "/tmp", openTarget: "index.html", runCommand: null, round: 1 },
+    pendingGate: { kind: "approval", gate: fakeGate },
     parsedChildren: { path: path(), children: nonEmpty([leafNode(1, "drafting")]) },
   };
 }
@@ -390,14 +375,10 @@ describe("rehydrateState2 (disk round-trip preserves active node, nulls transien
       expect(rNode.state.stage).toBe(c.stage);
       expect(rNode.state.phase).toBe(c.phase);
 
-      // every transient gate is null
-      expect(rehydrated.pendingApproval).toBeNull();
-      expect(rehydrated.pendingClarify).toBeNull();
-      expect(rehydrated.pendingPrototype).toBeNull();
-      // The transient forced-acceptance gate is nulled on rehydrate too (re-minted from the
-      // tree shape + baseline_, never restored from a persisted gate). FALSIFY: carry it through
-      // rehydrateState2 → non-null here → RED.
-      expect(rehydrated.pendingAcceptance).toBeNull();
+      // the transient gate is null (incl. the forced-acceptance gate, which is re-minted from the
+      // tree shape + baseline_ on rehydrate, never restored from a persisted gate). FALSIFY: carry a
+      // gate through rehydrateState2 → non-null here → RED.
+      expect(rehydrated.pendingGate).toBeNull();
       expect(rehydrated.parsedChildren).toBeNull();
 
       // serialized fields carried

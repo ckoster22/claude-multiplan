@@ -11,7 +11,7 @@
 // increments ONLY on refinePrototype. The UI's loop-escape threshold is round >= 3: from the third
 // round on, the approve affordance relabels to "Proceed as-is" so the loop always has an exit.
 
-import type { PrototypeGate, AcceptanceGate, TreeNode } from "./conversation/plan-tree";
+import type { PrototypeGate, AcceptanceGate, PendingGate, TreeNode } from "./conversation/plan-tree";
 import { pathKey } from "./conversation/plan-tree";
 
 // The displayed round ceiling (the loop-escape threshold). Display-only: the orchestrator never
@@ -96,24 +96,20 @@ export function prototypeApproveLabel(round: number): string {
 }
 
 /**
- * PURE: the bar-mode precedence derivation — the active PrototypeGate, or null. Derives STRICTLY
- * from the orchestrator SNAPSHOT (never module state) so the gate self-clears: the reducer nulls
- * `pendingPrototype` on PROTOTYPE_APPROVED/PROTOTYPE_REFINED and the next onSnapshot reverts the
- * bar with no bookkeeping. Precedence (first match wins): a held approval gate (pendingApproval)
- * beats the prototype gate; the prototype gate beats the pendingReviews surfaces (the caller falls
- * through to those only when this returns null).
+ * PURE: returns the prototype gate iff the currently-held gate (if any) is of kind "prototype";
+ * returns null for any other kind or when orchestration is inactive. Derives STRICTLY from the
+ * orchestrator SNAPSHOT (never module state) so the gate self-clears: the reducer nulls
+ * `pendingGate` on PROTOTYPE_APPROVED/PROTOTYPE_REFINED and the next onSnapshot reverts the bar
+ * with no bookkeeping.
  */
 // INVARIANT[gate-self-clears-from-snapshot] (convention): the prototype/acceptance bar modes derive strictly from the orchestrator snapshot (never module state), so nulling the gate in the reducer reverts the bar on the next onSnapshot.
 //   prevents: a stale held-gate flag keeping the bar in PROTOTYPE/ACCEPTANCE after the gate resolved
 export function prototypeGateActive(
-  snap: { pendingApproval: unknown; pendingPrototype: PrototypeGate | null } | null,
+  snap: { pendingGate: PendingGate | null } | null,
   orchestrationActive: boolean,
 ): PrototypeGate | null {
   if (!orchestrationActive || snap === null) return null;
-  // INVARIANT[approval-gate-beats-prototype-gate] (precedence): a held pendingApproval short-circuits to null, suppressing the prototype-mode bar.
-  //   prevents: a prototype gate and an approval gate both driving the bar
-  if (snap.pendingApproval != null) return null;
-  return snap.pendingPrototype;
+  return snap.pendingGate?.kind === "prototype" ? snap.pendingGate.gate : null;
 }
 
 /**
@@ -194,28 +190,18 @@ export function referencesExternalFiles(html: string): boolean {
 }
 
 /**
- * PURE: the bar-mode precedence derivation for the forced acceptance gate — the active
- * AcceptanceGate, or null. Derives STRICTLY from the orchestrator SNAPSHOT (never module state) so
- * the gate self-clears: the reducer nulls `pendingAcceptance` on ACCEPTANCE_APPROVED/DIVERGED and
- * the next onSnapshot reverts the bar with no bookkeeping. Precedence (first match wins): a held
- * approval gate (pendingApproval) and a held prototype gate (pendingPrototype) BOTH beat the
- * acceptance gate (those are mid-run interactive holds; the acceptance gate is a post-completion
- * hold, so it can never legitimately co-exist with them — but the precedence is explicit and
- * defensive). The acceptance gate beats the pendingReviews surfaces (the caller falls through to
- * those only when this returns null).
+ * PURE: returns the acceptance gate iff the currently-held gate (if any) is of kind "acceptance";
+ * returns null for any other kind or when orchestration is inactive. Derives STRICTLY from the
+ * orchestrator SNAPSHOT (never module state) so the gate self-clears: the reducer nulls
+ * `pendingGate` on ACCEPTANCE_APPROVED/DIVERGED and the next onSnapshot reverts the bar with no
+ * bookkeeping.
  */
 export function acceptanceGateActive(
-  snap:
-    | { pendingApproval: unknown; pendingPrototype: unknown; pendingAcceptance: AcceptanceGate | null }
-    | null,
+  snap: { pendingGate: PendingGate | null } | null,
   orchestrationActive: boolean,
 ): AcceptanceGate | null {
   if (!orchestrationActive || snap === null) return null;
-  // INVARIANT[approval-and-prototype-beat-acceptance] (precedence): both a held pendingApproval and a held pendingPrototype short-circuit to null, outranking the forced-acceptance gate.
-  //   prevents: the post-completion acceptance bar co-existing with a mid-run hold
-  if (snap.pendingApproval != null) return null;
-  if (snap.pendingPrototype != null) return null;
-  return snap.pendingAcceptance;
+  return snap.pendingGate?.kind === "acceptance" ? snap.pendingGate.gate : null;
 }
 
 /**

@@ -680,7 +680,7 @@ export function modelSignature(story: ReadonlyArray<StoryFrame>, T: number): str
 //     turns ON for the OPEN master so the REAL #review-bar shows in VIEWING / IN-PROCESS mode (Submit
 //     relabeled "Request changes", DISABLED at 0 comments → ENABLED as the set_comments grow); the
 //     cursor then travels to "Request changes" (#review-submit) and clicks. The gate is fanned through
-//     main.ts's onSnapshot observer ONLY (a held pendingApproval whose planPath EQUALS the open master),
+//     main.ts's onSnapshot observer ONLY (a held pendingGate approval gate whose planPath EQUALS the open master),
 //     NOT the external pending_reviews path — so it does NOT re-open the plan and the inline highlights
 //     SURVIVE alongside the bar (the c5 invariant). The gate turns OFF just before the V2 reveal.
 //
@@ -969,7 +969,7 @@ export const C4_PLANS_TAB_SELECTOR = '.tab-row .tab[data-tab="plans"]';
 // fully shown and Submit DISABLED at 0 comments); the three set_comments then grow the count 1→2→3 and
 // Submit ENABLES. After the cursor click the gate turns OFF (resolved) just before the V2 reveal.
 //
-// FAITHFUL SURFACE (load-bearing): this is the orchestrator's held APPROVAL gate (pendingApproval) whose
+// FAITHFUL SURFACE (load-bearing): this is the orchestrator's held APPROVAL gate (pendingGate kind "approval") whose
 // planPath EQUALS the open master — fanned through main.ts's onSnapshot observer ONLY (NOT
 // onAwaitingApproval, which re-opens + wipes highlights). The bar coexists with the inline comment
 // highlights the SAME T (the c5 invariant).
@@ -1047,7 +1047,7 @@ const PLATFORM_ANSWER = "Android first — that's where most of our trail users 
 // `pending_reviews` path — that path (emitReviewRequested) makes main.ts AUTO-OPEN the review's plan
 // and re-render the pane, WIPING the freshly-applied highlights, and labels Submit "Submit" (NOT
 // "Request changes"). The review surface is instead the IN-PROCESS approval gate (the `review_gate`
-// SurfaceFrame, fanned through main.ts's onSnapshot observer whose pendingApproval.planPath EQUALS the
+// SurfaceFrame, fanned through main.ts's onSnapshot observer whose pendingGate approval gate's planPath EQUALS the
 // already-open master): viewingGate() matches WITHOUT a re-open, so the inline highlights and the
 // "Request changes" bar coexist at the SAME T. This slice delivers the highlights + the in-process bar
 // + the V1→V2 iteration.
@@ -3054,7 +3054,7 @@ const COMMENT_AND_V2: StoryFrame[] = [
   {
     // SURFACE — the in-process gate RESOLVES (the user requested changes): turn review_gate OFF so
     // the bar reverts before the revised plan loads. Mirrors the real flow (requestChanges clears the
-    // pendingApproval gate → the next snapshot reverts the bar).
+    // pendingGate approval gate → the next snapshot reverts the bar).
     tMs: REVIEW_GATE_OFF_MS,
     frame: { t: "review_gate", on: false, planPath: null },
   },

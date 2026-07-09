@@ -9,6 +9,7 @@ import {
   reduce2,
   parseNn,
   pathKey,
+  approvalGateOf,
   nodeAtPath,
   activePathOf,
   writePolicyFor2,
@@ -57,10 +58,7 @@ function blank2(): PlanTreeState2 {
       state: { stage: "open", phase: "clarifying-intent" },
       execution_model: null,
     },
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: null,
     parsedChildren: null,
   };
 }
@@ -261,7 +259,7 @@ describe("PHASE 4 — nested decomposition gate arcs", () => {
   it("nested DECOMPOSITION_DRAFTED holds the unified gate at the nested path (kind decomposition)", () => {
     const s = toNestedGate();
     expect(nodeAt(s, p(2)).state).toEqual({ stage: "open", phase: "awaiting-decomposition-approval" });
-    expect(s.pendingApproval).toMatchObject({ path: p(2), kind: "decomposition", toolUseId: "tu-02" });
+    expect(approvalGateOf(s)).toMatchObject({ path: p(2), kind: "decomposition", toolUseId: "tu-02" });
     expect(s.parsedChildren?.children).toHaveLength(2);
     expect(pathKey(s.parsedChildren!.path)).toBe("02");
   });
@@ -276,7 +274,7 @@ describe("PHASE 4 — nested decomposition gate arcs", () => {
     expect(nodeAt(out.state, p(2)).redraftCount).toBe(1);
     expect(nodeAt(out.state, p(2)).lastFeedback).toBe("re-split");
     expect(out.state.parsedChildren).toBeNull();
-    expect(out.state.pendingApproval).toBeNull();
+    expect(out.state.pendingGate).toBeNull();
     expect(out.effects).toContainEqual({ kind: "resolvePermission", id: "tu-02", allow: false, message: "re-split" });
     expect(nodeAt(out.state, p(1))).toEqual(oneBefore); // the completed sibling is untouched
   });

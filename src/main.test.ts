@@ -943,28 +943,28 @@ describe("computeAffordance — prototype > acceptance > review > resume (at mos
   });
 });
 
-describe("suppressConversationFlip — keyed STRICTLY on pendingApproval", () => {
-  // A minimal gate-shaped object; the helper only null-checks the field, never reads into it.
-  const gate = { kind: "leaf" } as unknown as NonNullable<
-    Parameters<typeof suppressConversationFlip>[0]
-  >["pendingApproval"];
+describe("suppressConversationFlip — keyed STRICTLY on an approval-kind pendingGate", () => {
+  // Minimal gate-union values; the helper only reads pendingGate.kind, never into the gate.
+  type Gate = NonNullable<Parameters<typeof suppressConversationFlip>[0]>["pendingGate"];
+  const approvalGate = { kind: "approval", gate: { kind: "leaf" } } as unknown as Gate;
+  const clarifyGate = { kind: "clarify", gate: { toolUseId: "t1" } } as unknown as Gate;
 
   it("null snapshot → false (no run; the flip proceeds)", () => {
     expect(suppressConversationFlip(null)).toBe(false);
   });
 
-  it("snapshot without a pendingApproval → false (streaming flips to Conversation)", () => {
-    expect(suppressConversationFlip({ pendingApproval: null })).toBe(false);
+  it("snapshot without a held gate → false (streaming flips to Conversation)", () => {
+    expect(suppressConversationFlip({ pendingGate: null })).toBe(false);
   });
 
-  it("snapshot with a pendingApproval → true (a held gate owns the Plan tab)", () => {
-    expect(suppressConversationFlip({ pendingApproval: gate })).toBe(true);
+  it("an APPROVAL-kind pendingGate → true (a held gate owns the Plan tab)", () => {
+    expect(suppressConversationFlip({ pendingGate: approvalGate })).toBe(true);
   });
 
-  it("pendingClarify set + pendingApproval null → false (AskUserQuestion cards NEED the flip)", () => {
-    // Extra transient-gate fields must be IGNORED — only pendingApproval suppresses.
-    const snap = { pendingApproval: null, pendingClarify: { toolUseId: "t1" } };
-    expect(suppressConversationFlip(snap)).toBe(false);
+  it("a CLARIFY-kind pendingGate → false (AskUserQuestion cards NEED the flip)", () => {
+    // Only the approval kind suppresses; a clarify gate must NOT. FALSIFY: relax the helper's
+    // `kind === "approval"` check to any-non-null pendingGate → this goes RED.
+    expect(suppressConversationFlip({ pendingGate: clarifyGate })).toBe(false);
   });
 });
 

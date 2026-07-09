@@ -16,7 +16,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import { createOrchestrator, type OrchestratorDeps, type OrchestratorHandle } from "./orchestrator";
+import { createOrchestrator, approvalGateOf, type OrchestratorDeps, type OrchestratorHandle } from "./orchestrator";
 import type { AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
 
 
@@ -107,7 +107,7 @@ describe("invariant: root_decomposition_gate_routes_decomposition_branch", () =>
     const { deps, sends, interrupts, timers } = makeDeps();
     const h = createOrchestrator(deps);
     await driveToRootGate(h);
-    expect(h.snapshot().pendingApproval?.kind).toBe("decomposition");
+    expect(approvalGateOf(h.snapshot())?.kind).toBe("decomposition");
 
     const sendsBefore = sends.length;
     await h.approve("");
@@ -145,7 +145,7 @@ describe("invariant: leaf_approval_never_interrupts", () => {
     await h.ingestStream(textFrame("SIZER: {\"decision\":\"single\",\"num_plans\":1,\"confidence\":0.9}"));
     await h.ingestStream(resultFrame());
     await h.ingestPermission(exitPlanModeReq("leaf-tu", "the child plan"));
-    expect(h.snapshot().pendingApproval?.kind).toBe("leaf");
+    expect(approvalGateOf(h.snapshot())?.kind).toBe("leaf");
 
     const sendsBefore = sends.length;
     await h.approve("01");

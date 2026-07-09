@@ -1,12 +1,14 @@
 import type { PlanTreeSnapshot2 } from "./conversation/orchestrator";
 
-// Suppress the onActivity conversation-tab flip while a gate is held (pendingApproval):
-// gate-held streams still fire onActivity and would steal focus from the Plan view.
-// Must NOT suppress on pendingClarify — AskUserQuestion cards render in Conversation and need the flip.
+// Suppress the onActivity conversation-tab flip only while an APPROVAL gate is held: gate-held
+// streams still fire onActivity and would steal focus from the Plan view. The single `pendingGate`
+// union makes this structural — a "clarify"-kind gate does NOT suppress (AskUserQuestion cards
+// render in Conversation and need the flip), and the `kind === "approval"` check is the natural
+// expression of that, no longer an implicit convention riding on separate fields.
 export function suppressConversationFlip(
-  snap: Pick<PlanTreeSnapshot2, "pendingApproval"> | null,
+  snap: Pick<PlanTreeSnapshot2, "pendingGate"> | null,
 ): boolean {
-  return snap?.pendingApproval != null;
+  return snap?.pendingGate?.kind === "approval";
 }
 
 // Should an SDK session exit clear the live-run placeholder? agent-exit is NOT 1:1 with the run:
