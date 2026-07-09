@@ -110,7 +110,7 @@ function assertStructure(node: TreeNode, path: NodePath): void {
     // active and ALL children summarized. Non-root: awaiting its roll-up summary turn.
     // Root: the forced-acceptance hold (treeIsDone stays false) while the user records a
     // verdict against the frozen baseline. Whether a parked root is legitimate (baseline + held gate)
-    // or stuck is a transient-state concern (pendingAcceptance + reducer discipline), not a
+    // or stuck is a transient-state concern (the acceptance arm of pendingGate + reducer discipline), not a
     // tree-structure one — like the roll-up window, its legitimacy lives in the event stream.
     const allSummarizedWindow = activeCount === 0 && summarizedCount === children.length;
     if (!allSummarizedWindow) {

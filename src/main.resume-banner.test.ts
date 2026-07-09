@@ -168,10 +168,7 @@ function ledgerJson(root: TreeNode, treeId: string): string {
     updated_ms: 2,
     root,
     sdk_session_id: "sess-42",
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: null,
     parsedChildren: null,
   };
   const ledger: RecursiveLedger = toLedger2(state);

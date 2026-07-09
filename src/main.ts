@@ -48,6 +48,7 @@ import {
   getOrchestrator,
   pathKey,
   parsePathKey,
+  approvalGateOf,
   type PlanTreeSnapshot2,
   type PrototypeGate,
   type AcceptanceGate,
@@ -269,7 +270,7 @@ function switchToPlanTab(): void {
 }
 
 // Latest snapshot from the shared orchestrator (null until a run is active, null after it ends).
-// Holds the active node's pendingApproval gate while the user reviews.
+// Holds the active node's approval-kind pendingGate while the user reviews.
 let orchSnapshot: PlanTreeSnapshot2 | null = null;
 
 // ---- PendingSurface[]: the unified set of "things awaiting the user" -------------------------
@@ -286,7 +287,7 @@ let orchSnapshot: PlanTreeSnapshot2 | null = null;
 function pendingSurfaces(): PendingSurface[] {
   const surfaces: PendingSurface[] = [];
   for (const r of pendingReviews.values()) surfaces.push({ kind: r.source, review: r });
-  const orchGate = isOrchestrationActive() ? orchSnapshot?.pendingApproval ?? null : null;
+  const orchGate = isOrchestrationActive() ? approvalGateOf(orchSnapshot) : null;
   if (orchGate) surfaces.push({ kind: "orchestrator-gate", gate: orchGate });
   const proto = activePrototypeGate();
   if (proto) surfaces.push({ kind: "prototype", gate: proto });
@@ -374,15 +375,15 @@ const renderGuard = new RenderGuard();
 // Derives off pendingReviews / commentCount / selection and the #review-bar DOM.
 function refreshReviewBar(countOverride?: number): void {
   if (!reviewBarEl) return;
-  // PROTOTYPE mode — pendingApproval outranks prototype (activePrototypeGate() yields null while
-  // it's held), so reaching here means prototype is the highest-precedence pending surface.
+  // PROTOTYPE mode — activePrototypeGate() is non-null only when the single held pendingGate is of
+  // kind "prototype", so reaching here means a prototype gate is the pending surface.
   const protoGate = activePrototypeGate();
   if (protoGate !== null) {
     applyPrototypeBar(protoGate);
     return;
   }
-  // ACCEPTANCE mode — both higher gates outrank it; reaching here with a non-null gate means it is
-  // the highest-precedence pending surface.
+  // ACCEPTANCE mode — activeAcceptanceGate() is non-null only when the single held pendingGate is of
+  // kind "acceptance"; reaching here with a non-null gate means it is the pending surface.
   const acceptGate = activeAcceptanceGate();
   if (acceptGate !== null) {
     applyAcceptanceBar(acceptGate);
@@ -391,7 +392,7 @@ function refreshReviewBar(countOverride?: number): void {
   // Leaving (or never in) PROTOTYPE mode: its additive controls hide and #review-approve's
   // relabel reverts so the modes below render exactly as before the prototype feature.
   // The `.proto` modifier scopes the prototype-only bar layout (see styles.css); strip it so the
-  // shared bar reverts to its legacy/pendingApproval layout untouched.
+  // shared bar reverts to its legacy/approval-gate layout untouched.
   reviewBarEl.classList.remove("proto");
   prototypeFeedbackEl?.classList.add("hidden");
   prototypeOpenEl?.classList.add("hidden");
@@ -861,10 +862,8 @@ async function refreshList(): Promise<void> {
 
   // Selection reduction: collapse a `plan` that genuinely VANISHED → `none`, closing the
   // ghost pane. The held gate's plan is exempt (its row can lag the write — the placeholder stands in).
-  const heldGatePlan =
-    isOrchestrationActive() && orchSnapshot?.pendingApproval != null
-      ? asAbsPath(orchSnapshot.pendingApproval.planPath)
-      : null;
+  const gate = isOrchestrationActive() ? approvalGateOf(orchSnapshot) : null;
+  const heldGatePlan = gate ? asAbsPath(gate.planPath) : null;
   const before = getSelection();
   setSelection(resolveSelection(before, records, prevRecords, heldGatePlan));
   if (before.k === "plan" && getSelection().k === "none") {
@@ -1351,8 +1350,8 @@ window.addEventListener("DOMContentLoaded", () => {
       },
     },
     // onActivity: every non-result stream frame fires this. While an approval gate is
-    // held (snapshot.pendingApproval set), the flip is SUPPRESSED so streaming frames cannot steal
-    // the tab from the Plan view the gate handler just opened. pendingClarify deliberately does NOT
+    // held (snapshot's pendingGate is of kind "approval"), the flip is SUPPRESSED so streaming frames cannot steal
+    // the tab from the Plan view the gate handler just opened. A "clarify"-kind gate deliberately does NOT
     // suppress — AskUserQuestion cards render in the Conversation tab and need the flip.
     () => {
       if (suppressConversationFlip(orchSnapshot)) return;
@@ -1379,8 +1378,8 @@ window.addEventListener("DOMContentLoaded", () => {
   // hold the latest snapshot in `orchSnapshot` and drive the approval bar off it:
   //   • onAwaitingApproval(gate) — a sub-plan is awaiting approval: open its plan file via the NORMAL
   //     plan flow, flip to the Plan tab, and refresh the bar (mirrors openReviewPlanFile + switchToPlanTab).
-  //   • onSnapshot — re-derive the bar after every transition (so it clears when pendingApproval
-  //     becomes null after Approve).
+  //   • onSnapshot — re-derive the bar after every transition (so it clears when the approval-kind
+  //     pendingGate becomes null after Approve).
   //   • onDone / onFatal — terminal: drop the snapshot and refresh (the bar hides).
   // This observer is a closure inside DOMContentLoaded that mutates the orchSnapshot singleton and the
   // bar DOM handles.
@@ -1664,7 +1663,7 @@ window.addEventListener("DOMContentLoaded", () => {
       }
       // PROTOTYPE mode: approve the held visual prototype — always enabled ("Approve
       // visual"; "Proceed as-is" from round 3). approvePrototype() composes + writes INTENT.md and
-      // continues into recon; the next snapshot (pendingPrototype nulled) reverts the bar. Flip to
+      // continues into recon; the next snapshot (pendingGate nulled) reverts the bar. Flip to
       // the Conversation tab so the recon turn streams in place (mirrors the approval-gate flow).
       // The prototype gate resolves by TURN COMPLETION (no held tool → no notifyPermissionResolved).
       const protoGate = activePrototypeGate();
@@ -1716,7 +1715,7 @@ window.addEventListener("DOMContentLoaded", () => {
       }
       // ACCEPTANCE mode: the Approve button is "Accept (meets baseline)" → approveAcceptance().
       // The build clears the baseline floor; the deferred finalize runs (notifyDone) and the next
-      // snapshot (pendingAcceptance nulled) reverts the bar. The verdict resolves the gate by an
+      // snapshot (pendingGate nulled) reverts the bar. The verdict resolves the gate by an
       // explicit action — no held tool to clear.
       const acceptGate = activeAcceptanceGate();
       if (acceptGate) {
@@ -1777,7 +1776,7 @@ window.addEventListener("DOMContentLoaded", () => {
     // The THIRD acceptance action. Reads the picked target from #review-refine-target and routes it
     // into refineAcceptance(parsePathKey(target)) — the driver resets that sub-plan + its
     // right-siblings and re-runs them (the acceptance gate re-arms on re-completion). Flip to the
-    // Conversation tab so the re-run streams in place; the next snapshot (pendingAcceptance nulled)
+    // Conversation tab so the re-run streams in place; the next snapshot (pendingGate nulled)
     // reverts the bar out of ACCEPTANCE mode while the re-execution runs.
     reviewRefineEl?.addEventListener("click", () => {
       const acceptGate = activeAcceptanceGate();

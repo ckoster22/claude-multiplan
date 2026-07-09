@@ -36,7 +36,7 @@ import {
   type OrchestratorHandle,
 } from "./orchestrator";
 import type { PrototypeGate, AcceptanceGate } from "./plan-tree";
-import { parseNn, pathKey } from "./plan-tree";
+import { parseNn, pathKey, approvalGateOf, clarifyGateOf, prototypeGateOf, acceptanceGateOf } from "./plan-tree";
 import type { PlanTreeEvent2, PlanTreeFilePath, TreeNode } from "./plan-tree";
 import { diag } from "./diag";
 
@@ -639,7 +639,7 @@ describe("orchestrator — intent-clarification phase precedes recon", () => {
 
   it("an AskUserQuestion raised during the intent turn surfaces as a clarify gate and CLARIFY_ANSWERED resolves it", async () => {
     // REUSE of the existing CLARIFY gate for the intent phase: the intent-clarifier may ask the user
-    // a clarifying question mid-turn. It must surface as pendingClarify and resolve via answerClarify,
+    // a clarifying question mid-turn. It must surface as a clarify pendingGate and resolve via answerClarify,
     // WITHOUT leaving the clarifying-intent phase.
     const { deps, rec } = makeDeps();
     const h = createOrchestrator(deps);
@@ -661,8 +661,8 @@ describe("orchestrator — intent-clarification phase precedes recon", () => {
     await h.ingestPermission(askUserQuestionReq("intent-q", questions));
 
     // The clarify gate surfaced while still in the intent phase.
-    // FALSIFY: route AskUserQuestion away from the CLARIFY gate → pendingClarify stays null → RED.
-    expect(h.snapshot().pendingClarify?.toolUseId).toBe("intent-q");
+    // FALSIFY: route AskUserQuestion away from the CLARIFY gate → pendingGate stays null → RED.
+    expect(clarifyGateOf(h.snapshot())?.toolUseId).toBe("intent-q");
     expect(rootPhase(h)).toBe("open/clarifying-intent");
 
     await h.answerClarify("intent-q", { "Which platform?": "iOS" });
@@ -729,7 +729,7 @@ describe("orchestrator — visual prototype gate (intent result carries a traili
       round: 1,
       cwd: "/work",
     });
-    expect(h.snapshot().pendingPrototype).toMatchObject({ kind: "html", round: 1 });
+    expect(prototypeGateOf(h.snapshot())).toMatchObject({ kind: "html", round: 1 });
     expect(rootPhase(h)).toBe("open/prototype-review");
     // NO recon (or any other prompt) was sent off the intent result.
     expect(rec.sendMessage.length).toBe(sendsBefore);
@@ -756,7 +756,7 @@ describe("orchestrator — visual prototype gate (intent result carries a traili
     await h.refinePrototype("make it blue");
     // PROTOTYPE_REFINED looped the root back to clarifying-intent and cleared the held gate.
     expect(rootPhase(h)).toBe("open/clarifying-intent");
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     // The refine prompt was sent, carrying the byte-exact directive AND the feedback verbatim.
     // FALSIFY (verified): drop the feedback splice from refinePrototypePrompt → RED.
     const refineSent = rec.sendMessage.at(-1)!;
@@ -828,7 +828,7 @@ describe("orchestrator — visual prototype gate (intent result carries a traili
     expect(iPlan).toBeGreaterThanOrEqual(0);
     expect(iRecon).toBeGreaterThan(iPlan);
     expect(rootPhase(h)).toBe("open/recon");
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
 
     // The recon arm is live: its result advances to sizing (not swallowed).
     await h.ingestStream(textFrame("recon body"));
@@ -875,7 +875,7 @@ describe("orchestrator — visual prototype gate (intent result carries a traili
 
     // Behavior beyond the baseline is unchanged: still advanced to recon, gate cleared.
     expect(rootPhase(h)).toBe("open/recon");
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
 
     await h.cancel();
   });
@@ -944,7 +944,7 @@ describe("orchestrator — visual prototype gate (intent result carries a traili
 
     // Recon STILL proceeded — the freeze failure never blocked the hop.
     expect(rootPhase(h)).toBe("open/recon");
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     const reconSent = rec.sendMessage.at(-1)!;
     expect(reconSent).toContain("scope-recon");
 
@@ -965,7 +965,7 @@ describe("orchestrator — visual prototype gate (intent result carries a traili
     // phase advanced to recon, recon prompt sent threading the intent — and NO prototype gate.
     // FALSIFY (verified): treat NO-PROTOTYPE as a block opener (gate it) → RED here.
     expect(obsRec.prototypes).toHaveLength(0);
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     const intent = rec.writePlanTreeFile.find((w) => w.name === "INTENT.md");
     expect(intent?.contents).toBe("the user wants X with constraint Y");
     expect(rootPhase(h)).toBe("open/recon");
@@ -1026,7 +1026,7 @@ describe("orchestrator — combined apply-and-approve (refinePrototype autoAppro
     // clarifying-intent (the refine round) and the latch is armed.
     await h.refinePrototype("tighten the spacing", { autoApprove: true });
     expect(rootPhase(h)).toBe("open/clarifying-intent");
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
 
     const protosBefore = obsRec.prototypes.length;
     // The revised prototype block arrives. The latch drives the FULL legal arc — PROTOTYPE_READY
@@ -1041,7 +1041,7 @@ describe("orchestrator — combined apply-and-approve (refinePrototype autoAppro
     // FALSIFY (verified): drop { suppressNotifyPrototypeReview: true } from the auto-approve
     // PROTOTYPE_READY dispatch → obsRec.prototypes grows by 1 (a round-2 review surfaces) → RED.
     expect(rootPhase(h)).toBe("open/recon");
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(obsRec.prototypes.length).toBe(protosBefore);
     // INTENT.md was written (the approve arc), and the recon prompt followed.
     expect(rec.writePlanTreeFile.some((w) => w.name === "INTENT.md")).toBe(true);
@@ -1123,7 +1123,7 @@ describe("orchestrator — combined apply-and-approve (refinePrototype autoAppro
 
     // INTENT_CLARIFIED path: INTENT.md written from the prose, recon sent, NO new gate opened.
     expect(obsRec.prototypes.length).toBe(protosBefore);
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(rootPhase(h)).toBe("open/recon");
     const intent = rec.writePlanTreeFile.find((w) => w.name === "INTENT.md");
     expect(intent?.contents).toBe("the user wants X with constraint Y");
@@ -1151,7 +1151,7 @@ describe("orchestrator — combined apply-and-approve (refinePrototype autoAppro
     await h.refinePrototype("make it blue");
     await driveToPrototypeGate(h);
     expect(rootPhase(h)).toBe("open/prototype-review");
-    expect(h.snapshot().pendingPrototype).toMatchObject({ round: 2 });
+    expect(prototypeGateOf(h.snapshot())).toMatchObject({ round: 2 });
     // The review VIEW notification DID fire for the round-2 gate — this is the surface the
     // auto-approve arc suppresses. (Same dispatch, opts-free → notifyPrototypeReview runs.) This is
     // the positive control proving the suppression test's assertion is meaningful, not vacuous.
@@ -1712,7 +1712,7 @@ describe("orchestrator — full split-of-3 run", () => {
     expect(ledger.schema).toBe(2);
     expect(ledger.root.state.stage).toBe("split");
     expect(ledger.root.state.phase).toBe("summarized"); // run completion is DERIVED from the root
-    expect(ledger.pendingApproval).toBeUndefined(); // transient gates excluded from the ledger
+    expect(ledger.pendingGate).toBeUndefined(); // transient gates excluded from the ledger
     expect(ledger.parsedChildren).toBeUndefined();
   });
 });
@@ -1746,7 +1746,7 @@ describe("orchestrator — forced acceptance gate (baseline present)", () => {
     await h.ingestStream(resultFrame()); // summary result → SUMMARY_WRITTEN → completion seam
   }
 
-  it("the last child's summary ARMS pendingAcceptance + fires notifyAcceptanceReview, WITHHOLDS notifyDone, opens the baseline, and sends NO rollup turn", async () => {
+  it("the last child's summary ARMS the acceptance pendingGate + fires notifyAcceptanceReview, WITHHOLDS notifyDone, opens the baseline, and sends NO rollup turn", async () => {
     const { deps, rec } = makeDeps();
     const h = createOrchestrator(deps);
     const obsRec = makeObserver();
@@ -1760,7 +1760,7 @@ describe("orchestrator — forced acceptance gate (baseline present)", () => {
     // assertions below go RED.
     const acceptances = obsRec.acceptances;
     expect(acceptances).toHaveLength(1);
-    expect(h.snapshot().pendingAcceptance).not.toBeNull();
+    expect(acceptanceGateOf(h.snapshot())).not.toBeNull();
     // notifyDone is WITHHELD — the run is NOT done at the gate.
     expect(obsRec.done).toBe(0);
     expect(h.snapshot().done).toBe(false);
@@ -1769,13 +1769,13 @@ describe("orchestrator — forced acceptance gate (baseline present)", () => {
     // The driver opened the baseline (best-effort) with the run cwd + the augmented open target.
     expect(rec.openBaseline).toEqual([{ cwd: "/work", path: "index.html" }]);
     // The augmented gate carried the run cwd into the snapshot (so the UI bar can resolve it).
-    expect(h.snapshot().pendingAcceptance!.cwd).toBe("/work");
+    expect(acceptanceGateOf(h.snapshot())!.cwd).toBe("/work");
     expect(acceptances[0].cwd).toBe("/work");
 
     // CRITICAL: NO rollup/summary turn was sent for the root at the gate (the acceptance window is
     // structurally identical to a roll-up window — without the consume short-circuit the driver would
     // erroneously send a root roll-up prompt). FALSIFY: drop the `nextPath.length===0 &&
-    // pendingAcceptance` short-circuit in the summary consume branch → an extra rollup sendMessage
+    // acceptance-pendingGate` short-circuit in the summary consume branch → an extra rollup sendMessage
     // lands here → RED. The only sends after the summary turn are NONE (no rollup, no recon).
     const sendsAfter = rec.sendMessage.slice(sendsBeforeSummary);
     expect(sendsAfter.some((s) => s.toLowerCase().includes("roll-up") || s.toLowerCase().includes("rollup"))).toBe(false);
@@ -1796,7 +1796,7 @@ describe("orchestrator — forced acceptance gate (baseline present)", () => {
     // The deferred finalize ran now.
     expect(obsRec.done).toBe(1);
     expect(h.snapshot().done).toBe(true);
-    expect(h.snapshot().pendingAcceptance).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(isOrchestrationActive()).toBe(false); // notifyDone → markTerminal
     // The verdict is persisted on the ledger.
     const lastState = rec.writePlanTreeFile.filter((w) => w.name === "state.json").at(-1)!;
@@ -1870,14 +1870,14 @@ describe("orchestrator — forced acceptance gate (baseline present)", () => {
     h.subscribe(obsRec.obs);
     await driveBaselineRunToCompletionSeam(h);
     // Parked at the gate (single-collapse → one child "01").
-    expect(h.snapshot().pendingAcceptance).not.toBeNull();
+    expect(acceptanceGateOf(h.snapshot())).not.toBeNull();
     expect(obsRec.done).toBe(0);
 
     const sendsBefore = rec.sendMessage.length;
     await h.refineAcceptance([nnOf(1)]);
 
     // The gate is cleared (back to executing); NO verdict was recorded, baseline still present.
-    expect(h.snapshot().pendingAcceptance).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(h.snapshot().done).toBe(false);
     expect(obsRec.done).toBe(0);
     // The reset node's NN-plan.md AND NN-summary.md were deleted (containment-guarded, allow-list names).
@@ -2017,7 +2017,7 @@ describe("orchestrator — cancel purges a held approval", () => {
     });
 
     // A permission is held (awaiting approval).
-    expect(h.snapshot().pendingApproval?.toolUseId).toBe("held-tu");
+    expect(approvalGateOf(h.snapshot())?.toolUseId).toBe("held-tu");
 
     await h.cancel();
 
@@ -2761,7 +2761,7 @@ describe("orchestrator — single authoritative plan write", () => {
     expect(w.plan).toBe("the sub plan body");
 
     // The gate's planPath equals the path the single write returned (fake returns /abs/plans/<nn>.md).
-    expect(h.snapshot().pendingApproval?.planPath).toBe("/abs/plans/null.md");
+    expect(approvalGateOf(h.snapshot())?.planPath).toBe("/abs/plans/null.md");
     expect(awaiting.at(-1)).toEqual({ key: "01", kind: "leaf", toolUseId: "sub-1" });
 
     await h.cancel();
@@ -2792,9 +2792,9 @@ describe("orchestrator — master decomposition gate", () => {
     // gate resolves — the root deliberately STAYS open while the gate is held, so the children are
     // observable in the tree only AFTER approval; see the approve test below for that half).
     // DECOMPOSITION_DRAFTED moved the root to awaiting-decomposition-approval and holds the
-    // UNIFIED gate (kind decomposition, path "") in pendingApproval.
+    // UNIFIED gate (kind decomposition, path "") in pendingGate.
     expect(rootPhase(h)).toBe("open/awaiting-decomposition-approval");
-    expect(h.snapshot().pendingApproval).toMatchObject({ kind: "decomposition", toolUseId: "master-tu" });
+    expect(approvalGateOf(h.snapshot())).toMatchObject({ kind: "decomposition", toolUseId: "master-tu" });
     // The master plan was written once (flavor master: nn === null).
     const masterWrite = rec.writeAgentPlan.find((w) => w.nn === null);
     expect(masterWrite).toBeDefined();
@@ -2997,7 +2997,7 @@ describe("orchestrator — clarify reshape (CLARIFY_ANSWERED → updatedInput)",
     await h.start({ cwd: "/work", request: "do it" });
 
     await h.ingestPermission(askUserQuestionReq("q-1", questions));
-    expect(h.snapshot().pendingClarify?.toolUseId).toBe("q-1");
+    expect(clarifyGateOf(h.snapshot())?.toolUseId).toBe("q-1");
 
     await h.answerClarify("q-1", { "Which database?": "Postgres" });
 
@@ -3517,7 +3517,7 @@ describe("orchestrator — PHASE 3: nn > 99 is a LOUD master-plan validation fai
     // NOT truncation: no partial child list was materialized (the root never left open/decomposing,
     // so no split exists), no decomposition gate surfaced.
     expect(h.snapshot().root.state.stage).toBe("open");
-    expect(h.snapshot().pendingApproval).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(awaiting).toHaveLength(0);
   });
 });
@@ -3570,7 +3570,7 @@ describe("orchestrator — INV-2: a HEADER-LESS decomposition draft denies-for-r
     // No partial children materialized; the root never left open/decomposing; no gate surfaced.
     expect(h.snapshot().root.state.stage).toBe("open");
     expect(h.snapshot().root.state.phase).toBe("decomposing");
-    expect(h.snapshot().pendingApproval).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(awaiting).toHaveLength(0);
   });
 
@@ -3626,7 +3626,7 @@ describe("orchestrator — INV-2: a HEADER-LESS decomposition draft denies-for-r
     // No partial children materialized; the root never left open/decomposing; no gate surfaced.
     expect(h.snapshot().root.state.stage).toBe("open");
     expect(h.snapshot().root.state.phase).toBe("decomposing");
-    expect(h.snapshot().pendingApproval).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(awaiting).toHaveLength(0);
 
     await h.teardown();

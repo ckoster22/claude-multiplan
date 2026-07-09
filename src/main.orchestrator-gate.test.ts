@@ -58,7 +58,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 vi.mock("./titlebar", () => ({ initTitlebar: vi.fn(), initThemeToggle: vi.fn(), initTextSize: vi.fn() }));
 
 import { __resetReviewStateForTest } from "./main";
-import { parseNn } from "./conversation/plan-tree";
+import { parseNn, approvalGateOf, prototypeGateOf } from "./conversation/plan-tree";
 import type { PrototypeGate } from "./conversation/plan-tree";
 import {
   createOrchestrator,
@@ -221,7 +221,7 @@ async function driveToSubDraftedGate(h: OrchestratorHandle, planPath: string): P
 }
 
 // Drive the installed handle to the ROOT decomposition gate (root open/awaiting-decomposition-
-// approval; the unified gate kind "decomposition" held in pendingApproval). Uses the real
+// approval; the unified gate kind "decomposition" held in pendingGate kind "approval"). Uses the real
 // ingestPermission path (NOT a raw dispatch) so the driver writes + parses the decomposition and
 // the reducer holds the gate + fires onAwaitingApproval — exactly mirroring a live split run. The
 // plan body carries one Sub-Plan header so CHILDREN_PARSED has a child for DECOMPOSITION_APPROVED.
@@ -417,7 +417,7 @@ describe("orchestrator gate — #review-submit routes requestChanges(nn, feedbac
 });
 
 // ROOT decomposition gate routing. The root gate is the UNIFIED ApprovalGate2 (kind
-// "decomposition", path []) carried in pendingApproval like every other gate — the gen-1 master-
+// "decomposition", path []) carried in pendingGate kind "approval" like every other gate — the gen-1 master-
 // phase keying / viewingMasterGate / approveMaster surface is gone. Both review handlers route
 // through the ONE viewingGate() derivation into approve(pathKey)/requestChanges(pathKey); the
 // decomposition-vs-leaf branching lives INSIDE the orchestrator (pinned by the invariant tests in
@@ -440,7 +440,7 @@ describe("root gate — #review-approve routes approve(\"\") (the ROOT pathKey) 
     // decomposition) held, the decomposition plan file open, and the bar shows the in-process
     // affordances (Approve visible, Submit relabeled "Request changes").
     expect(rootPhase(h)).toBe("open/awaiting-decomposition-approval");
-    expect(h.snapshot().pendingApproval?.kind).toBe("decomposition");
+    expect(approvalGateOf(h.snapshot())?.kind).toBe("decomposition");
     expect(activeReaderTab()).toBe("plan");
     expect(document.querySelector("#review-approve")!.classList.contains("hidden")).toBe(false);
     expect(document.querySelector("#review-submit")!.textContent).toBe("Request changes");
@@ -504,7 +504,7 @@ describe("root gate — #review-submit routes requestChanges(\"\", feedback) int
 });
 
 describe("root gate vs leaf gate — a leaf gate routes approve with the CHILD pathKey", () => {
-  it("with the root running-children + a leaf pendingApproval, #review-approve calls approve(\"01\") and never interrupts", async () => {
+  it("with the root running-children + a leaf approval gate, #review-approve calls approve(\"01\") and never interrupts", async () => {
     const planPath = "/p/01.md";
     H.rows = [planRow(planPath, "1")];
     const { deps } = makeDeps();
@@ -516,9 +516,9 @@ describe("root gate vs leaf gate — a leaf gate routes approve with the CHILD p
     await driveToSubDraftedGate(h, planPath);
     await flush();
 
-    // The reducer holds a LEAF gate: root running-children, pendingApproval kind "leaf" at path [1].
+    // The reducer holds a LEAF gate: root running-children, pendingGate kind "approval" (gate kind "leaf") at path [1].
     expect(rootPhase(h)).toBe("split/running-children");
-    expect(h.snapshot().pendingApproval?.kind).toBe("leaf");
+    expect(approvalGateOf(h.snapshot())?.kind).toBe("leaf");
 
     document.querySelector<HTMLButtonElement>("#review-approve")!.click();
     await flush();
@@ -536,9 +536,9 @@ describe("root gate vs leaf gate — a leaf gate routes approve with the CHILD p
 // IDLE-WAITING HINT — the visual-prototype gate is TURN-COMPLETION signaled: the intent turn ends
 // with a `result` frame, the conversation session goes idle, and the facade's working indicator
 // would normally hide while the app is blocked on the user's approve/refine. main.ts's onSnapshot
-// propagates `pendingPrototype != null` to conversationHandle.setIdleWaitingHint so the indicator
+// propagates `prototypeGateOf(snapshot) != null` to conversationHandle.setIdleWaitingHint so the indicator
 // shows "Waiting for your input…" at idle, and self-clears when the gate resolves.
-describe("orchestrator gate — pendingPrototype drives the conversation idle-waiting hint", () => {
+describe("orchestrator gate — the prototype gate drives the conversation idle-waiting hint", () => {
   it("intent result with a prototype block → waiting label at idle; approvePrototype clears it", async () => {
     const { deps } = makeDeps();
     const h = createOrchestrator(deps);
@@ -553,7 +553,7 @@ describe("orchestrator gate — pendingPrototype drives the conversation idle-wa
     // facade renders each frame AND forwards it to the orchestrator's ingestStream. The text
     // frame carries the trailing ---PROTOTYPE--- block; the result frame both (a) drops the
     // facade's session to IDLE and (b) completes the intent turn, so the driver parses the block
-    // and dispatches PROTOTYPE_READY → the next snapshot carries pendingPrototype.
+    // and dispatches PROTOTYPE_READY → the next snapshot carries the prototype gate (pendingGate).
     const fire = (payload: unknown): void => {
       for (const fn of H.listeners["agent-stream"] ?? []) fn({ payload });
     };
@@ -576,15 +576,15 @@ describe("orchestrator gate — pendingPrototype drives the conversation idle-wa
     // The gate is held and the session is IDLE — yet the working indicator shows the waiting
     // label, because onSnapshot propagated the hint to the facade.
     // FALSIFY: drop the setIdleWaitingHint call in main.ts's onSnapshot → no indicator → RED.
-    expect(h.snapshot().pendingPrototype).not.toBeNull();
+    expect(prototypeGateOf(h.snapshot())).not.toBeNull();
     const label = document.querySelector<HTMLElement>("#conversation-stream .conv-working-label");
     expect(label?.textContent).toBe("Waiting for your input…");
 
-    // Approve resolves the gate: the reducer nulls pendingPrototype, the very next snapshot turns
+    // Approve resolves the gate: the reducer clears the prototype gate (pendingGate), the very next snapshot turns
     // the hint OFF, and the indicator hides (the session is still idle — no new frames fired).
     await h.approvePrototype();
     await flush();
-    expect(h.snapshot().pendingPrototype).toBeNull();
+    expect(h.snapshot().pendingGate).toBeNull();
     expect(document.querySelector("#conversation-stream .conv-working")).toBeNull();
 
     await h.cancel();

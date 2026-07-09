@@ -167,10 +167,7 @@ describe("INV-3 — GATE_RE_PRESENTED makes the re-presented decomposition gate 
       created_ms: 1,
       updated_ms: 1,
       root,
-      pendingApproval: null,
-      pendingClarify: null,
-      pendingPrototype: null,
-      pendingAcceptance: null,
+      pendingGate: null,
       parsedChildren: null,
     };
   }

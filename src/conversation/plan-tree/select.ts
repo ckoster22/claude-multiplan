@@ -6,8 +6,32 @@
 
 import { pathKey } from "./ids";
 import type { NodePath } from "./ids";
-import type { TreeNode, WritePolicy, PlanTreeState2, RecursiveLedger, PlanTreeSnapshot2 } from "./model";
+import type {
+  TreeNode,
+  WritePolicy,
+  PlanTreeState2,
+  RecursiveLedger,
+  PlanTreeSnapshot2,
+  PendingGate,
+  ApprovalGate2,
+  ClarifyGate,
+  PrototypeGate,
+  AcceptanceGate,
+} from "./model";
 import { cloneNode, activePathOf, someNodeExecuting, nodeAtPath, inAcceptanceWindow } from "./nav";
+
+export function approvalGateOf(src: { pendingGate: PendingGate | null } | null | undefined): ApprovalGate2 | null {
+  return src?.pendingGate?.kind === "approval" ? src.pendingGate.gate : null;
+}
+export function clarifyGateOf(src: { pendingGate: PendingGate | null } | null | undefined): ClarifyGate | null {
+  return src?.pendingGate?.kind === "clarify" ? src.pendingGate.gate : null;
+}
+export function prototypeGateOf(src: { pendingGate: PendingGate | null } | null | undefined): PrototypeGate | null {
+  return src?.pendingGate?.kind === "prototype" ? src.pendingGate.gate : null;
+}
+export function acceptanceGateOf(src: { pendingGate: PendingGate | null } | null | undefined): AcceptanceGate | null {
+  return src?.pendingGate?.kind === "acceptance" ? src.pendingGate.gate : null;
+}
 
 // Derive the schema-2 serializable ledger (deep-copied; excludes any future transient gates) —
 // what the driver will persist to state.json.
@@ -40,10 +64,7 @@ export function toSnapshot2(state: PlanTreeState2): PlanTreeSnapshot2 {
     activePath: activePathOf(state.root),
     writePolicy: writePolicyFor2(state.root),
     done: treeIsDone(state.root),
-    pendingApproval: state.pendingApproval,
-    pendingClarify: state.pendingClarify,
-    pendingPrototype: state.pendingPrototype,
-    pendingAcceptance: state.pendingAcceptance,
+    pendingGate: state.pendingGate,
   };
 }
 

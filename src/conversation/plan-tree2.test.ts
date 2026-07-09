@@ -341,10 +341,7 @@ describe("toLedger2 / toSnapshot2", () => {
     updated_ms: 200,
     root: depth2Tree(),
     // Transient fields: never serialized — toLedger2 must exclude them.
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: null,
     parsedChildren: null,
   };
 

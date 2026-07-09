@@ -25,6 +25,8 @@
 import {
   __setOrchestratorForTest,
   __setActiveOrchestratorForTest,
+  prototypeGateOf,
+  acceptanceGateOf,
   type OrchestratorHandle,
   type OrchestratorObserver,
   type PlanTreeSnapshot2,
@@ -110,15 +112,17 @@ export function emitGate(
   const snap = gateSnapshot(which, round, protoPreview);
   lastSnapshot = snap;
   for (const o of observers) o.onSnapshot?.(snap);
-  if (which === "prototype" && snap.pendingPrototype) {
-    for (const o of observers) o.onPrototypeReview?.(snap.pendingPrototype);
-  } else if (which === "acceptance" && snap.pendingAcceptance) {
-    for (const o of observers) o.onAcceptanceReview?.(snap.pendingAcceptance);
+  const proto = prototypeGateOf(snap);
+  const accept = acceptanceGateOf(snap);
+  if (which === "prototype" && proto) {
+    for (const o of observers) o.onPrototypeReview?.(proto);
+  } else if (which === "acceptance" && accept) {
+    for (const o of observers) o.onAcceptanceReview?.(accept);
   }
 }
 
 // Drive the bar into the IN-PROCESS APPROVAL "Request changes" VIEWING mode: register as
-// active, then fan a real snapshot carrying a held pendingApproval gate whose `planPath` EQUALS the
+// active, then fan a real snapshot carrying a held pendingGate approval gate whose `planPath` EQUALS the
 // already-open plan. We fan ONLY onSnapshot (sets orchSnapshot + refreshReviewBar) — NOT
 // onAwaitingApproval, whose production hook calls openPlan(gate.planPath) and re-renders the reading
 // pane, WIPING the freshly-applied comment highlights. Because the plan is already open, main.ts's

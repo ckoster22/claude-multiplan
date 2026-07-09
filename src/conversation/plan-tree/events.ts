@@ -38,7 +38,7 @@ export type PlanTreeEvent2 =
   | { type: "DECOMPOSITION_DRAFTED"; path: NodePath; planPath: string; plansDirPath: string; toolUseId: string }
   // THE RESUME PHASE-ONLY RE-ARM. On resume the disk-probe branch re-presents a decomposition
   // gate from a node still at `open/decomposing` (the transient DECOMPOSITION_DRAFTED died with the
-  // killed process) while the DRIVER sets pendingApproval + fires onAwaitingApproval directly. This
+  // killed process) while the DRIVER sets pendingGate (kind "approval") + fires onAwaitingApproval directly. This
   // event advances ONLY `open/decomposing` → `open/awaiting-decomposition-approval` so a subsequent
   // DECOMPOSITION_APPROVED guard is satisfied. Emits NO effects — re-dispatching DECOMPOSITION_DRAFTED
   // would double-fire the already-presented gate. Legal ONLY from `open/decomposing`; else throws.
@@ -58,8 +58,8 @@ export type PlanTreeEvent2 =
   // state). reviewing → running-children + next pending child → recon.
   | { type: "PARENT_REVIEW_DONE"; path: NodePath; note: string | null }
   // THE FORCED ACCEPTANCE GATE RESOLUTIONS (root-only, no path). Both perform the finalize
-  // the gate deferred (root acceptance window → summarized + notifyDone) and clear pendingAcceptance.
-  // Legal ONLY while the gate is open (root in its acceptance window, pendingAcceptance set); else
+  // the gate deferred (root acceptance window → summarized + notifyDone) and clear pendingGate.
+  // Legal ONLY while the gate is open (root in its acceptance window, the acceptance arm of pendingGate set); else
   // throws.
   //   - ACCEPTANCE_APPROVED: the result clears the baseline floor. Records acceptance_ =
   //     {verdict:"approved", decided_ms}.
@@ -76,7 +76,7 @@ export type PlanTreeEvent2 =
   // preserving LEFT-siblings as summarized. The result is a coherent `summarized* active pending*`
   // partition, so the normal flow re-runs the reset nodes and OVERWRITES their summaries; on root
   // re-completion (baseline_ present, acceptance_ absent) the gate RE-ARMS. Clears
-  // pendingAcceptance, records NO verdict. Legal ONLY while the gate is open; else throws.
+  // the acceptance arm of pendingGate, records NO verdict. Legal ONLY while the gate is open; else throws.
   | { type: "ACCEPTANCE_REFINED"; target: NodePath }
   // USER MODEL OVERRIDE (the reading-pane picker dispatches this). Stamps the target node's execution_model +
   // model_source:"override" so re-triage never clobbers it, then re-derives inherited-auto models for

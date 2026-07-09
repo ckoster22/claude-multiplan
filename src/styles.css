@@ -586,7 +586,7 @@ body {
 
 /* PROTOTYPE-mode layout (Phase 4d). Scoped to `.review-bar.proto` (the modifier is added by
    applyPrototypeBar / removed by refreshReviewBar in main.ts) so the bar's other two modes —
-   legacy in-process review and pendingApproval — keep their exact shared layout above. The fix:
+   legacy in-process review and the approval arm of pendingGate — keep their exact shared layout above. The fix:
    the long label ("Visual prototype — round N of 3") and the three buttons all stop shrinking and
    wrapping; the #prototype-feedback textarea becomes the sole flexible grower and gets the bar's
    spare width plus a taller, single-row height so its placeholder is not clipped. */

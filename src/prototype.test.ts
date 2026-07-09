@@ -14,7 +14,7 @@ import {
   referencesExternalFiles,
   PROTOTYPE_MAX_ROUNDS,
 } from "./prototype";
-import type { PrototypeGate, AcceptanceGate, TreeNode, Nn, NonEmptyArray } from "./conversation/plan-tree";
+import type { PrototypeGate, AcceptanceGate, ApprovalGate2, TreeNode, Nn, NonEmptyArray } from "./conversation/plan-tree";
 import { parseNn, nonEmpty } from "./conversation/plan-tree";
 
 // Mint a gate with overridable fields (defaults: mermaid, one path, inline preview, no variants).
@@ -113,76 +113,68 @@ describe("prototypeBarLabel / prototypeApproveLabel (round boundaries)", () => {
   });
 });
 
-describe("prototypeGateActive (bar-mode precedence)", () => {
+describe("prototypeGateActive (bar-mode kind-discrimination)", () => {
   const g = gate();
+  const approvalGate: ApprovalGate2 = {
+    path: [parseNn(1)],
+    kind: "leaf",
+    toolUseId: "t1",
+    planPath: "/p.md",
+    plansDirPath: "/",
+    redraftCount: 0,
+  };
 
-  it("yields the gate when orchestration is active and no approval gate is held", () => {
-    expect(prototypeGateActive({ pendingApproval: null, pendingPrototype: g }, true)).toBe(g);
+  it("yields the gate when orchestration is active and the held gate is of kind 'prototype'", () => {
+    expect(prototypeGateActive({ pendingGate: { kind: "prototype", gate: g } }, true)).toBe(g);
   });
 
-  it("a held pendingApproval BEATS the prototype gate (precedence)", () => {
+  it("a pendingGate of a kind other than 'prototype' yields null", () => {
     expect(
-      prototypeGateActive({ pendingApproval: { kind: "leaf" }, pendingPrototype: g }, true),
+      prototypeGateActive({ pendingGate: { kind: "approval", gate: approvalGate } }, true),
     ).toBeNull();
   });
 
   it("inactive orchestration or a missing snapshot yields null (bar falls through)", () => {
-    expect(prototypeGateActive({ pendingApproval: null, pendingPrototype: g }, false)).toBeNull();
+    expect(prototypeGateActive({ pendingGate: { kind: "prototype", gate: g } }, false)).toBeNull();
     expect(prototypeGateActive(null, true)).toBeNull();
   });
 
-  it("self-clears: a snapshot with pendingPrototype null yields null", () => {
-    expect(prototypeGateActive({ pendingApproval: null, pendingPrototype: null }, true)).toBeNull();
+  it("self-clears: a snapshot with pendingGate null yields null", () => {
+    expect(prototypeGateActive({ pendingGate: null }, true)).toBeNull();
   });
 });
 
-describe("acceptanceGateActive (Phase 5 — forced acceptance bar precedence)", () => {
+describe("acceptanceGateActive (Phase 5 — forced acceptance bar kind-discrimination)", () => {
   const ag: AcceptanceGate = { cwd: "/work", openTarget: "index.html", runCommand: null, round: 1 };
+  const approvalGate: ApprovalGate2 = {
+    path: [parseNn(1)],
+    kind: "leaf",
+    toolUseId: "t1",
+    planPath: "/p.md",
+    plansDirPath: "/",
+    redraftCount: 0,
+  };
 
-  it("yields the gate when orchestration is active and no approval/prototype gate is held", () => {
-    expect(
-      acceptanceGateActive(
-        { pendingApproval: null, pendingPrototype: null, pendingAcceptance: ag },
-        true,
-      ),
-    ).toBe(ag);
+  it("yields the gate when orchestration is active and the held gate is of kind 'acceptance'", () => {
+    expect(acceptanceGateActive({ pendingGate: { kind: "acceptance", gate: ag } }, true)).toBe(ag);
   });
 
-  it("a held pendingApproval BEATS the acceptance gate (precedence)", () => {
+  it("a pendingGate of any kind other than 'acceptance' yields null", () => {
     expect(
-      acceptanceGateActive(
-        { pendingApproval: { kind: "leaf" }, pendingPrototype: null, pendingAcceptance: ag },
-        true,
-      ),
+      acceptanceGateActive({ pendingGate: { kind: "approval", gate: approvalGate } }, true),
     ).toBeNull();
-  });
-
-  it("a held pendingPrototype BEATS the acceptance gate (precedence)", () => {
     expect(
-      acceptanceGateActive(
-        { pendingApproval: null, pendingPrototype: { round: 1 }, pendingAcceptance: ag },
-        true,
-      ),
+      acceptanceGateActive({ pendingGate: { kind: "prototype", gate: gate() } }, true),
     ).toBeNull();
   });
 
   it("inactive orchestration or a missing snapshot yields null (bar falls through)", () => {
-    expect(
-      acceptanceGateActive(
-        { pendingApproval: null, pendingPrototype: null, pendingAcceptance: ag },
-        false,
-      ),
-    ).toBeNull();
+    expect(acceptanceGateActive({ pendingGate: { kind: "acceptance", gate: ag } }, false)).toBeNull();
     expect(acceptanceGateActive(null, true)).toBeNull();
   });
 
-  it("self-clears: a snapshot with pendingAcceptance null yields null", () => {
-    expect(
-      acceptanceGateActive(
-        { pendingApproval: null, pendingPrototype: null, pendingAcceptance: null },
-        true,
-      ),
-    ).toBeNull();
+  it("self-clears: a snapshot with pendingGate null yields null", () => {
+    expect(acceptanceGateActive({ pendingGate: null }, true)).toBeNull();
   });
 
   it("the bar labels are stable, descriptive strings", () => {

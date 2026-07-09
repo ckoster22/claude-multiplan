@@ -18,7 +18,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import { createOrchestrator, type OrchestratorDeps, type OrchestratorHandle } from "./orchestrator";
-import { assertCoherent2, nodeAtPath, parsePathKey, type PlanTreeSnapshot2 } from "./plan-tree";
+import { approvalGateOf, acceptanceGateOf, assertCoherent2, nodeAtPath, parsePathKey, type PlanTreeSnapshot2 } from "./plan-tree";
 import type { AssistantText, ResultMsg, ToolPermissionRequested } from "./types";
 
 let seq = 0;
@@ -217,7 +217,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
     await driveToNestedGate(h, rec);
 
     // The NESTED decomposition gate is held at path "02", kind decomposition.
-    expect(h.snapshot().pendingApproval).toMatchObject({ kind: "decomposition" });
+    expect(approvalGateOf(h.snapshot())).toMatchObject({ kind: "decomposition" });
     expect(gates.at(-1)).toEqual({ key: "02", kind: "decomposition" });
 
     // The nested decomposition draft prompt carried 02's MANDATE (parseSubPlanHeaders reuse): the
@@ -249,7 +249,7 @@ describe("PHASE 4 — descent_ascent_depth2_trace (root [01 leaf, 02 split[02.01
         "# Nested preamble for 02\n\n### Sub-Plan 01: SubA\nnested scope A v2\n\n### Sub-Plan 02: SubB\nnested scope B v2\n",
       ),
     );
-    expect(h.snapshot().pendingApproval).toMatchObject({ kind: "decomposition", redraftCount: 1 });
+    expect(approvalGateOf(h.snapshot())).toMatchObject({ kind: "decomposition", redraftCount: 1 });
 
     // NESTED DECOMPOSITION APPROVAL: interrupt #2 + resuming (deferred 02.01 recon)
     const sendsBefore = rec.sends.length;
@@ -474,7 +474,7 @@ describe("PHASE 6 — refining a depth-2 SPLIT target clears the whole subtree (
     await driveDepth2BaselineToAcceptanceGate(h);
 
     // PRECONDITIONS: the acceptance gate is held, and the target 01 is a SPLIT (has a grandchild).
-    expect(h.snapshot().pendingAcceptance).not.toBeNull();
+    expect(acceptanceGateOf(h.snapshot())).not.toBeNull();
     const child01 = nodeAtPath(h.snapshot().root, parsePathKey("01"));
     expect(child01?.state.stage).toBe("split"); // 01 really decomposed (else this degenerates to depth-1)
 
@@ -501,7 +501,7 @@ describe("PHASE 6 — refining a depth-2 SPLIT target clears the whole subtree (
     }
 
     // The refine drove 01's recon turn (re-execution resumes there); the gate cleared, no verdict.
-    expect(h.snapshot().pendingAcceptance).toBeNull();
+    expect(acceptanceGateOf(h.snapshot())).toBeNull();
     expect(h.snapshot().done).toBe(false);
     const refineRecon = rec.sends.at(-1)!;
     expect(refineRecon).toContain("sub-plan 01");
@@ -540,7 +540,7 @@ describe("PHASE 4 — nested decomposition validation (same behavior as the root
     const h = createOrchestrator(rec.deps);
     await driveToNestedGate(h, rec); // (the valid nested draft holds the gate…)
     await h.requestChanges("02", "redo"); // …clear it so 02 is back at open/decomposing
-    const gatesBefore = h.snapshot().pendingApproval;
+    const gatesBefore = approvalGateOf(h.snapshot());
     expect(gatesBefore).toBeNull();
 
     await h.ingestPermission(
@@ -554,7 +554,7 @@ describe("PHASE 4 — nested decomposition validation (same behavior as the root
     expect(deny.allow).toBe(false);
     expect(deny.message).toContain("master plan validation failed");
     expect(deny.message).toContain("1-99");
-    expect(h.snapshot().pendingApproval).toBeNull(); // no gate from the invalid draft
+    expect(approvalGateOf(h.snapshot())).toBeNull(); // no gate from the invalid draft
     expect(h.orchestrationActive()).toBe(true); // recoverable — the model redrafts in the same turn
 
     await h.cancel();

@@ -39,9 +39,9 @@ function normalizeExecutionModel(node: TreeNode): TreeNode {
 }
 
 // Rehydrate the in-memory PlanTreeState2 from a persisted ledger: assert coherence, carry EVERY
-// serialized field, and null EVERY transient gate (none of pendingApproval/pendingClarify/
-// pendingPrototype/parsedChildren survives a restart — they describe a session that is gone). The
-// driver re-mints any gate it re-presents from on-disk artifacts.
+// serialized field, and null EVERY transient (neither pendingGate nor parsedChildren survives a
+// restart — they describe a session that is gone). The driver re-mints any gate it re-presents from
+// on-disk artifacts.
 export function rehydrateState2(ledger: RecursiveLedger): PlanTreeState2 {
   assertCoherent2(ledger.root);
   const root = normalizeExecutionModel(ledger.root);
@@ -62,11 +62,9 @@ export function rehydrateState2(ledger: RecursiveLedger): PlanTreeState2 {
     // Rehydrate the quota auto-resume budget from disk so a resumed run keeps its remaining count
     // (deep-copied; absent ⇒ undefined ⇒ the fail-closed reducer default, never auto-resumes).
     auto_resume_: ledger.auto_resume_ ? { ...ledger.auto_resume_ } : undefined,
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    // The forced acceptance gate is transient — a resumed run re-mints it from the tree + baseline_.
-    pendingAcceptance: null,
+    // Every gate is transient — a resumed run re-mints whichever gate it re-presents from on-disk
+    // artifacts (the tree shape + baseline_), never from a persisted gate.
+    pendingGate: null,
     parsedChildren: null,
   };
 }

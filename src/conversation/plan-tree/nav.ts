@@ -137,7 +137,7 @@ export function inRollupWindow(node: TreeNode): boolean {
 // summarized. STRUCTURALLY identical to a non-root roll-up window, but at the ROOT it is the
 // forced-acceptance hold — the root writes no roll-up, so without a baseline the reducer finalizes
 // here in the SAME reduction (root → summarized). WITH a baseline it parks here while
-// pendingAcceptance is held, awaiting the ACCEPTANCE_APPROVED/DIVERGED verdict. `treeIsDone` is false
+// the acceptance arm of pendingGate is held, awaiting the ACCEPTANCE_APPROVED/DIVERGED verdict. `treeIsDone` is false
 // here (running-children, not summarized), so a baseline-bearing tree never reads done without a
 // verdict. assertCoherent2 accepts this shape.
 export function inAcceptanceWindow(root: TreeNode): boolean {

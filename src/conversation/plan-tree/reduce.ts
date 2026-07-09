@@ -20,7 +20,7 @@ import {
   activePathOf,
 } from "./nav";
 import { assertCoherent2 } from "./coherence";
-import { planName2, summaryName2 } from "./select";
+import { planName2, summaryName2, approvalGateOf, clarifyGateOf, acceptanceGateOf } from "./select";
 import { codingModelForScale, decompositionModel } from "./triage";
 
 // A freshly-minted pending child: artifact-free by CONSTRUCTION — the open stage has no path
@@ -91,10 +91,7 @@ function initial2(treeId: string, request: string, nowMs: number): PlanTreeState
     // No quota auto-resume budget yet — set by QUOTA_BUDGET_SET (dispatched at START from the
     // composer's quota-resume choice). Absent ⇒ the fail-closed reducer default (remaining 0).
     auto_resume_: undefined,
-    pendingApproval: null,
-    pendingClarify: null,
-    pendingPrototype: null,
-    pendingAcceptance: null,
+    pendingGate: null,
     parsedChildren: null,
   };
 }
@@ -111,10 +108,7 @@ function clone2(state: PlanTreeState2): PlanTreeState2 {
     baseline_: state.baseline_ ? { ...state.baseline_ } : undefined,
     acceptance_: state.acceptance_ ? { ...state.acceptance_ } : undefined,
     auto_resume_: state.auto_resume_ ? { ...state.auto_resume_ } : undefined,
-    pendingApproval: state.pendingApproval,
-    pendingClarify: state.pendingClarify,
-    pendingPrototype: state.pendingPrototype,
-    pendingAcceptance: state.pendingAcceptance,
+    pendingGate: state.pendingGate,
     parsedChildren: state.parsedChildren,
   };
 }
@@ -181,7 +175,7 @@ function advanceAfterSummary(next: PlanTreeState2, path: NodePath, effects: Effe
     // finalize without a recorded verdict. When `next.baseline_` is present AND no verdict yet
     // (acceptance_ undefined — defensive against double-finalize), instead of completing the root we
     // PARK it in its acceptance window (running-children, all children summarized — treeIsDone stays
-    // false) and open the transient pendingAcceptance gate. The DRIVER opens the baseline + surfaces
+    // false) and open the transient acceptance gate (pendingGate). The DRIVER opens the baseline + surfaces
     // Approve/Diverge; the finalize (root → summarized + notifyDone) is done by ACCEPTANCE_APPROVED/
     // DIVERGED. With NO baseline this branch is byte/effect-identical to before.
     if (next.baseline_ && !next.acceptance_) {
@@ -189,7 +183,7 @@ function advanceAfterSummary(next: PlanTreeState2, path: NodePath, effects: Effe
       // display fields the reducer cannot know (cwd/openTarget/runCommand) are blank — the driver
       // augments them. round is 1 (single-round acceptance today).
       const gate: AcceptanceGate = { cwd: "", openTarget: null, runCommand: null, round: 1 };
-      next.pendingAcceptance = gate;
+      next.pendingGate = { kind: "acceptance", gate };
       effects.push({ kind: "notifyAcceptanceReview", gate });
       return;
     }
@@ -240,7 +234,7 @@ export function reduce2(
 
     case "PROTOTYPE_READY": {
       // ROOT-ONLY GATE-OPEN ARC: clarifying-intent → prototype-review, holding the gate
-      // transiently (pendingPrototype — never serialized). Legal ONLY from the genesis window:
+      // transiently (pendingGate — never serialized). Legal ONLY from the genesis window:
       // a prototype arriving mid-run (recon onward, or a non-root active node) throws.
       if (next.root.state.stage !== "open" || next.root.state.phase !== "clarifying-intent") {
         throw new Error(
@@ -248,7 +242,7 @@ export function reduce2(
         );
       }
       next.root = { ...next.root, state: { stage: "open", phase: "prototype-review" } };
-      next.pendingPrototype = event.gate;
+      next.pendingGate = { kind: "prototype", gate: event.gate };
       effects.push({ kind: "notifyPrototypeReview", gate: event.gate }, { kind: "persist" });
       break;
     }
@@ -263,7 +257,7 @@ export function reduce2(
         );
       }
       next.root = { ...next.root, state: { stage: "open", phase: "recon" } };
-      next.pendingPrototype = null;
+      next.pendingGate = null;
       // WORKING-REFERENCE classification: on `asWorkingReference`, record the frozen baseline (the
       // DRIVER already copied .plan-tree/prototype/ → .plan-tree/baseline/). The default (false —
       // "just a sketch") leaves baseline_ untouched (byte-identical to today).
@@ -287,7 +281,7 @@ export function reduce2(
         );
       }
       next.root = { ...next.root, state: { stage: "open", phase: "clarifying-intent" } };
-      next.pendingPrototype = null;
+      next.pendingGate = null;
       effects.push({ kind: "persist" });
       break;
     }
@@ -400,7 +394,7 @@ export function reduce2(
         ...n,
         state: { stage: "open", phase: "awaiting-decomposition-approval" },
       }));
-      // THE UNIFIED GATE: the decomposition gate lives in pendingApproval like every other gate.
+      // THE UNIFIED GATE: the decomposition gate lives in pendingGate (kind "approval") like every other gate.
       // master.md and the plans-dir copy are DRIVER-written before this event — it carries their real
       // paths into the gate.
       const gate: ApprovalGate2 = {
@@ -411,7 +405,7 @@ export function reduce2(
         plansDirPath: event.plansDirPath,
         redraftCount: node.redraftCount,
       };
-      next.pendingApproval = gate;
+      next.pendingGate = { kind: "approval", gate };
       effects.push({ kind: "persist" }, { kind: "notifyAwaitingApproval", gate });
       break;
     }
@@ -420,7 +414,7 @@ export function reduce2(
       // PHASE-ONLY RE-ARM (resume). Advance ONLY open/decomposing →
       // open/awaiting-decomposition-approval so a subsequent DECOMPOSITION_APPROVED's guard is
       // satisfied (the resumed-gate Approve path FATALed otherwise). The DRIVER already set
-      // pendingApproval + fired onAwaitingApproval on resume, so this emits NO effects — re-running
+      // pendingGate + fired onAwaitingApproval on resume, so this emits NO effects — re-running
       // DECOMPOSITION_DRAFTED would double-present the gate. Legal ONLY from open/decomposing.
       const node = requireActive2(next.root, event.path, "GATE_RE_PRESENTED");
       if (node.state.stage !== "open" || node.state.phase !== "decomposing") {
@@ -495,7 +489,7 @@ export function reduce2(
       if (!stash || pathKey(stash.path) !== pathKey(event.path)) {
         throw new Error("DECOMPOSITION_APPROVED before CHILDREN_PARSED — no children to run");
       }
-      const gate = next.pendingApproval;
+      const gate = approvalGateOf(next);
       // The instantaneous `approved` tick: the open node is REPLACED by the
       // populated split, already running its first child — a resting "approved-but-idle" state is
       // unrepresentable. The decomposition's artifact paths move from the gate onto the split node.
@@ -521,7 +515,7 @@ export function reduce2(
         ),
       );
       next.parsedChildren = null;
-      next.pendingApproval = null;
+      next.pendingGate = null;
       // The APPROVE effect shape, unified onto the decomposition gate: resolve-allow + persist.
       // (Driver-side interrupt/arm-resuming hardening stays DRIVER policy — the reducer only resolves
       // the held permission, as for a leaf APPROVE.)
@@ -538,7 +532,7 @@ export function reduce2(
           `DECOMPOSITION_CHANGES_REQUESTED illegal: node "${pathKey(event.path)}" is ${node.state.stage}/${node.state.phase}, expected open/awaiting-decomposition-approval`,
         );
       }
-      const gate = next.pendingApproval;
+      const gate = approvalGateOf(next);
       // STAYS DECOMPOSING-SIDE: back to open/decomposing for the same-turn redraft; redraftCount
       // accumulates on the NODE (it survives the open→split replacement later); the stale parse
       // is discarded (the redraft re-parses); the gate clears with a deny carrying the feedback.
@@ -549,7 +543,7 @@ export function reduce2(
         state: { stage: "open", phase: "decomposing" },
       }));
       next.parsedChildren = null;
-      next.pendingApproval = null;
+      next.pendingGate = null;
       if (gate) {
         effects.push({ kind: "resolvePermission", id: gate.toolUseId, allow: false, message: event.feedback });
       }
@@ -584,7 +578,7 @@ export function reduce2(
         plansDirPath: event.plansDirPath,
         redraftCount: node.redraftCount,
       };
-      next.pendingApproval = gate;
+      next.pendingGate = { kind: "approval", gate };
       effects.push({ kind: "persist" }, { kind: "notifyAwaitingApproval", gate });
       break;
     }
@@ -597,12 +591,12 @@ export function reduce2(
           `APPROVE illegal: node "${pathKey(event.path)}" is ${node.state.stage}/${node.state.phase}, expected leaf/awaiting-approval`,
         );
       }
-      const gate = next.pendingApproval;
+      const gate = approvalGateOf(next);
       next.root = replaceAt(next.root, event.path, (n) => {
         if (n.state.stage !== "leaf") throw new Error("unreachable: APPROVE target re-checked non-leaf");
         return { ...n, state: { ...n.state, phase: "executing" } };
       });
-      next.pendingApproval = null;
+      next.pendingGate = null;
       if (gate) effects.push({ kind: "resolvePermission", id: gate.toolUseId, allow: true });
       // NO setMode effect: the writable mode is DERIVED from the tree
       // (writePolicyFor2's existential flips on the `executing` leaf set above).
@@ -617,7 +611,7 @@ export function reduce2(
           `REQUEST_CHANGES illegal: node "${pathKey(event.path)}" is ${node.state.stage}/${node.state.phase}, expected leaf/awaiting-approval`,
         );
       }
-      const gate = next.pendingApproval;
+      const gate = approvalGateOf(next);
       // Re-draft IN PLACE: the active path MUST NOT move; siblings MUST NOT be touched (replaceAt
       // copies only the spine). The drafted paths stay recorded on the leaf.
       next.root = replaceAt(next.root, event.path, (n) => {
@@ -629,7 +623,7 @@ export function reduce2(
           state: { ...n.state, phase: "drafting" },
         };
       });
-      next.pendingApproval = null;
+      next.pendingGate = null;
       if (gate) {
         effects.push({ kind: "resolvePermission", id: gate.toolUseId, allow: false, message: event.feedback });
       }
@@ -734,9 +728,9 @@ export function reduce2(
     case "ACCEPTANCE_DIVERGED": {
       // RESOLVE THE FORCED ACCEPTANCE GATE: perform the finalize advanceAfterSummary
       // deferred (root acceptance window → summarized + notifyDone) and clear the held gate. Legal
-      // ONLY while the gate is open: the root resting in its acceptance window AND pendingAcceptance
+      // ONLY while the gate is open: the root resting in its acceptance window AND an acceptance pendingGate
       // held. Any other shape throws LOUDLY.
-      if (!next.pendingAcceptance) {
+      if (!acceptanceGateOf(next)) {
         throw new Error(`${event.type} illegal: no acceptance gate is open`);
       }
       if (!inAcceptanceWindow(next.root)) {
@@ -757,7 +751,7 @@ export function reduce2(
       // to the no-baseline immediate-finalize branch in advanceAfterSummary — just deferred behind
       // the verdict.
       next.root = { ...next.root, state: { ...next.root.state, phase: "summarized" } };
-      next.pendingAcceptance = null;
+      next.pendingGate = null;
       effects.push({ kind: "persist" }, { kind: "notifyDone" });
       break;
     }
@@ -769,9 +763,9 @@ export function reduce2(
       // re-arms. NO "stale summary" flag — the reset IS the mechanism, and the resulting shape is one
       // the per-level partition already permits.
       //
-      // Legal ONLY while the acceptance gate is open: pendingAcceptance held AND the root resting in
+      // Legal ONLY while the acceptance gate is open: an acceptance pendingGate held AND the root resting in
       // its acceptance window. Any other shape throws LOUDLY.
-      if (!next.pendingAcceptance) {
+      if (!acceptanceGateOf(next)) {
         throw new Error("ACCEPTANCE_REFINED illegal: no acceptance gate is open");
       }
       if (!inAcceptanceWindow(next.root)) {
@@ -864,7 +858,7 @@ export function reduce2(
       });
       // BACK TO EXECUTING: clear the held gate (no verdict recorded — acceptance_ stays absent). The
       // re-executed nodes will eventually re-arm the gate at root re-completion.
-      next.pendingAcceptance = null;
+      next.pendingGate = null;
       effects.push({ kind: "persist" });
       break;
     }
@@ -889,13 +883,23 @@ export function reduce2(
 
     case "CLARIFY_REQUESTED": {
       // A held AskUserQuestion — transient gate only; does NOT change any node.
-      next.pendingClarify = { toolUseId: event.toolUseId, questions: event.questions };
+      if (next.pendingGate) {
+        throw new Error(
+          `CLARIFY_REQUESTED illegal: a gate of kind "${next.pendingGate.kind}" is already held`,
+        );
+      }
+      next.pendingGate = { kind: "clarify", gate: { toolUseId: event.toolUseId, questions: event.questions } };
       break;
     }
 
     case "CLARIFY_ANSWERED": {
-      const gate = next.pendingClarify;
-      next.pendingClarify = null;
+      const gate = clarifyGateOf(next);
+      if (next.pendingGate && !gate) {
+        throw new Error(
+          `CLARIFY_ANSWERED illegal: the held gate is kind "${next.pendingGate.kind}", expected clarify`,
+        );
+      }
+      next.pendingGate = null;
       // Resolve the held AskUserQuestion with the user's selections (gate id wins; event id is the
       // no-gate fallback).
       const message = JSON.stringify({ answers: event.answers });

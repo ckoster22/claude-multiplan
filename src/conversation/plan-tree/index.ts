@@ -12,11 +12,11 @@
 export { parseNn, pathKey, parsePathKey, nonEmpty, PlanValidationError } from "./ids";
 export { nodeAtPath, resolveNodeByNnPath, activePathOf, inRollupWindow, inAcceptanceWindow, isRootCollapseChild } from "./nav";
 export { assertCoherent2 } from "./coherence";
-export { toLedger2, toSnapshot2, treeIsDone, writePolicyFor2, summaryName2, planName2, activePhaseLabel } from "./select";
+export { toLedger2, toSnapshot2, treeIsDone, writePolicyFor2, summaryName2, planName2, activePhaseLabel, approvalGateOf, clarifyGateOf, prototypeGateOf, acceptanceGateOf } from "./select";
 export { parseSizerDecision } from "./parse";
 export { recoveryFor, resumeScopeForRoot, rehydrateState2, EXECUTING_REWIND_HAZARD } from "./recovery";
 export { reduce2 } from "./reduce";
 
 export type { PlanTreeFilePath, Nn, NodePath, PathKey, NonEmptyArray } from "./ids";
-export type { NodeState, TreeNode, RecursiveLedger, PlanTreeState2, PlanTreeSnapshot2, SizerOutcome, ClarifyGate, PrototypeInfo, PrototypeGate, AcceptanceGate, WritePolicy, ApprovalGate2, ResumePlan, ResumeScope, RewindTarget, RecoveryAction, DecompositionArtifactExists } from "./model";
+export type { NodeState, TreeNode, RecursiveLedger, PlanTreeState2, PlanTreeSnapshot2, PendingGate, SizerOutcome, ClarifyGate, PrototypeInfo, PrototypeGate, AcceptanceGate, WritePolicy, ApprovalGate2, ResumePlan, ResumeScope, RewindTarget, RecoveryAction, DecompositionArtifactExists } from "./model";
 export type { PlanTreeEvent2, Effect2 } from "./events";

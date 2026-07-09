@@ -108,7 +108,7 @@ import type { AttachedImage } from "./conversation/images";
 
 // Recording fake OrchestratorDeps (mirrors main.orchestrator-gate.test.ts) — every effect is a
 // benign async no-op; the prototype double-submit test only needs the handle's state machine to
-// reach a held pendingPrototype gate, then spies on the handle's refinePrototype method directly.
+// reach a held prototype gate (pendingGate), then spies on the handle's refinePrototype method directly.
 function makeOrchDeps(): OrchestratorDeps {
   return {
     startSession: vi.fn(async () => {}),
@@ -126,7 +126,7 @@ function makeOrchDeps(): OrchestratorDeps {
 }
 
 // Install a fresh orchestrator handle, boot, and drive it to a held visual-prototype gate (root
-// open/clarifying-intent → prototype-review, holding pendingPrototype). main.ts's onSnapshot puts the
+// open/clarifying-intent → prototype-review, holding the prototype gate (pendingGate)). main.ts's onSnapshot puts the
 // review bar into PROTOTYPE mode, where Approve ("Approve visual") is ALWAYS enabled and Submit
 // ("Request changes") enables on non-empty feedback. Returns the handle so the test can spy on it.
 async function bootToPrototypeGate(): Promise<OrchestratorHandle> {
@@ -580,7 +580,7 @@ describe("review Submit — no double-submit on a fast double-click", () => {
     await flush();
 
     // Drive the handle to a held visual-prototype gate (root open/clarifying-intent → prototype-
-    // review, holding pendingPrototype). main.ts's onSnapshot puts the bar into PROTOTYPE mode.
+    // review, holding the prototype gate (pendingGate)). main.ts's onSnapshot puts the bar into PROTOTYPE mode.
     await h.start({ cwd: "/work", request: "build a widget" });
     await flush();
     const gate: PrototypeGate = {
@@ -596,7 +596,7 @@ describe("review Submit — no double-submit on a fast double-click", () => {
     await flush();
 
     // Spy on the handle's refinePrototype — the underlying action the prototype Submit dispatches.
-    // Mock it to a no-op resolve so it does NOT advance the state machine (pendingPrototype stays
+    // Mock it to a no-op resolve so it does NOT advance the state machine (the prototype gate (pendingGate) stays
     // held, the textarea/button stay live), isolating the handler's exactly-once behavior.
     const refineSpy = vi.spyOn(h, "refinePrototype").mockResolvedValue(undefined);
 
@@ -659,7 +659,7 @@ describe("review Submit — no double-submit on a fast double-click", () => {
   // makes this RED with two calls — a clean falsification target for the approve guard.
   it("two synchronous #review-approve clicks in PROTOTYPE mode call approvePrototype EXACTLY once", async () => {
     const h = await bootToPrototypeGate();
-    // Mock approvePrototype so it does NOT advance the state machine (pendingPrototype stays held, the
+    // Mock approvePrototype so it does NOT advance the state machine (the prototype gate (pendingGate) stays held, the
     // bar stays in PROTOTYPE mode with Approve enabled), isolating the handler's exactly-once guard.
     const approveSpy = vi.spyOn(h, "approvePrototype").mockResolvedValue(undefined);
 
@@ -904,7 +904,7 @@ describe("prototype captures stage on the gate and ride Request-changes / Approv
     expect(chips()).toBe(1);
 
     // Reject the refine send at the REAL deps.sendMessage seam (NOT by mocking the whole handle). In
-    // core.ts refinePrototype dispatches PROTOTYPE_REFINED — consuming pendingPrototype — BEFORE this
+    // core.ts refinePrototype dispatches PROTOTYPE_REFINED — consuming the prototype gate (pendingGate) — BEFORE this
     // send, so the failure lands with the gate ALREADY gone. This is the true production path; mocking
     // h.refinePrototype wholesale would validate an unreachable "gate still held" state.
     const sm = deps.sendMessage as ReturnType<typeof vi.fn>;

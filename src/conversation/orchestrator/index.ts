@@ -45,7 +45,7 @@ export {
   QUOTA_RESUME_GENERIC,
 } from "./prompts";
 export { defaultDeps } from "./deps";
-export { pathKey, parsePathKey, PlanValidationError } from "../plan-tree";
+export { pathKey, parsePathKey, PlanValidationError, approvalGateOf, clarifyGateOf, prototypeGateOf, acceptanceGateOf } from "../plan-tree";
 
 export type { ParsedMasterPlan } from "./prompts";
 export type { OrchestratorDeps } from "./deps";
